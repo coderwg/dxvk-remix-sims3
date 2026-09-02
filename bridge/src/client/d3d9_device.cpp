@@ -1056,6 +1056,13 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::GetDepthStencilSurface(IDirect3DSurfa
         currentUID = c.get_uid();
         c.send_data(pLssDepthStencil->getId());
       }
+    } else {
+      // No depth-stencil surface is currently bound. D3D9 semantics (and the DXVK
+      // runtime one layer down) return D3DERR_NOTFOUND here with a NULL out-pointer.
+      // Falling through to WAIT_FOR_OPTIONAL_SERVER_RESPONSE would return D3D_OK, which
+      // tells callers that guard on FAILED(hr) that the NULL pointer is valid; The Sims 3
+      // then dereferences it (IDirect3DSurface9::GetDesc on a null this) and crashes.
+      return D3DERR_NOTFOUND;
     }
   }
   WAIT_FOR_OPTIONAL_SERVER_RESPONSE("GetDepthStencilSurface()", D3DERR_INVALIDCALL, currentUID);
