@@ -687,9 +687,9 @@ int main() {
     CHECK(terrainAlphaMode(l, 2, FALSE) == 1 && terrainAlphaMode(l, 2, TRUE) == 0 && terrainAlphaMode(w, 2, FALSE) == 0 && terrainAlphaMode(p, 2, FALSE) == 0, "terrainAlphaMode: a lot mesh's opaque chunk copies and replays force alpha 1 too (each covers its own chunk), not the world's or the composite's");
     const TerrainShader t2 = { 1, "x", false, true, false };
     CHECK(terrainAlphaMode(&t2, 1, FALSE) == 2 && terrainAlphaMode(&t2, 2, TRUE) == 0, "terrainAlphaMode: a coverage-alpha entry would give mode 2 for base draws only");
-    CHECK(l->replayLast && p->replayLast && !w->replayLast && !findTerrainShader(0x55c99586fb17cd1cull)->replayLast, "replayLast: the lot terrain and its paint composite are re-issued at the end of the frame; the world terrain and lot-area paint are not");
+    CHECK(l->lotFamily && p->lotFamily && !w->lotFamily && !findTerrainShader(0x55c99586fb17cd1cull)->lotFamily, "lotFamily: the lot terrain and its paint composite are the lot family (drawn in place, re-submissions hidden); the world terrain and lot-area paint are not");
     CHECK(markKey() == 45, "markKey: the trace-dump key defaults to Insert (virtual key 45)");
-    CHECK(hookOption("noSuchKeyForTheTest", 7) == 7 && terrainTrace() == 0 && ringTrace() == 0, "hook options: an absent key gives its default (no sims3hook.txt next to the test binary); the diagnostics are off by default");
+    CHECK(hookOption("noSuchKeyForTheTest", 7) == 7 && ringTrace() == 0, "hook options: an absent key gives its default (no sims3hook.txt next to the test binary); the diagnostics are off by default");
     CHECK(terrainDrawKind(nullptr, TRUE, true) == 0 && terrainDrawKind(w, FALSE, false) == 1 && terrainDrawKind(w, TRUE, false) == 2 && terrainDrawKind(p, FALSE, false) == 2 && terrainDrawKind(l, FALSE, false) == 1 && terrainDrawKind(l, FALSE, true) == 2, "terrainDrawKind: base for opaque draws; layer pass for blended draws, the composite, and a lot mesh's further chunk copies");
     CHECK(wantsUnlitPatch(0x17eabad58f650687ull) && wantsUnlitPatch(0x670dbe0fa52c4650ull) && wantsUnlitPatch(0x98062e8d4d12af7dull) && wantsUnlitPatch(0xd63bf505ec4a44a0ull) && !wantsUnlitPatch(0x99ee53ff6ef1b0b6ull) && !wantsUnlitPatch(0x028ce2dde691b739ull), "unlit patch: the four lit lot-area paint shaders only (the composite's final mad is not albedo x light)");
     static uint32_t m0[kTerrainMarkerSize * kTerrainMarkerSize], m1[kTerrainMarkerSize * kTerrainMarkerSize], m2[kTerrainMarkerSize * kTerrainMarkerSize], m0b[kTerrainMarkerSize * kTerrainMarkerSize];
@@ -767,23 +767,6 @@ int main() {
       }
       std::vector<DWORD> w2 = world, c2 = comp;
       uint32_t opW = 0; DWORD sW = 0; lastColourWrite(world, opW, sW);
-      {
-        // the world terrain kept out from under the lots (milestone 19): the rectangle test appended
-        std::vector<DWORD> k(world);
-        const size_t before = k.size();
-        const uint32_t added = psKillInsideRects(k, kLotRectConst, kLotRects);
-        uint32_t kills = 0; int maxTemp = -1;
-        dxsoForEach(k.data(), k.size(), [&](size_t pos, uint32_t op, uint32_t len) { if (op == 0x41u) ++kills; if (!dxsoIsDef(op)) for (size_t i = 1; i <= len; ++i) if ((k[pos + i] & 0x80000000u) && dxsoRegType(k[pos + i]) == kDxsoRegTemp) maxTemp = (std::max)(maxTemp, (int) dxsoRegNum(k[pos + i])); return true; });
-        CHECK(added == 25 * kLotRects && k.size() == before + added && k.back() == kDxsoEnd && shaderTokenCount(k.data(), k.size()) == k.size() && kills == kLotRects && maxTemp >= 6,
-              "psKillInsideRects 028ce2dd: %u rectangles = %u tokens appended before END, one texkill each, two fresh temps (highest r%d)", kLotRects, added, maxTemp);
-        float rect[4]; const float c9[4] = { 1.f / 30.f, 1.f / 40.f, 0.f, 0.f }, c10[4] = { 100.f, 7.f, 200.f, 1.f };
-        const bool ok = lotRectFromConstants(c9, c10, rect);
-        const float c9n[4] = { -1.f / 30.f, 1.f / 40.f, 1.f, 0.25f }, bad[4] = { 0.f, 1.f, 0.f, 0.f };
-        float rect2[4], rect3[4];
-        const bool ok2 = lotRectFromConstants(c9n, c10, rect2), ok3 = lotRectFromConstants(bad, c10, rect3);
-        CHECK(ok && rect[0] == 50.f && rect[1] == 100.f && rect[2] == 65.f && rect[3] == 120.f && ok2 && rect2[0] == 50.f && rect2[2] == 65.f && rect2[1] == 95.f && rect2[3] == 115.f && !ok3,
-              "lotRectFromConstants: a 30x40 lot at (100, 200) -> half-world rectangle (50, 100)-(65, 120); a negative scale and an offset still order the corners; a zero scale is refused");
-      }
       CHECK(!psUnlitOutput(w2) && w2.size() == world.size() && opW == 5u /*MUL*/, "psUnlitOutput 028ce2dd: the world terrain's final mul is left alone (not a mad)");
       CHECK(psUnlitOutput(c2) && !wantsUnlitPatch(0x99ee53ff6ef1b0b6ull), "psUnlitOutput would rewrite the composite's final mad too, which is why the patch is applied by hash only");
     }

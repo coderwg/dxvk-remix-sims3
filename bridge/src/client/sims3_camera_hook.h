@@ -961,9 +961,6 @@ inline bool terrainEnabled() {
   }
   return s == 1;
 }
-// Diagnostics (sims3hook.txt): terrainTrace = N: every terrain draw, replay and Present of N consecutive frames
-// frames after the first replay) is logged in order (diagnostic; 0 = off).
-inline int terrainTrace() { static int s = -1; if (s < 0) { s = hookOption("terrainTrace", 0); if (s < 0 || s > 30) s = 0; } return s; }
 // markKey (milestone 17y): the virtual-key code of the key that writes the rolling trace to the log
 // (F9 and the backtick key always work too); default 45 = Insert.
 inline int markKey() { static int s = -1; if (s < 0) { s = hookOption("markKey", 45); if (s < 1 || s > 254) s = 45; } return s; }
@@ -971,14 +968,15 @@ inline int markKey() { static int s = -1; if (s < 0) { s = hookOption("markKey",
 // mark key writes to the log (diagnostic; 0 = off).
 inline int ringTrace() { static int s = -1; if (s < 0) s = hookOption("ringTrace", 0) != 0; return s; }
 
-// layerPass: every draw is a layer pass. replayLast: the draws are re-issued at the end of the
-// frame as hidden layer passes, so their paint is baked after everything else -- the bake has no
-// depth test, the last draw at a spot wins, and the game draws the world terrain (unpainted,
-// black, beneath lots) after the lot ground (run 76: black lots). coverageAlpha: the base draws
-// keep the shader's own alpha (its paint coverage) and bake with an alpha test; tried in run 77 and
+// layerPass: every draw is a layer pass. lotFamily: a lot's ground and its paint composite --
+// drawn in place, the first copy visible and every re-submission (further chunk copies, the
+// composite's passes) hidden and split in two (milestones 16-19; the lot replay of milestones
+// 17e-18i re-issued them after the world terrain, which run 119's paint test showed is not
+// needed: nothing overwrites a lot's paint in the atlas). coverageAlpha: the base draws keep
+// the shader's own alpha (its paint coverage) and bake with an alpha test; tried in run 77 and
 // wrong for this game -- the world's base pass is black where only its blended layer passes paint,
 // and the skipped texels showed stale bakes -- so no shader uses it.
-struct TerrainShader { uint64_t hash; const char* name; bool layerPass; bool coverageAlpha; bool replayLast; };
+struct TerrainShader { uint64_t hash; const char* name; bool layerPass; bool coverageAlpha; bool lotFamily; };
 
 inline const TerrainShader kTerrainShaders[] = {
   { 0x55c99586fb17cd1cull, "lot-area terrain paint (lit, 3 layers + lot mask)", false, false, false },
@@ -996,7 +994,7 @@ inline const TerrainShader kTerrainShaders[] = {
 // flicker during camera movement). The blended composite keeps the shader's alpha.
 inline uint8_t terrainAlphaMode(const TerrainShader* t, uint8_t kind, DWORD alphaBlendEnable) {
   if (kind == 1) return (t && t->coverageAlpha) ? 2 : 1;
-  if (t && t->replayLast && !t->layerPass && alphaBlendEnable == 0) return 1;
+  if (t && t->lotFamily && !t->layerPass && alphaBlendEnable == 0) return 1;
   return 0;
 }
 inline const TerrainShader* findTerrainShader(uint64_t hash) { return findByHash(kTerrainShaders, hash); }
@@ -1114,65 +1112,6 @@ inline int psDetailSampler(const DWORD* t, size_t count) {
   });
   return m;
 }
-
-// ---- the world terrain kept out from under the lots (milestone 19) ---------------------------
-// The game draws a lot's ground before the world terrain, whose mesh runs on underneath the lot;
-// in the game the depth test hides that patch, in the runtime's terrain baker (no depth test,
-// last draw wins) it painted over the lot's paint. Instead of re-issuing the lot draws after the
-// world terrain (the replay, milestones 17e-18i), the world-side pixel shader variants discard
-// every texel inside a lot's rectangle: both world-side vertex shaders pass half the world x/z
-// in TEXCOORD0.zw (their light-map coordinate), and a lot's rectangle follows from its draw's
-// constants -- c10.xz is the lot's world origin and c9 maps the lot-relative position to the
-// per-lot mask's [0, 1] coordinate (the lot's own pixel shader kills outside that range).
-inline constexpr uint32_t kLotRects = 16, kLotRectConst = 200;   // c200..c215 of the world-side variants
-// The lot's rectangle in the variants' coordinate (half the world x/z): min x, min z, max x, max z.
-inline bool lotRectFromConstants(const float* c9, const float* c10, float rect[4]) {
-  if (!c9 || !c10 || c9[0] == 0.f || c9[1] == 0.f) return false;
-  float x0 = c10[0] + (0.f - c9[2]) / c9[0], x1 = c10[0] + (1.f - c9[2]) / c9[0];
-  float z0 = c10[2] + (0.f - c9[3]) / c9[1], z1 = c10[2] + (1.f - c9[3]) / c9[1];
-  if (x0 > x1) { const float t = x0; x0 = x1; x1 = t; }
-  if (z0 > z1) { const float t = z0; z0 = z1; z1 = t; }
-  const float w = x1 - x0, d = z1 - z0;
-  if (!(w >= 4.f && w <= 512.f && d >= 4.f && d <= 512.f)) return false;   // lots are 20 to 64 units a side
-  rect[0] = 0.5f * x0; rect[1] = 0.5f * z0; rect[2] = 0.5f * x1; rect[3] = 0.5f * z1;
-  return true;
-}
-// Appends, before END, a test of TEXCOORD0.zw against `count` rectangles held in c<first>..: for
-// each, t = (p - min, max - p), m = min(t), and texkill on -m discards the texel when m > 0,
-// i.e. strictly inside. An unused slot holds (0, 0, -1, -1), which never kills. Two temps above
-// the shader's own are used. Returns the tokens added (25 per rectangle), 0 when not applicable.
-inline uint32_t psKillInsideRects(std::vector<DWORD>& t, uint32_t firstConst, uint32_t count) {
-  if (t.size() < 2 || t.back() != kDxsoEnd || count == 0 || firstConst + count > 224) return 0;
-  int maxTemp = -1;
-  dxsoForEach(t.data(), t.size(), [&](size_t pos, uint32_t op, uint32_t len) {
-    if (dxsoIsDef(op)) return true;
-    for (size_t i = 1; i <= len; ++i) if ((t[pos + i] & 0x80000000u) && dxsoRegType(t[pos + i]) == kDxsoRegTemp) maxTemp = (std::max)(maxTemp, (int) dxsoRegNum(t[pos + i]));
-    return true;
-  });
-  const uint32_t rA = (uint32_t) (maxTemp + 1), rB = (uint32_t) (maxTemp + 2);
-  if (rB > 31) return 0;
-  auto dst = [](uint32_t reg, uint32_t mask) { return 0x80000000u | ((mask & 0xFu) << 16) | reg; };                       // temp destination
-  auto src = [](uint32_t type, uint32_t reg, uint32_t swz, bool neg) { return 0x80000000u | ((type & 7u) << 28) | (((type >> 3) & 3u) << 11) | ((swz & 0xFFu) << 16) | (neg ? (1u << 24) : 0u) | reg; };
-  const uint32_t opAdd = 0x02u | (3u << 24), opMin = 0x0Au | (3u << 24), opMov = kDxsoOpMov | (2u << 24), opKill = 0x41u | (1u << 24);
-  const uint32_t swzXYZW = 0xE4u, swzXXXX = 0x00u, swzYYYY = 0x55u, swzZZZZ = 0xAAu, swzWWWW = 0xFFu;
-  std::vector<DWORD> add;
-  for (uint32_t k = 0; k < count; ++k) {
-    const uint32_t c = firstConst + k;
-    const DWORD ins[25] = {
-      opAdd, dst(rA, 0x3u), src(kDxsoRegInput, 0, kDxsoSwizzleZwzw, false), src(2u, c, swzXYZW, true),   // add rA.xy, v0.zwzw, -cK
-      opAdd, dst(rA, 0xCu), src(2u, c, swzXYZW, false), src(kDxsoRegInput, 0, kDxsoSwizzleZwzw, true),   // add rA.zw, cK, -v0.zwzw
-      opMin, dst(rB, 0x1u), src(kDxsoRegTemp, rA, swzXXXX, false), src(kDxsoRegTemp, rA, swzYYYY, false),  // min rB.x, rA.x, rA.y
-      opMin, dst(rB, 0x1u), src(kDxsoRegTemp, rB, swzXXXX, false), src(kDxsoRegTemp, rA, swzZZZZ, false),  // min rB.x, rB.x, rA.z
-      opMin, dst(rB, 0x1u), src(kDxsoRegTemp, rB, swzXXXX, false), src(kDxsoRegTemp, rA, swzWWWW, false),  // min rB.x, rB.x, rA.w
-      opMov, dst(rB, 0xFu), src(kDxsoRegTemp, rB, swzXXXX, true),                                          // mov rB, -rB.x
-      opKill, dst(rB, 0xFu),                                                                                // texkill rB
-    };
-    add.insert(add.end(), ins, ins + 25);
-  }
-  t.insert(t.end() - 1, add.begin(), add.end());
-  return (uint32_t) add.size();
-}
-
 
 // ---- the lot paint composite (milestone 17l) -------------------------------------------------
 // PS 99ee53ff (VS 0344bbc3) has no detail read: s0 = the lot's paint mask (v0), s1..s4 = four

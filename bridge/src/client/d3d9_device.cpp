@@ -218,12 +218,8 @@ namespace {
     uint16_t tblockSrgb = 0;                            // stages whose SRGBTEXTURE the hook holds off
     bool ourSampler = false;                            // our own SetSamplerState calls: no cancelling
     uint32_t tblockFlushes = 0, tblockCancelled = 0, tblockKept = 0;   // ...and the uncaptured draws that touched no held stage
-    // The lots drawn this frame (milestone 19): their rectangles in the world-side variants'
-    // coordinate, uploaded as c200.. before every world-side terrain draw so the world's texels
-    // under the lots are discarded (see sims3cam::lotRectFromConstants); the game draws the lots
-    // first. compositeSecond: the game's own composite draw just went out as pass 1 and pass 2
-    // follows in place (the draw member re-issues it, kind 2, blended ONE / ONE).
-    float lotRects[sims3cam::kLotRects][4] = {}; uint32_t lotRectCount = 0, lotRectMax = 0, lotRectDrops = 0, killUploads = 0, lotRectLogged = 0;
+    // The game's own paint composite draw just went out as pass 1; pass 2 follows in place (the
+    // draw member re-issues it hidden, blended ONE / ONE; milestone 19).
     bool compositeSecond = false;
     IDirect3DTexture9* marker[sims3cam::kTerrainMarkers] = {};   // the terrain / layer-pass / composite marker textures (terrainMarkerPixels)
     uint64_t markerHash[sims3cam::kTerrainMarkers] = {};         // their level-0 hashes as the runtime computes them (0 = not computed)
@@ -237,11 +233,10 @@ namespace {
     // a lot's re-submissions issued as two half draws (milestone 17r): the runtime's draw tracker
     // files a draw by the hash of its index data and counts, so a half never shares the lot's
     // visible instance (the lift of milestone 17p changed nothing the tracker looks at)
-    bool splitDraw = false; uint32_t splitDraws = 0, replayAtMirror = 0;
-    // the lot replay (milestones 17e, 17s): a game lot draw held back for the replay
-    // (deferDraw: the draw hook records its arguments and returns), the kind a replayed draw is
-    // issued as, replays so far this frame, and the count
-    bool deferDraw = false; uint8_t replayKind = 0; uint32_t replaysThisFrame = 0, deferredDraws = 0;
+    bool splitDraw = false; uint32_t splitDraws = 0;
+    // The hook's own re-issue of a draw (the paint composite's second pass, milestone 19), and the
+    // terrain kind it is given.
+    bool reissue = false; uint8_t reissueKind = 0;
     // The sun (milestone 17x): a shadow-row direction far from the sun has to persist before it moves it.
     uint32_t sunJumpFrames = 0;
     // A rolling trace of every draw and event of the last ~300 frames (milestone 17y), written to
@@ -251,10 +246,8 @@ namespace {
     uint8_t lastKind = 0;                           // the terrain kind sims3BeginDraw gave the draw being issued
     uint32_t fCaptured = 0, fUncaptured = 0, fDropped = 0, fHeld = 0, fReplayed = 0, fTerrainWorld = 0, fTerrainLot = 0, fCamAdopt = 0, fCamAlt = 0, fCamMirror = 0;
     bool ourConsts = false;                         // our own SetVertexShaderConstantF calls: no camera classification, no tracking
-    // the frame trace (sims3hook.txt terrainTrace = N): the frames traced, the draw index within
-    // the frame, and the lines written (bounded)
-    uint32_t traceFrom = 0, traceLines = 0, frameDraws = 0;
-    struct PsVariant { IDirect3DPixelShader9* base; uint64_t hash; uint8_t alphaMode; uint8_t forced; IDirect3DPixelShader9* variant; uint8_t freeStage; bool unlit; bool kill; };
+    uint32_t frameDraws = 0;                        // the draw index within the frame (the ring trace)
+    struct PsVariant { IDirect3DPixelShader9* base; uint64_t hash; uint8_t alphaMode; uint8_t forced; IDirect3DPixelShader9* variant; uint8_t freeStage; bool unlit; };
     static constexpr uint32_t kPsVariants = 64;
     PsVariant psVariants[kPsVariants] = {}; uint32_t psVariantCount = 0;   // one per (shader, hash, alpha mode); variant null = could not be made
     // The bake's alpha is the terrain's opacity to the ray tracer (0 = the surface is not there), so a
@@ -263,38 +256,7 @@ namespace {
     // which the ray tracer gamma-corrects itself.
     DWORD cwRestore = 0; bool cwOurs = false;      // the game's COLORWRITEENABLE while the hook's full mask is set
     DWORD atSaved[3] = {}; bool atOurs = false;    // the game's ALPHATESTENABLE / ALPHAFUNC / ALPHAREF while the coverage test is set
-    // Lot ground replay (milestone 17e; TerrainShader::replayLast): the lot's ground draws are
-    // recorded with the state they need and re-issued at the end of the frame as hidden layer
-    // passes, so their paint is baked after the world terrain the game draws later.
-    // A record holds the WHOLE relevant state (milestone 17x): every float, integer and bool
-    // constant of both shaders, every render state, every sampler state of stages 0..7, both
-    // stream sources with their frequencies, the clip planes and the scissor.
-    static constexpr int kReplayStages = 8, kReplayStreams = 2, kReplaySsAll = 13, kReplayPlanes = 6;
-    struct ReplayDraw {
-      IDirect3DVertexShader9* vs; IDirect3DPixelShader9* ps; IDirect3DVertexDeclaration9* decl;
-      IDirect3DVertexBuffer9* vb[kReplayStreams]; UINT vbOffset[kReplayStreams], vbStride[kReplayStreams], freq[kReplayStreams]; IDirect3DIndexBuffer9* ib;
-      IDirect3DBaseTexture9* tex[kReplayStages];
-      float vsF[256 * 4]; float psF[224 * 4]; int vsI[16 * 4]; int psI[16 * 4]; BOOL vsB[16]; BOOL psB[16];
-      DWORD rs[256]; DWORD ss[kReplayStages][kReplaySsAll + 1];
-      float planes[kReplayPlanes][4]; RECT scissor;
-      D3DPRIMITIVETYPE type; UINT start, count; bool indexed; INT baseVertex; UINT minIndex, numVertices;
-      uint8_t kind;                                  // the draw's terrain kind when recorded (lot mode 2 issues it as that)
-      DWORD fvf;                                     // the FVF when the declaration was set that way (milestone 17v)
-      bool declIs3D, rtIsPrimary;                    // the hook's facts for the draw as recorded: re-asserted for the replay
-    };
-    static constexpr uint32_t kReplays = 128;   // run 78: 23 lot ground draws a frame with the neighbours in view
-    ReplayDraw replays[kReplays] = {}; uint32_t replayCount = 0;
-    bool replayPending = false;                     // the draw being issued was recorded; its arguments come from the draw hook
-    bool replaying = false;                         // the hook's own re-issue of a recorded draw
-    uint32_t replayDraws = 0, replayFrames = 0, replayFull = 0, replayLogged = 0, replayAtPresent = 0, replayMid = 0;
-    // World terrain / lot-area paint draws (base or layer) since the last replay (milestone 17l):
-    // the recorded lot draws are re-issued before the first draw that follows them, inside the
-    // frame -- the runtime injects at the interface draw (rtx.uiTextures) and bakes nothing
-    // drawn after it, so the replay at Present never reached the baker (runs 78-85).
-    uint32_t terrainSinceReplay = 0;
     IDirect3DSurface9* rt0 = nullptr;               // render target 0 as the game set it (pointer only, no reference held)
-    IDirect3DSurface9* sceneRt = nullptr;           // ...and the one the world terrain was drawn into this frame: the replay waits for a 2D draw on it (run 80: the interface never targets the swap chain's own back-buffer wrapper)
-    uint32_t frameWorldDraws = 0;                   // world terrain base draws seen this frame: the replay waits for them
     uint32_t terrainBaseDraws = 0, terrainLayerDraws = 0, terrainLotCopyDraws = 0, terrainNoVariant = 0, terrainLogged = 0, psVariantsMade = 0, psVariantsUnlit = 0, psVariantsAlpha = 0, psVariantLogged = 0, samplerCopies = 0, srgbOffs = 0;
     // Camera variety within a frame (run 69: the far view broken at a horizon tilt): the frame's
     // first main camera, and every main camera upload that differs from it in lens or position,
@@ -565,87 +527,6 @@ namespace {
 
   // The sampler states a terrain draw's moved stage-0 texture keeps at its new stage (milestone 17).
   inline constexpr D3DSAMPLERSTATETYPE kSims3SamplerCopy[Sims3Hook::kSamplerCopies] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER, D3DSAMP_MIPFILTER, D3DSAMP_SRGBTEXTURE, D3DSAMP_MAXANISOTROPY };
-  // Every render state (the enumeration's valid values; D3DRS_TEXTUREFACTOR excepted, the hook's
-  // tint forwarding owns it) for the lot replay's complete restore (milestone 17x).
-  inline constexpr DWORD kSims3AllRs[] = { 7, 8, 9, 14, 15, 16, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29, 34, 35, 36, 37, 38, 48, 52, 53, 54, 55, 56, 57, 58, 59, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 139, 140, 141, 142, 143, 145, 146, 147, 148, 151, 152, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 166, 167, 168, 170, 171, 172, 173, 174, 175, 176, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208, 209 };
-  // Uploads the vec4 registers of `want` that differ from `cur` (n registers), in runs with gaps of
-  // up to three registers merged; returns the highest register uploaded, or -1.
-  template<typename Upload>
-  int sims3ApplyFloatRuns(const float* cur, const float* want, int n, Upload upload) {
-    int highest = -1;
-    for (int reg = 0; reg < n;) {
-      if (memcmp(cur + reg * 4, want + reg * 4, 16) == 0) { ++reg; continue; }
-      int end = reg + 1;
-      for (int k = reg + 1; k < n && k < end + 4; ++k) if (memcmp(cur + k * 4, want + k * 4, 16) != 0) end = k + 1;
-      upload((UINT) reg, want + reg * 4, (UINT) (end - reg));
-      highest = end - 1;
-      reg = end;
-    }
-    return highest;
-  }
-
-  // The device state a recorded draw needs, taken from the client's own copy of the state (the
-  // draw's arguments are added by the draw hook). References are held until the replay.
-  template<typename Dev>
-  void sims3ReplayCapture(Sims3Hook& h, Dev* dev, Sims3Hook::ReplayDraw& r) {
-    memset(&r, 0, sizeof r);
-    dev->GetVertexShader(&r.vs); dev->GetPixelShader(&r.ps); dev->GetVertexDeclaration(&r.decl);
-    for (UINT i = 0; i < (UINT) Sims3Hook::kReplayStreams; ++i) { dev->GetStreamSource(i, &r.vb[i], &r.vbOffset[i], &r.vbStride[i]); dev->GetStreamSourceFreq(i, &r.freq[i]); }
-    dev->GetIndices(&r.ib);
-    r.fvf = 0; dev->GetFVF(&r.fvf); r.declIs3D = h.declIs3D; r.rtIsPrimary = h.rtIsPrimary;
-    for (int st = 0; st < Sims3Hook::kReplayStages; ++st) { r.tex[st] = h.boundTex[st]; if (r.tex[st]) r.tex[st]->AddRef(); }
-    dev->GetVertexShaderConstantF(0, r.vsF, 256); dev->GetPixelShaderConstantF(0, r.psF, 224);
-    dev->GetVertexShaderConstantI(0, r.vsI, 16); dev->GetPixelShaderConstantI(0, r.psI, 16);
-    dev->GetVertexShaderConstantB(0, r.vsB, 16); dev->GetPixelShaderConstantB(0, r.psB, 16);
-    for (DWORD st : kSims3AllRs) dev->GetRenderState((D3DRENDERSTATETYPE) st, &r.rs[st]);
-    for (DWORD st = 0; st < (DWORD) Sims3Hook::kReplayStages; ++st) for (DWORD t = 1; t <= (DWORD) Sims3Hook::kReplaySsAll; ++t) dev->GetSamplerState(st, (D3DSAMPLERSTATETYPE) t, &r.ss[st][t]);
-    for (DWORD p = 0; p < (DWORD) Sims3Hook::kReplayPlanes; ++p) dev->GetClipPlane(p, r.planes[p]);
-    dev->GetScissorRect(&r.scissor);
-  }
-  // Puts a recorded state on the device through the ordinary hooks, so the hook's own facts
-  // (bound shaders, textures, constants) follow it. Only what differs from the device's current
-  // state (the client's copy) is sent: consecutive lot draws share most of it.
-  template<typename Dev>
-  void sims3ReplayApply(Sims3Hook& h, Dev* dev, const Sims3Hook::ReplayDraw& r) {
-    if (h.vsBound != r.vs) dev->SetVertexShader(r.vs);
-    if (h.psBound != r.ps) dev->SetPixelShader(r.ps);
-    {
-      // the vertex layout: a later SetFVF (a 2D quad between the recording and the replay) replaces
-      // the declaration for the runtime and clears the hook's 3D-layout fact although the client's
-      // copy still names the same declaration object, so the recorded layout is set again whenever
-      // the FVF or the declaration differs, and the hook's fact is re-asserted (milestone 17v)
-      IDirect3DVertexDeclaration9* dcl = nullptr; dev->GetVertexDeclaration(&dcl);
-      DWORD fvf = 0; dev->GetFVF(&fvf);
-      if (dcl != r.decl || fvf != r.fvf) { if (r.decl) dev->SetVertexDeclaration(r.decl); else if (r.fvf) dev->SetFVF(r.fvf); }
-      if (dcl) dcl->Release();
-      h.declIs3D = r.declIs3D;
-    }
-    for (UINT i = 0; i < (UINT) Sims3Hook::kReplayStreams; ++i) {
-      IDirect3DVertexBuffer9* vb = nullptr; UINT off = 0, stride = 0; dev->GetStreamSource(i, &vb, &off, &stride);
-      if (vb != r.vb[i] || off != r.vbOffset[i] || stride != r.vbStride[i]) dev->SetStreamSource(i, r.vb[i], r.vbOffset[i], r.vbStride[i]);
-      if (vb) vb->Release();
-      UINT f = 0; dev->GetStreamSourceFreq(i, &f);
-      if (f != r.freq[i]) dev->SetStreamSourceFreq(i, r.freq[i]);
-    }
-    { IDirect3DIndexBuffer9* ib = nullptr; dev->GetIndices(&ib); if (ib != r.ib) dev->SetIndices(r.ib); if (ib) ib->Release(); }
-    for (int st = 0; st < Sims3Hook::kReplayStages; ++st) if (h.boundTex[st] != r.tex[st]) dev->SetTexture((DWORD) st, r.tex[st]);
-    { float cur[256 * 4]; dev->GetVertexShaderConstantF(0, cur, 256); sims3ApplyFloatRuns(cur, r.vsF, 256, [&](UINT reg, const float* data, UINT count) { h.ourConsts = true; dev->SetVertexShaderConstantF(reg, data, count); h.ourConsts = false; }); }
-    { float cur[224 * 4]; dev->GetPixelShaderConstantF(0, cur, 224); sims3ApplyFloatRuns(cur, r.psF, 224, [&](UINT reg, const float* data, UINT count) { dev->SetPixelShaderConstantF(reg, data, count); }); }
-    { int cur[16 * 4]; dev->GetVertexShaderConstantI(0, cur, 16); if (memcmp(cur, r.vsI, sizeof cur) != 0) dev->SetVertexShaderConstantI(0, r.vsI, 16); }
-    { int cur[16 * 4]; dev->GetPixelShaderConstantI(0, cur, 16); if (memcmp(cur, r.psI, sizeof cur) != 0) dev->SetPixelShaderConstantI(0, r.psI, 16); }
-    { BOOL cur[16]; dev->GetVertexShaderConstantB(0, cur, 16); if (memcmp(cur, r.vsB, sizeof cur) != 0) dev->SetVertexShaderConstantB(0, r.vsB, 16); }
-    { BOOL cur[16]; dev->GetPixelShaderConstantB(0, cur, 16); if (memcmp(cur, r.psB, sizeof cur) != 0) dev->SetPixelShaderConstantB(0, r.psB, 16); }
-    for (DWORD st : kSims3AllRs) { DWORD v = 0; dev->GetRenderState((D3DRENDERSTATETYPE) st, &v); if (v != r.rs[st]) dev->SetRenderState((D3DRENDERSTATETYPE) st, r.rs[st]); }
-    h.ourSampler = true; for (DWORD st = 0; st < (DWORD) Sims3Hook::kReplayStages; ++st) for (DWORD t = 1; t <= (DWORD) Sims3Hook::kReplaySsAll; ++t) { DWORD v = 0; dev->GetSamplerState(st, (D3DSAMPLERSTATETYPE) t, &v); if (v != r.ss[st][t]) dev->SetSamplerState(st, (D3DSAMPLERSTATETYPE) t, r.ss[st][t]); } h.ourSampler = false;
-    for (DWORD p = 0; p < (DWORD) Sims3Hook::kReplayPlanes; ++p) { float cur[4] = {}; dev->GetClipPlane(p, cur); if (memcmp(cur, r.planes[p], sizeof cur) != 0) dev->SetClipPlane(p, r.planes[p]); }
-    { RECT cur = {}; dev->GetScissorRect(&cur); if (memcmp(&cur, &r.scissor, sizeof cur) != 0) dev->SetScissorRect(&r.scissor); }
-  }
-  inline void sims3ReplayRelease(Sims3Hook::ReplayDraw& r) {
-    if (r.vs) r.vs->Release(); if (r.ps) r.ps->Release(); if (r.decl) r.decl->Release(); if (r.ib) r.ib->Release();
-    for (int i = 0; i < Sims3Hook::kReplayStreams; ++i) if (r.vb[i]) r.vb[i]->Release();
-    for (int s = 0; s < Sims3Hook::kReplayStages; ++s) if (r.tex[s]) r.tex[s]->Release();
-    memset(&r, 0, sizeof r);
-  }
   // The rolling trace (milestone 17y): one short line per draw or event, oldest overwritten.
   inline void sims3RingPush(Sims3Hook& h, const char* text) {
     if (!sims3cam::ringTrace()) return;
@@ -663,91 +544,12 @@ namespace {
     h.ringCount = 0; h.ringHead = 0; ++h.ringDumps;
   }
   inline void sims3RingDraw(Sims3Hook& h, const DWORD* rs) {
-    const char what = h.replaying ? 'R' : h.drawDropped ? 'D' : h.deferDraw ? 'H' : h.drawCaptured ? 'C' : 'U';
+    const char what = h.reissue ? 'R' : h.drawDropped ? 'D' : h.drawCaptured ? 'C' : 'U';
     char t[80];
     snprintf(t, sizeof t, "d%u %c%c%c%c %08x/%08x k%u%s%s rt%04x%c", h.frameDraws, what, h.camMirrored ? 'm' : h.cameraValid ? 'v' : '-', rs[D3DRS_ZENABLE] ? 'z' : '-', rs[D3DRS_ALPHABLENDENABLE] ? 'b' : '-', (unsigned) (h.vsHash >> 32), (unsigned) (h.psHash >> 32), (unsigned) h.lastKind, h.vsTerrain ? "T" : "", h.splitDraw ? "x" : "", (unsigned) ((((uintptr_t) h.rt0) >> 4) & 0xFFFFu), h.rtIsPrimary ? 'p' : 'o');
     sims3RingPush(h, t);
     switch (what) { case 'R': ++h.fReplayed; break; case 'D': ++h.fDropped; break; case 'H': ++h.fHeld; break; case 'C': ++h.fCaptured; break; default: ++h.fUncaptured; break; }
-    if (h.lastKind != 0 && h.vsTerrain && !h.replaying) { if (h.vsTerrain->replayLast) ++h.fTerrainLot; else ++h.fTerrainWorld; }
-  }
-
-  // Whether this frame is traced (terrainTrace): N frames starting 60 frames after the first replay.
-  inline bool sims3Tracing(Sims3Hook& h) {
-    const int n = sims3cam::terrainTrace();
-    if (n <= 0 || h.replayFrames == 0 || h.traceLines >= 800) return false;
-    if (h.traceFrom == 0) { h.traceFrom = h.frames + 60; return false; }
-    return h.frames >= h.traceFrom && h.frames < h.traceFrom + (uint32_t) n;
-  }
-  inline void sims3TraceLine(Sims3Hook& h, const char* text) {
-    ++h.traceLines; char msg[400];
-    snprintf(msg, sizeof msg, "Sims 3 camera hook: trace f%u d%u: %s", h.frames + 1, h.frameDraws, text);
-    Logger::info(msg);
-  }
-
-  // The recorded lot ground draws re-issued in order as hidden layer passes (sims3BeginDraw treats
-  // a replayed draw as one), on the scene's target, with the game's state put back afterwards.
-  // Run before the first draw that follows a world terrain draw (milestone 17l): the lot's paint
-  // is then baked over the terrain the game drew after it, and before the interface draw at
-  // which the runtime injects -- what comes after that is rasterized, never baked (run 78: the
-  // grass over the interface WAS that rasterization; runs 79-85: nothing of the replay at
-  // Present ever reached the bake). The recordings stay for the rest of the frame, so a later
-  // world draw is followed by another replay; Present releases them (its own replay is a
-  // fallback for a frame that ends on a terrain draw). The lot paint composite is issued twice
-  // (sims3cam::lotCompositeStage): the second pass adds its fourth layer with a ONE / ONE blend.
-  template<typename Dev>
-  void sims3ReplayLotDraws(Sims3Hook& h, Dev* dev, bool atPresent) {
-    if (h.replayCount == 0 || h.replaying) return;
-    const uint64_t triggerVs = h.vsHash, triggerPs = h.psHash;
-    sims3TerrainBlockEnd(h, dev);   // the snapshot below must hold the game's sampler states, not the block's (milestone 18i)
-    Sims3Hook::ReplayDraw saved; sims3ReplayCapture(h, dev, saved);
-    IDirect3DSurface9* rt0 = nullptr; IDirect3DSurface9* bb = nullptr;
-    if (h.rt0 != h.sceneRt) {   // the fallback at Present: the scene's target back for the replay (the back buffer if none was seen)
-      dev->GetRenderTarget(0, &rt0);
-      if (h.sceneRt) dev->SetRenderTarget(0, h.sceneRt);
-      else if (SUCCEEDED(dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb)) && bb) dev->SetRenderTarget(0, bb);
-    }
-    // the game's rasterization of the re-issued draws is confined to one pixel (the bake sets its
-    // own viewports): at Present they would otherwise land on top of the interface (run 78)
-    D3DVIEWPORT9 gameVp = {}; dev->GetViewport(&gameVp);
-    D3DVIEWPORT9 dot = gameVp; dot.X = 0; dot.Y = 0; dot.Width = 1; dot.Height = 1; dot.MinZ = 0.f; dot.MaxZ = 1.f;
-    h.ourState = true; dev->SetViewport(&dot); h.ourState = false;
-    h.replaying = true;
-    const uint32_t n = h.replayCount, terrainBefore = h.terrainSinceReplay;
-    const bool tracing = sims3Tracing(h);
-    if (tracing) { char t[160]; snprintf(t, sizeof t, "REPLAY start: %u recorded draws, %u terrain draws since the last replay, %s, next VS %08x PS %08x", n, terrainBefore, atPresent ? "at Present" : "mid-frame", (unsigned) (triggerVs >> 32), (unsigned) (triggerPs >> 32)); sims3TraceLine(h, t); }
-    { char t[80]; snprintf(t, sizeof t, "REPLAY start n=%u since=%u next %08x/%08x %s", n, terrainBefore, (unsigned) (triggerVs >> 32), (unsigned) (triggerPs >> 32), atPresent ? "at-present" : "mid"); sims3RingPush(h, t); }
-    for (uint32_t i = 0; i < n; ++i) {
-      Sims3Hook::ReplayDraw& r = h.replays[i];
-      sims3ReplayApply(h, dev, r);
-      h.replayKind = r.kind;
-      const bool composite = h.psHash == sims3cam::kLotCompositePs;
-      h.compositePass = composite ? 1 : 0;
-      if (r.indexed) dev->DrawIndexedPrimitive(r.type, r.baseVertex, r.minIndex, r.numVertices, r.start, r.count);
-      else dev->DrawPrimitive(r.type, r.start, r.count);
-      ++h.replayDraws;
-      if (composite) {   // pass 2: layer 4 added on its own (the next draw's apply, or the restore below, puts the blend back)
-        h.compositePass = 2;
-        dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE); dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
-        if (r.indexed) dev->DrawIndexedPrimitive(r.type, r.baseVertex, r.minIndex, r.numVertices, r.start, r.count);
-        else dev->DrawPrimitive(r.type, r.start, r.count);
-        ++h.replayDraws;
-      }
-      h.compositePass = 0; h.replayKind = 0;
-      if (atPresent) sims3ReplayRelease(r);
-    }
-    h.replaying = false; ++h.replayFrames; ++h.replaysThisFrame; h.terrainSinceReplay = 0;
-    if (atPresent) { h.replayCount = 0; ++h.replayAtPresent; } else ++h.replayMid;
-    if (tracing) sims3TraceLine(h, "REPLAY end");
-    sims3RingPush(h, "REPLAY end");
-    h.ourState = true; dev->SetViewport(&gameVp); h.ourState = false;
-    if (h.replayLogged < 6) {
-      ++h.replayLogged; char msg[360];
-      snprintf(msg, sizeof msg, "Sims 3 camera hook: %s replayed %s of frame %u -> %u draws baked as hidden layer passes, one-pixel viewport (%u world terrain draws before them; next shader VS %016llx PS %016llx, target %ux%u%s)", "lot ground", atPresent ? "at the end" : "before the first draw after the world terrain", h.frames + 1, n, terrainBefore, (unsigned long long) triggerVs, (unsigned long long) triggerPs, (unsigned) h.rt0W, (unsigned) h.rt0H, rt0 ? (h.sceneRt ? ", scene target set for them" : ", back buffer set for them") : "");
-      Logger::info(msg);
-    }
-    if (rt0) { dev->SetRenderTarget(0, rt0); rt0->Release(); }
-    if (bb) bb->Release();
-    sims3TerrainBlockEnd(h, dev); sims3ReplayApply(h, dev, saved); sims3ReplayRelease(saved);
+    if (h.lastKind != 0 && h.vsTerrain && !h.reissue) { if (h.vsTerrain->lotFamily) ++h.fTerrainLot; else ++h.fTerrainWorld; }
   }
 
   // Whether rtx.conf (next to this DLL, read by the runtime at start) tags the markers: the
@@ -828,12 +630,11 @@ namespace {
   // freeStage receives the stage the variant reads the moved texture from.
   template<typename Dev>
   IDirect3DPixelShader9* sims3PsVariant(Sims3Hook& h, Dev* dev, IDirect3DPixelShader9* base, uint64_t hash, uint8_t alphaMode, int forced, int& freeStage) {
-    const bool kill = h.vsTerrain && !h.vsTerrain->replayLast;   // world-side: texels under the lots discarded (milestone 19)
     for (uint32_t i = 0; i < h.psVariantCount; ++i)
-      if (h.psVariants[i].base == base && h.psVariants[i].hash == hash && h.psVariants[i].alphaMode == alphaMode && h.psVariants[i].forced == (uint8_t) forced && h.psVariants[i].kill == kill) { freeStage = h.psVariants[i].freeStage; return h.psVariants[i].variant; }
+      if (h.psVariants[i].base == base && h.psVariants[i].hash == hash && h.psVariants[i].alphaMode == alphaMode && h.psVariants[i].forced == (uint8_t) forced) { freeStage = h.psVariants[i].freeStage; return h.psVariants[i].variant; }
     if (h.psVariantCount >= Sims3Hook::kPsVariants) return nullptr;
     Sims3Hook::PsVariant& v = h.psVariants[h.psVariantCount++];
-    v = { base, hash, alphaMode, (uint8_t) forced, nullptr, 0, false, kill };
+    v = { base, hash, alphaMode, (uint8_t) forced, nullptr, 0, false };
     UINT size = 0;
     if (FAILED(base->GetFunction(nullptr, &size)) || size < 8) return nullptr;
     std::vector<DWORD> t(size / 4 + 1);
@@ -859,7 +660,6 @@ namespace {
     if (sims3cam::wantsUnlitPatch(hash)) unlit = sims3cam::psUnlitOutput(t);
     if (alphaOne) alpha = sims3cam::psForceAlphaOne(t);
     IDirect3DPixelShader9* ps = nullptr;
-    const uint32_t killTokens = kill ? sims3cam::psKillInsideRects(t, sims3cam::kLotRectConst, sims3cam::kLotRects) : 0u;
     h.creatingVariant = true;
     const HRESULT hr = dev->CreatePixelShader(t.data(), &ps);
     h.creatingVariant = false;
@@ -869,7 +669,7 @@ namespace {
     if (h.psVariantLogged < 12) {
       ++h.psVariantLogged; char msg[460];
       int lightMapStage = -1; for (int s = 0; s < 16; ++s) if (h.boundTex[s] && h.boundFmt[s] == 50u && h.boundW[s] == 16 && h.boundH[s] == 16) { lightMapStage = s; break; }
-      snprintf(msg, sizeof msg, "Sims 3 camera hook: terrain variant for PS %016llx (%s) -> stage 0 read from s%d (%s; %u tokens renumbered)%s%s%s%s", (unsigned long long) hash, alphaMode == 0 ? (forced ? (forced == 4 ? "composite pass 1" : "composite pass 2") : "blended layer passes") : alphaMode == 1 ? "opaque draws, alpha 1" : "base draws, coverage alpha", free, forced >= 1 ? "a paint layer's stage; the black marker takes that layer out" : free == detail ? "the shader's detail stage; the marker's grey stands in for the detail" : "a stage the shader does not declare: reads nothing in-frame", swapped, unlit ? ", lighting and fog removed (albedo output)" : sims3cam::wantsUnlitPatch(hash) ? ", lighting NOT removed (final instruction not the expected mad)" : "", alphaOne ? (alpha ? ", alpha forced to 1" : ", alpha NOT forced (no free constant)") : alphaMode == 2 ? ", alpha = the shader's coverage (baked with an alpha test)" : "", (h.boundFmt[free] == 50u && h.boundW[free] == 16 && h.boundH[free] == 16) ? "; the swapped stage holds the game's 16x16 light map, whose doubled sample becomes the marker's grey = 1" : lightMapStage < 0 ? "; no 16x16 light map bound" : "; NOTE: the 16x16 light map is bound at another stage, so that map is baked", killTokens ? "; texels under the lots discarded (rectangle test appended)" : kill ? "; NOTE: the lot-rectangle test could NOT be appended" : "");
+      snprintf(msg, sizeof msg, "Sims 3 camera hook: terrain variant for PS %016llx (%s) -> stage 0 read from s%d (%s; %u tokens renumbered)%s%s%s", (unsigned long long) hash, alphaMode == 0 ? (forced ? (forced == 4 ? "composite pass 1" : "composite pass 2") : "blended layer passes") : alphaMode == 1 ? "opaque draws, alpha 1" : "base draws, coverage alpha", free, forced >= 1 ? "a paint layer's stage; the black marker takes that layer out" : free == detail ? "the shader's detail stage; the marker's grey stands in for the detail" : "a stage the shader does not declare: reads nothing in-frame", swapped, unlit ? ", lighting and fog removed (albedo output)" : sims3cam::wantsUnlitPatch(hash) ? ", lighting NOT removed (final instruction not the expected mad)" : "", alphaOne ? (alpha ? ", alpha forced to 1" : ", alpha NOT forced (no free constant)") : alphaMode == 2 ? ", alpha = the shader's coverage (baked with an alpha test)" : "", (h.boundFmt[free] == 50u && h.boundW[free] == 16 && h.boundH[free] == 16) ? "; the swapped stage holds the game's 16x16 light map, whose doubled sample becomes the marker's grey = 1" : lightMapStage < 0 ? "; no 16x16 light map bound" : "; NOTE: the 16x16 light map is bound at another stage, so that map is baked");
       Logger::info(msg);
     }
     freeStage = free;
@@ -901,21 +701,6 @@ namespace {
     h.ourSampler = false;
     h.tblockActive = false; h.tblockSrgb = 0; ++h.tblockFlushes;
   }
-  // A lot's rectangle for this frame (milestone 19), once per lot.
-  inline void sims3LotRectAdd(Sims3Hook& h, const float* r) {
-    for (uint32_t i = 0; i < h.lotRectCount; ++i) {
-      const float* q = h.lotRects[i];
-      if (std::fabs(q[0] - r[0]) < 0.01f && std::fabs(q[1] - r[1]) < 0.01f && std::fabs(q[2] - r[2]) < 0.01f && std::fabs(q[3] - r[3]) < 0.01f) return;
-    }
-    if (h.lotRectCount >= sims3cam::kLotRects) { ++h.lotRectDrops; return; }
-    for (int k = 0; k < 4; ++k) h.lotRects[h.lotRectCount][k] = r[k];
-    ++h.lotRectCount; if (h.lotRectCount > h.lotRectMax) h.lotRectMax = h.lotRectCount;
-    if (h.lotRectLogged < 8) {
-      ++h.lotRectLogged; char msg[200];
-      snprintf(msg, sizeof msg, "Sims 3 camera hook: lot rectangle %u of frame %u -> world x %.1f..%.1f, z %.1f..%.1f (%.0f x %.0f units); the world-side variants discard their texels inside it", h.lotRectCount, h.frames + 1, 2.f * r[0], 2.f * r[2], 2.f * r[1], 2.f * r[3], 2.f * (r[2] - r[0]), 2.f * (r[3] - r[1]));
-      Logger::info(msg);
-    }
-  }
   // The paint composite's second pass in place (milestone 19): the game's own draw was pass 1
   // (layer 4 blacked out); the same draw goes out again as pass 2, hidden, blended ONE / ONE,
   // through the ordinary draw hooks with the re-issue flags the replay used.
@@ -924,9 +709,9 @@ namespace {
     h.compositeSecond = false;
     DWORD src = 0, dst = 0; dev->GetRenderState(D3DRS_SRCBLEND, &src); dev->GetRenderState(D3DRS_DESTBLEND, &dst);
     h.ourState = true; dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE); dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE); h.ourState = false;
-    h.replaying = true; h.replayKind = 2; h.compositePass = 2;
+    h.reissue = true; h.reissueKind = 2; h.compositePass = 2;
     if (indexed) dev->DrawIndexedPrimitive(type, baseVertex, minIndex, numVertices, start, count); else dev->DrawPrimitive(type, start, count);
-    h.replaying = false; h.replayKind = 0; h.compositePass = 0;
+    h.reissue = false; h.reissueKind = 0; h.compositePass = 0;
     h.ourState = true; dev->SetRenderState(D3DRS_SRCBLEND, src); dev->SetRenderState(D3DRS_DESTBLEND, dst); h.ourState = false;
   }
 
@@ -951,12 +736,7 @@ namespace {
     // paint layer's stage and the black marker takes that layer out; two passes in the replay
     const bool composite = h.psHash == sims3cam::kLotCompositePs;
     const int pass = composite ? (h.compositePass ? (int) h.compositePass : 1) : 0;
-    if (composite && pass == 1 && !h.replaying) h.compositeSecond = true;   // the second pass follows in place (milestone 19)
-    if (h.vsTerrain && !h.vsTerrain->replayLast) {   // a world-side draw: this frame's lot rectangles to the variant (milestone 19)
-      float table[sims3cam::kLotRects * 4];
-      for (uint32_t i = 0; i < sims3cam::kLotRects; ++i) { const bool used = i < h.lotRectCount; table[i * 4] = used ? h.lotRects[i][0] : 0.f; table[i * 4 + 1] = used ? h.lotRects[i][1] : 0.f; table[i * 4 + 2] = used ? h.lotRects[i][2] : -1.f; table[i * 4 + 3] = used ? h.lotRects[i][3] : -1.f; }
-      dev->SetPixelShaderConstantF(sims3cam::kLotRectConst, table, sims3cam::kLotRects); ++h.killUploads;
-    }
+    if (composite && pass == 1 && !h.reissue) h.compositeSecond = true;   // the second pass follows in place (milestone 19)
     IDirect3DPixelShader9* variant = sims3PsVariant(h, dev, h.psBound, h.psHash, alphaMode, sims3cam::lotCompositeStage(pass), freeStage);
     if (!variant || freeStage < 1 || freeStage > 15) { ++h.terrainNoVariant; return false; }
     // which marker: base draws visible (0); every layer pass hidden -- the world's blended layers
@@ -966,7 +746,7 @@ namespace {
     // it did so whenever the camera moved (the terrain texture transform in the identity hash
     // changes each frame), and a hidden or blended draw landing on the lot's instance flickered or
     // blanked the whole lot (runs 85-91).
-    const bool lotFamily = h.vsTerrain && h.vsTerrain->replayLast;
+    const bool lotFamily = h.vsTerrain && h.vsTerrain->lotFamily;
     const int markerIdx = composite ? 2 : kind == 2 ? 1 : 0;
     // textures: the game's stage 0 moves to the free stage (with stage 0's sampler states), the marker takes stage 0
     h.freeStageRestore = h.boundTex[freeStage]; if (h.freeStageRestore) h.freeStageRestore->AddRef();
@@ -1250,11 +1030,9 @@ namespace {
     for (int i = 0; i < sims3cam::kTerrainMarkers; ++i) { if (h.marker[i]) h.marker[i]->Release(); h.marker[i] = nullptr; h.markerHash[i] = 0; }
     h.markerFailed = false; h.markersConfigSent = false; h.terrainFreeStage = -1; h.tblockActive = false; h.tblockStage = -1; h.tblockSet = 0; h.tblockSrgb = 0; h.ourSampler = false; h.psBound = nullptr; h.vsTerrain = nullptr; h.lotFurtherCopy = false; h.swappingPs = false;
     h.cwOurs = false; h.atOurs = false;
-    h.compositePass = 0; h.extraActive = false; h.splitDraw = false; h.ourConsts = false; h.deferDraw = false; h.replayKind = 0; h.replaysThisFrame = 0; h.lotRectCount = 0; h.compositeSecond = false;
+    h.compositePass = 0; h.extraActive = false; h.splitDraw = false; h.ourConsts = false; h.reissue = false; h.reissueKind = 0; h.compositeSecond = false;
     for (int i = 0; i < 2; ++i) { if (h.extraRestore[i]) h.extraRestore[i]->Release(); h.extraRestore[i] = nullptr; }
-    for (uint32_t i = 0; i < h.replayCount; ++i) sims3ReplayRelease(h.replays[i]);
-    h.replayCount = 0; h.replayPending = false; h.replaying = false; h.terrainSinceReplay = 0;
-    h.rt0 = nullptr; h.sceneRt = nullptr; h.frameWorldDraws = 0;
+    h.rt0 = nullptr;
     h.remapActive = false; h.maskEmu = 0; h.viewportOurs = false; h.vsSkyDome = false;
     h.vsBound = nullptr; h.vsTabled = false; h.vsNormal = nullptr; h.pendingPromote = 0; h.vsHash = 0;
     h.patch = nullptr; h.vsNeverCapture = 0; h.vsCapturedUv = false; h.vsWorldReg = -1; h.vsShadowReg = -1; h.objWorldValid = false;
@@ -1329,14 +1107,8 @@ namespace {
   // into an offscreen target its emulation. Returns whether the draw is captured.
   template<typename Dev>
   bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
-    // The lot ground back on top of the terrain drawn after it (milestone 17l): the recorded lot
-    // draws are re-issued before the first draw of any other shader that follows a world terrain
-    // draw -- the world terrain and lot-area paint are drawn in blocks, so this is normally once
-    // a frame, and always before the interface draw at which the runtime injects. Not during a
-    // reflection pass (its draws are dropped), not from the replay itself.
-    if (!h.replaying) ++h.frameDraws;
+    if (!h.reissue) ++h.frameDraws;
     h.lastKind = 0;
-    if (!h.replaying && h.replayCount && (h.terrainSinceReplay || h.replaysThisFrame == 0) && h.vsTerrain == nullptr && !h.camMirrored) sims3ReplayLotDraws(h, dev, false);
     const bool want = sims3ApplyForDraw(h, dev, rs);
     h.drawCaptured = want;
     if (h.drawDropped) return false;                // a reflection pass's draw: the caller returns without drawing
@@ -1352,25 +1124,13 @@ namespace {
     // a terrain draw (milestone 17): handed to the runtime's terrain baker with the marker at
     // stage 0 and the game's pixel shader variant; no albedo stage, no vertex shader variant
     uint8_t terrainKind = sims3cam::terrainEnabled() ? sims3cam::terrainDrawKind(h.vsTerrain, rs[D3DRS_ALPHABLENDENABLE], h.lotFurtherCopy) : (uint8_t) 0;
-    const bool lotFamilyDraw = terrainKind != 0 && h.vsTerrain && h.vsTerrain->replayLast;
-    if (terrainKind != 0 && h.replaying) terrainKind = h.replayKind ? h.replayKind : 2;   // a re-issued lot ground draw: as recorded
+    const bool lotFamilyDraw = terrainKind != 0 && h.vsTerrain && h.vsTerrain->lotFamily;
+    if (terrainKind != 0 && h.reissue) terrainKind = h.reissueKind ? h.reissueKind : 2;   // the hook's own re-issue (the composite's second pass): hidden
     h.lastKind = terrainKind;
     h.compositeSecond = false;
-    if (lotFamilyDraw && !h.replaying && terrainKind == 1 && h.vsHash == sims3cam::kLotTerrainVs) {   // the lot's rectangle for the world-side variants (milestone 19)
-      float c[8], rect[4];
-      if (SUCCEEDED(dev->GetVertexShaderConstantF(9, c, 2)) && sims3cam::lotRectFromConstants(c, c + 4, rect)) sims3LotRectAdd(h, rect);
-    }
-    if (terrainKind == 1 && h.vsTerrain && !h.vsTerrain->replayLast) { ++h.frameWorldDraws; h.sceneRt = h.rt0; }
-    if (terrainKind != 0 && !h.replaying && h.vsTerrain && !h.vsTerrain->replayLast) ++h.terrainSinceReplay;   // a world / lot-area draw the lot ground must go back on top of
-    // since milestone 19 a lot's ground goes out in place: the world-side variants discard their texels under it
+    // a lot's ground goes out in place (milestone 19): nothing overwrites its paint in the atlas (run 119's paint test)
     const bool terrain = terrainKind != 0 && sims3BeginTerrainDraw(h, dev, terrainKind);
     if (!terrain) sims3TerrainBlockEnd(h, dev);   // a captured non-terrain draw follows the terrain block (milestone 18g)
-    if (!terrain && h.replayPending) { sims3ReplayRelease(h.replays[h.replayCount]); h.replayPending = false; }
-    if (terrainKind != 0 && sims3Tracing(h)) {
-      char t[240]; DWORD cw = 0; dev->GetRenderState(D3DRS_COLORWRITEENABLE, &cw);
-      snprintf(t, sizeof t, "%s VS %08x PS %08x kind %u%s%s%s%s%s, World t (%.0f, %.0f, %.0f), blend %lu cw %lx, stage 0 %ux%u, RT %p", h.replaying ? "replayed" : "terrain", (unsigned) (h.vsHash >> 32), (unsigned) (h.psHash >> 32), terrainKind, terrain ? "" : " (NO variant: captured plainly)", h.lotFurtherCopy ? " chunk-copy" : "", h.splitDraw ? " split" : "", h.compositePass ? (h.compositePass == 1 ? " composite-p1" : " composite-p2") : (h.psHash == sims3cam::kLotCompositePs ? " composite" : ""), h.vsTerrain && h.vsTerrain->replayLast ? " (lot family, recorded)" : "", h.rows4to6[3], h.rows4to6[7], h.rows4to6[11], (unsigned long) rs[D3DRS_ALPHABLENDENABLE], (unsigned long) cw, (unsigned) h.boundW[0], (unsigned) h.boundH[0], (void*) h.rt0);
-      sims3TraceLine(h, t);
-    }
     if (!terrain) {
       if (h.psAlbedoStage >= 0 && h.psAlbedoStage < 16 && h.boundTex[h.psAlbedoStage] != nullptr) {
         k = h.psAlbedoStage; ++h.overrideDraws;
@@ -2018,11 +1778,10 @@ static void sims3LogStats(bool withTable) {
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   reflections: %u mirrored camera uploads; %u draws dropped in %u frames (%u of them by the stencil mirror's render states alone)",
            h.mirroredUploads, h.reflectionDrops, h.reflectionFrames, h.reflectionDropsByStates);
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   terrain: %u base draws and %u layer passes (%u lot chunk copies) for the baker, %u without a variant; %u pixel shader variants (%u unlit, %u with alpha forced to 1), %u sampler states copied, sRGB sampling turned off %u times, both held across %u terrain blocks (%u holds cancelled by the game, %u uncaptured draws let through); markers %s; %u lot chunk copies dropped; lot rectangles: up to %u a frame (%u not fitted), %u world-side draws with the table",
-           h.terrainBaseDraws, h.terrainLayerDraws, h.terrainLotCopyDraws, h.terrainNoVariant, h.psVariantsMade, h.psVariantsUnlit, h.psVariantsAlpha, h.samplerCopies, h.srgbOffs, h.tblockFlushes, h.tblockCancelled, h.tblockKept, h.markersConfigSent ? "tagged in rtx.conf" : (h.marker[0] ? "made, NOT tagged in rtx.conf" : "not made yet"), h.lotCopyDrops, h.lotRectMax, h.lotRectDrops, h.killUploads);
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   terrain: %u base draws and %u layer passes (%u lot chunk copies) for the baker, %u without a variant; %u pixel shader variants (%u unlit, %u with alpha forced to 1), %u sampler states copied, sRGB sampling turned off %u times, both held across %u terrain blocks (%u holds cancelled by the game, %u uncaptured draws let through); markers %s; %u lot chunk copies dropped",
+           h.terrainBaseDraws, h.terrainLayerDraws, h.terrainLotCopyDraws, h.terrainNoVariant, h.psVariantsMade, h.psVariantsUnlit, h.psVariantsAlpha, h.samplerCopies, h.srgbOffs, h.tblockFlushes, h.tblockCancelled, h.tblockKept, h.markersConfigSent ? "tagged in rtx.conf" : (h.marker[0] ? "made, NOT tagged in rtx.conf" : "not made yet"), h.lotCopyDrops);
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   terrain replay: %u draws re-issued in %u replays (%u before the first draw after the world terrain, %u at Present), %u composite second passes, %u lot re-submissions split in two, %u replays at a reflection camera, %u game lot draws held for the replay; %u draws not recorded (table full)",
-           h.replayDraws, h.replayFrames, h.replayMid, h.replayAtPresent, h.compositePasses, h.splitDraws, h.replayAtMirror, h.deferredDraws, h.replayFull);
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   lot paint: %u composite second passes, %u lot re-submissions split in two", h.compositePasses, h.splitDraws);
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   cameras: transforms sent to the runtime %u times (%u with the projection changed); %u frames with a second main camera (%u uploads not adopted); sky dome draws presented as the sky %u",
            h.transformSends, h.transformSendsProj, h.framesWithAlt, h.altUploadsTotal, h.skyDraws);
@@ -2075,14 +1834,6 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
     remixapi::g_presentCallback();
   }
 
-  // The Sims 3 camera hook: the frame's lot ground recordings released; re-issued once more if
-  // world terrain came after the last replay (a fallback: after the interface the runtime bakes
-  // nothing, milestone 17l).
-  if (sims3cam::enabled() && g_sims3.replayCount) {
-    if (g_sims3.terrainSinceReplay || g_sims3.replaysThisFrame == 0) sims3ReplayLotDraws(g_sims3, this, true);
-    else { for (uint32_t i = 0; i < g_sims3.replayCount; ++i) sims3ReplayRelease(g_sims3.replays[i]); g_sims3.replayCount = 0; }
-  }
-
   // The Sims 3 camera hook: periodic diagnostics. The summary line every 600 frames (short
   // sessions still get one from inside the lot), the per-shader capture table every 3600.
   if (sims3cam::enabled()) {
@@ -2111,10 +1862,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
     }
     h.frameCamSet = false; h.frameMainUploads = 0; h.frameAltUploads = 0; h.frameAltCount = 0;
     h.lotCopies.clear();   // the lot meshes drawn this frame (milestone 16)
-    h.lotRectCount = 0;    // the lots drawn this frame (milestone 19)
-    h.frameWorldDraws = 0; h.sceneRt = nullptr; h.terrainSinceReplay = 0; h.replaysThisFrame = 0;
     sims3TerrainBlockEnd(h, this);   // the frame is over: the game's sampler states back (milestone 18g)
-    if (sims3Tracing(h)) { char t[96]; snprintf(t, sizeof t, "PRESENT (%u draws this frame)", h.frameDraws); sims3TraceLine(h, t); }
     {
       char t[80];
       snprintf(t, sizeof t, "PRESENT d%u C%u U%u D%u H%u R%u tw%u tl%u cam%u/%u/%u", h.frameDraws, h.fCaptured, h.fUncaptured, h.fDropped, h.fHeld, h.fReplayed, h.fTerrainWorld, h.fTerrainLot, h.fCamAdopt, h.fCamAlt, h.fCamMirror);
@@ -4138,16 +3886,6 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawPrimitive(D3DPRIMITIVETYPE Primit
   ZoneScoped;
   LogFunctionCall();
   SIMS3_BEGIN_DRAW();
-  if (sims3cam::enabled() && g_sims3.replayPending) {   // a recorded lot ground draw: its arguments (milestone 17e)
-    auto& r = g_sims3.replays[g_sims3.replayCount++];
-    r.indexed = false; r.type = PrimitiveType; r.start = StartVertex; r.count = PrimitiveCount;
-    g_sims3.replayPending = false;
-  }
-  if (sims3cam::enabled() && g_sims3.deferDraw) {   // lot mode 2: the game's lot draw is issued after the world terrain instead (milestone 17s)
-    g_sims3.deferDraw = false;
-    SIMS3_END_DRAW();
-    return D3D_OK;
-  }
   UID currentUID = 0;
   if (sims3cam::enabled() && g_sims3.splitDraw && PrimitiveType == D3DPT_TRIANGLELIST && PrimitiveCount >= 2) {   // a lot's re-submission as two half draws (milestone 17r)
     const UINT half_ = PrimitiveCount / 2;
@@ -4169,16 +3907,6 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
   ZoneScoped;
   LogFunctionCall();
   SIMS3_BEGIN_DRAW();
-  if (sims3cam::enabled() && g_sims3.replayPending) {   // a recorded lot ground draw: its arguments (milestone 17e)
-    auto& r = g_sims3.replays[g_sims3.replayCount++];
-    r.indexed = true; r.type = Type; r.baseVertex = BaseVertexIndex; r.minIndex = MinVertexIndex; r.numVertices = NumVertices; r.start = startIndex; r.count = primCount;
-    g_sims3.replayPending = false;
-  }
-  if (sims3cam::enabled() && g_sims3.deferDraw) {   // lot mode 2: the game's lot draw is issued after the world terrain instead (milestone 17s)
-    g_sims3.deferDraw = false;
-    SIMS3_END_DRAW();
-    return D3D_OK;
-  }
   // The Sims 3 camera hook: a captured draw whose render states make it invisible in-game
   // (colour writes off, a depth test that never passes, an alpha test that never passes, a
   // blend of zero source and one destination) contributes nothing to the game's image, so
@@ -4826,10 +4554,6 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetVertexShaderConstantF(UINT StartRe
           Logger::info(msg);
         }
       } else if (kind == sims3cam::Kind::OtherCamera) {
-        // the lot ground replay before the reflection pass begins (milestone 17r): its draws are
-        // dropped while the camera is mirrored, and a reflection pass that follows the world
-        // terrain with nothing but the interface after it left the lot unbaked for the frame
-        if (h.replayCount && (h.terrainSinceReplay || h.replaysThisFrame == 0) && !h.replaying) { sims3ReplayLotDraws(h, this, false); ++h.replayAtMirror; }
         h.cameraValid = false; h.camMirrored = true;   // a reflection pass: its 3D draws are dropped
         ++h.fCamMirror;
         { char t[80]; snprintf(t, sizeof t, "CAM mirror d%u eye %.0f,%.0f,%.0f fwd.y %.2f %08x", h.frameDraws, cam.pos[0], cam.pos[1], cam.pos[2], cam.fwd[1], (unsigned) (h.vsHash >> 32)); sims3RingPush(h, t); }

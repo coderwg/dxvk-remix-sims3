@@ -1,9 +1,7 @@
 # The Sims 3 camera hook: options read once at start (key = value, integers).
 # terrain       1 = terrain through the runtime's terrain baker (0 = the pre-M17 capture)
-# terrainTrace  N = log every terrain draw, replay and Present of N frames, in order (diagnostic; 0 = off)
 # ringTrace     1 = keep a rolling trace of every draw and event of the last ~300 frames; the mark key writes it to the log (diagnostic; 0 = off)
 # markKey       virtual-key code of the mark key (F9 and backtick always work); 45 = Insert, 220 = backslash, 36 = Home, 35 = End, 19 = Pause, 145 = Scroll Lock
 terrain = 1
-terrainTrace = 2
 ringTrace = 0
 markKey = 220
