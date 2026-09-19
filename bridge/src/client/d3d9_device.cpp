@@ -213,11 +213,11 @@ namespace {
     // to the game's values at the first other draw, at the end of a replay burst or at Present
     // (before: copied and put back for every draw, ~1,400 bridge commands a frame). A game
     // SetSamplerState on a held state cancels that state's restore: the game's value is current.
-    bool tblockActive = false; int tblockStage = -1;   // the free stage whose sampler states are held
-    uint8_t tblockSet = 0; DWORD tblockSaved[kSamplerCopies] = {};   // the held copies and the game's values
+    bool tblockActive = false; uint16_t tblockStages = 0;   // stages whose copied sampler states are held
+    uint8_t tblockSet[16] = {}; DWORD tblockSaved[16][kSamplerCopies] = {};   // per stage: the held copies and the game's values
     uint16_t tblockSrgb = 0;                            // stages whose SRGBTEXTURE the hook holds off
     bool ourSampler = false;                            // our own SetSamplerState calls: no cancelling
-    uint32_t tblockFlushes = 0, tblockCancelled = 0;
+    uint32_t tblockFlushes = 0, tblockCancelled = 0, tblockKept = 0;   // ...and the uncaptured draws that touched no held stage
     IDirect3DTexture9* marker[sims3cam::kTerrainMarkers] = {};   // the terrain / layer-pass / composite marker textures (terrainMarkerPixels)
     uint64_t markerHash[sims3cam::kTerrainMarkers] = {};         // their level-0 hashes as the runtime computes them (0 = not computed)
     bool markerFailed = false, markersConfigSent = false;
@@ -856,7 +856,8 @@ namespace {
     ++h.psVariantsMade; if (unlit) ++h.psVariantsUnlit; if (alpha) ++h.psVariantsAlpha;
     if (h.psVariantLogged < 12) {
       ++h.psVariantLogged; char msg[460];
-      snprintf(msg, sizeof msg, "Sims 3 camera hook: terrain variant for PS %016llx (%s) -> stage 0 read from s%d (%s; %u tokens renumbered)%s%s%s", (unsigned long long) hash, alphaMode == 0 ? (forced ? (forced == 4 ? "composite pass 1" : "composite pass 2") : "blended layer passes") : alphaMode == 1 ? "opaque draws, alpha 1" : "base draws, coverage alpha", free, forced >= 1 ? "a paint layer's stage; the black marker takes that layer out" : free == detail ? "the shader's detail stage; the marker's grey stands in for the detail" : "a stage the shader does not declare: reads nothing in-frame", swapped, unlit ? ", lighting and fog removed (albedo output)" : sims3cam::wantsUnlitPatch(hash) ? ", lighting NOT removed (final instruction not the expected mad)" : "", alphaOne ? (alpha ? ", alpha forced to 1" : ", alpha NOT forced (no free constant)") : alphaMode == 2 ? ", alpha = the shader's coverage (baked with an alpha test)" : "", (h.boundFmt[free] == 50u && h.boundW[free] == 16 && h.boundH[free] == 16) ? "; the swapped stage holds the game's 16x16 light map, whose doubled sample becomes the marker's grey = 1" : "; NOTE: the swapped stage does not hold the game's 16x16 light map, so that map is baked");
+      int lightMapStage = -1; for (int s = 0; s < 16; ++s) if (h.boundTex[s] && h.boundFmt[s] == 50u && h.boundW[s] == 16 && h.boundH[s] == 16) { lightMapStage = s; break; }
+      snprintf(msg, sizeof msg, "Sims 3 camera hook: terrain variant for PS %016llx (%s) -> stage 0 read from s%d (%s; %u tokens renumbered)%s%s%s", (unsigned long long) hash, alphaMode == 0 ? (forced ? (forced == 4 ? "composite pass 1" : "composite pass 2") : "blended layer passes") : alphaMode == 1 ? "opaque draws, alpha 1" : "base draws, coverage alpha", free, forced >= 1 ? "a paint layer's stage; the black marker takes that layer out" : free == detail ? "the shader's detail stage; the marker's grey stands in for the detail" : "a stage the shader does not declare: reads nothing in-frame", swapped, unlit ? ", lighting and fog removed (albedo output)" : sims3cam::wantsUnlitPatch(hash) ? ", lighting NOT removed (final instruction not the expected mad)" : "", alphaOne ? (alpha ? ", alpha forced to 1" : ", alpha NOT forced (no free constant)") : alphaMode == 2 ? ", alpha = the shader's coverage (baked with an alpha test)" : "", (h.boundFmt[free] == 50u && h.boundW[free] == 16 && h.boundH[free] == 16) ? "; the swapped stage holds the game's 16x16 light map, whose doubled sample becomes the marker's grey = 1" : lightMapStage < 0 ? "; no 16x16 light map bound" : "; NOTE: the 16x16 light map is bound at another stage, so that map is baked");
       Logger::info(msg);
     }
     freeStage = free;
@@ -873,9 +874,19 @@ namespace {
     if (!h.tblockActive) return;
     h.ourSampler = true;
     for (DWORD s = 0; s < 16; ++s) if (h.tblockSrgb & (1u << s)) dev->SetSamplerState(s, D3DSAMP_SRGBTEXTURE, TRUE);
-    for (int i = 0; i < Sims3Hook::kSamplerCopies; ++i) if (h.tblockSet & (1u << i)) dev->SetSamplerState((DWORD) h.tblockStage, kSims3SamplerCopy[i], h.tblockSaved[i]);
+    for (DWORD s = 0; s < 16; ++s) if (h.tblockStages & (1u << s)) { for (int i = 0; i < Sims3Hook::kSamplerCopies; ++i) if (h.tblockSet[s] & (1u << i)) dev->SetSamplerState(s, kSims3SamplerCopy[i], h.tblockSaved[s][i]); h.tblockSet[s] = 0; }
     h.ourSampler = false;
-    h.tblockActive = false; h.tblockStage = -1; h.tblockSet = 0; h.tblockSrgb = 0; ++h.tblockFlushes;
+    h.tblockActive = false; h.tblockStages = 0; h.tblockSrgb = 0; ++h.tblockFlushes;
+  }
+  // Ends the block only if the draw about to go out samples a stage the block holds: an
+  // uncaptured draw is rasterized with the device's sampler states, so a held stage it reads
+  // would sample wrongly, while a draw that binds nothing there is unaffected (the game's
+  // untextured lot overlays come between the terrain draws, milestone 18h).
+  template<typename Dev>
+  void sims3TerrainBlockEndIfUsed(Sims3Hook& h, Dev* dev) {
+    if (!h.tblockActive) return;
+    for (DWORD s = 0; s < 16; ++s) if (h.boundTex[s] != nullptr && ((h.tblockSrgb | h.tblockStages) & (1u << s))) { sims3TerrainBlockEnd(h, dev); return; }
+    ++h.tblockKept;
   }
 
   template<typename Dev>
@@ -926,14 +937,14 @@ namespace {
     // texels -- the bake then holds sRGB-encoded texels, which the ray tracer gamma-corrects
     // itself (the game samples its layers as sRGB). Both are held across the terrain block
     // (milestone 18g) and only re-sent where the device's current value differs.
-    if (h.tblockActive && h.tblockStage != freeStage) sims3TerrainBlockEnd(h, dev);
-    if (!h.tblockActive) { h.tblockActive = true; h.tblockStage = freeStage; h.tblockSet = 0; h.tblockSrgb = 0; }
+    if (!h.tblockActive) { h.tblockActive = true; h.tblockStages = 0; h.tblockSrgb = 0; }
+    h.tblockStages |= (uint16_t) (1u << freeStage);
     h.ourSampler = true;
     for (int i = 0; i < Sims3Hook::kSamplerCopies; ++i) {
       DWORD v0 = 0, vf = 0;
       dev->GetSamplerState(0, kSims3SamplerCopy[i], &v0); dev->GetSamplerState((DWORD) freeStage, kSims3SamplerCopy[i], &vf);
       if (v0 == vf) continue;
-      if (!(h.tblockSet & (1u << i))) { h.tblockSaved[i] = vf; h.tblockSet |= (uint8_t) (1u << i); }   // the game's value, saved once per block
+      if (!(h.tblockSet[freeStage] & (1u << i))) { h.tblockSaved[freeStage][i] = vf; h.tblockSet[freeStage] |= (uint8_t) (1u << i); }   // the game's value, saved once per block
       dev->SetSamplerState((DWORD) freeStage, kSims3SamplerCopy[i], v0); ++h.samplerCopies;
     }
     for (DWORD s = 0; s < 16; ++s) {
@@ -1179,7 +1190,7 @@ namespace {
     if (h.psRestore) { h.psRestore->Release(); h.psRestore = nullptr; }
     if (h.freeStageRestore) { h.freeStageRestore->Release(); h.freeStageRestore = nullptr; }
     for (int i = 0; i < sims3cam::kTerrainMarkers; ++i) { if (h.marker[i]) h.marker[i]->Release(); h.marker[i] = nullptr; h.markerHash[i] = 0; }
-    h.markerFailed = false; h.markersConfigSent = false; h.terrainFreeStage = -1; h.tblockActive = false; h.tblockStage = -1; h.tblockSet = 0; h.tblockSrgb = 0; h.ourSampler = false; h.psBound = nullptr; h.vsTerrain = nullptr; h.lotFurtherCopy = false; h.swappingPs = false;
+    h.markerFailed = false; h.markersConfigSent = false; h.terrainFreeStage = -1; h.tblockActive = false; h.tblockStages = 0; memset(h.tblockSet, 0, sizeof h.tblockSet); h.tblockSrgb = 0; h.ourSampler = false; h.psBound = nullptr; h.vsTerrain = nullptr; h.lotFurtherCopy = false; h.swappingPs = false;
     h.cwOurs = false; h.atOurs = false;
     h.compositePass = 0; h.extraActive = false; h.splitDraw = false; h.ourConsts = false; h.deferDraw = false; h.replayKind = 0; h.replaysThisFrame = 0;
     for (int i = 0; i < 2; ++i) { if (h.extraRestore[i]) h.extraRestore[i]->Release(); h.extraRestore[i] = nullptr; }
@@ -1272,7 +1283,7 @@ namespace {
     h.drawCaptured = want;
     if (h.drawDropped) return false;                // a reflection pass's draw: the caller returns without drawing
     if (!want) {
-      sims3TerrainBlockEnd(h, dev);            // an uncaptured draw follows the terrain block (milestone 18g)
+      sims3TerrainBlockEndIfUsed(h, dev);      // an uncaptured draw follows the terrain block: ends it only if it samples a held stage (milestone 18h)
       sims3RestoreGameState(h, dev);
       sims3BeginMaskedWrite(h, dev, rs);
       return false;
@@ -1951,8 +1962,8 @@ static void sims3LogStats(bool withTable) {
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   reflections: %u mirrored camera uploads; %u draws dropped in %u frames (%u of them by the stencil mirror's render states alone)",
            h.mirroredUploads, h.reflectionDrops, h.reflectionFrames, h.reflectionDropsByStates);
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   terrain: %u base draws and %u layer passes (%u lot chunk copies) for the baker, %u without a variant; %u pixel shader variants (%u unlit, %u with alpha forced to 1), %u sampler states copied, sRGB sampling turned off %u times, both held across %u terrain blocks (%u holds cancelled by the game); markers %s; %u lot chunk copies dropped",
-           h.terrainBaseDraws, h.terrainLayerDraws, h.terrainLotCopyDraws, h.terrainNoVariant, h.psVariantsMade, h.psVariantsUnlit, h.psVariantsAlpha, h.samplerCopies, h.srgbOffs, h.tblockFlushes, h.tblockCancelled, h.markersConfigSent ? "tagged in rtx.conf" : (h.marker[0] ? "made, NOT tagged in rtx.conf" : "not made yet"), h.lotCopyDrops);
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   terrain: %u base draws and %u layer passes (%u lot chunk copies) for the baker, %u without a variant; %u pixel shader variants (%u unlit, %u with alpha forced to 1), %u sampler states copied, sRGB sampling turned off %u times, both held across %u terrain blocks (%u holds cancelled by the game, %u uncaptured draws let through); markers %s; %u lot chunk copies dropped",
+           h.terrainBaseDraws, h.terrainLayerDraws, h.terrainLotCopyDraws, h.terrainNoVariant, h.psVariantsMade, h.psVariantsUnlit, h.psVariantsAlpha, h.samplerCopies, h.srgbOffs, h.tblockFlushes, h.tblockCancelled, h.tblockKept, h.markersConfigSent ? "tagged in rtx.conf" : (h.marker[0] ? "made, NOT tagged in rtx.conf" : "not made yet"), h.lotCopyDrops);
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   terrain replay: %u draws re-issued in %u replays (%u before the first draw after the world terrain, %u at Present), %u composite second passes, %u lot re-submissions split in two, %u replays at a reflection camera, %u game lot draws held for the replay; %u draws not recorded (table full)",
            h.replayDraws, h.replayFrames, h.replayMid, h.replayAtPresent, h.compositePasses, h.splitDraws, h.replayAtMirror, h.deferredDraws, h.replayFull);
@@ -3847,7 +3858,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetSamplerState(DWORD Sampler, D3DSAM
   // holds cancels that state's restore -- the game's value is the current one
   if (sims3cam::enabled() && !g_sims3.ourSampler && !m_stateRecording && g_sims3.tblockActive) {
     auto& h = g_sims3;
-    if ((int) Sampler == h.tblockStage) for (int i = 0; i < Sims3Hook::kSamplerCopies; ++i) if (kSims3SamplerCopy[i] == Type && (h.tblockSet & (1u << i))) { h.tblockSet &= (uint8_t) ~(1u << i); ++h.tblockCancelled; }
+    if (Sampler < 16 && (h.tblockStages & (1u << Sampler))) for (int i = 0; i < Sims3Hook::kSamplerCopies; ++i) if (kSims3SamplerCopy[i] == Type && (h.tblockSet[Sampler] & (1u << i))) { h.tblockSet[Sampler] &= (uint8_t) ~(1u << i); ++h.tblockCancelled; }
     if (Type == D3DSAMP_SRGBTEXTURE && Sampler < 16 && (h.tblockSrgb & (1u << Sampler))) { h.tblockSrgb &= (uint16_t) ~(1u << Sampler); ++h.tblockCancelled; }
   }
   UID currentUID = 0;
