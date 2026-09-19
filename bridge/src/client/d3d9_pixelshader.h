@@ -25,6 +25,7 @@
 #include "base.h"
 #include "d3d9_device_base.h"
 #include "d3d9_commonshader.h"
+#include "sims3_camera_hook.h"
 
 class Direct3DPixelShader9_LSS: public D3DBase<IDirect3DPixelShader9> {
   void onDestroy() override;
@@ -37,6 +38,14 @@ public:
     , m_pDevice(pDevice)
     , m_shader(shader) {
   }
+
+  // The Sims 3 camera hook: this pixel shader carries the per-object light rig (by bytecode hash), or null;
+  // and the texture stage that is its diffuse/albedo, or -1 when unknown.
+  const sims3cam::AlbedoStage* sims3LightRig = nullptr;   // the table row when the shader carries the 4-light rig at c0..c7
+  int sims3AlbedoStage = -1;
+  int sims3TintReg = -1;      // pixel constant register holding the Create-A-Style tint, or -1
+  uint64_t sims3Hash = 0;     // FNV-1a-64 of the bytecode (diagnostics)
+  sims3cam::PsAnalysis sims3Auto;   // what the bytecode says about its samplers (untabled shaders: the albedo is chosen from this at draw time)
 
   /*** IUnknown methods ***/
   STDMETHOD(QueryInterface)(THIS_ REFIID riid, void** ppvObj);

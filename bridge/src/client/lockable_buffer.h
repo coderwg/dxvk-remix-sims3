@@ -60,6 +60,15 @@ public:
     return m_desc;
   }
 
+  // The Sims 3 camera hook (milestone 13): the client's copy of the buffer's current bytes (null
+  // if none), and how many times the game has written it (the wall cut's cache key).
+  const uint8_t* sims3Data() const {
+    if (m_bUseSharedHeap) return m_bufferId != SharedHeap::kInvalidId ? (const uint8_t*) SharedHeap::getBuf(m_bufferId) : nullptr;
+    return m_shadow.get();
+  }
+  uint32_t sims3Size() const { return m_desc.Size; }
+  uint32_t sims3Version = 0;
+
 private:
   static bool getSharedHeapPolicy(const DescType& desc) {
     if (GlobalOptions::getUseSharedHeap()) {
@@ -187,6 +196,15 @@ protected:
       offset = 0;
       ptr = m_shadow.get();
     }
+
+    // The Sims 3 camera hook (milestone 13): with the optimized dynamic lock the game wrote into
+    // the command channel, not the shadow; keep the shadow current so the wall cut can read the
+    // buffer's bytes on the client.
+    if (m_optimizedLock && !m_bUseSharedHeap && m_shadow && ptr && ptr != m_shadow.get() + offset &&
+        (lockInfo.flags & D3DLOCK_READONLY) == 0 && offset + size <= m_desc.Size) {
+      memcpy(m_shadow.get() + offset, ptr, size);
+    }
+    if ((lockInfo.flags & D3DLOCK_READONLY) == 0) ++sims3Version;
 
     // If this is a read only access then don't bother sending
     if ((lockInfo.flags & D3DLOCK_READONLY) == 0) {

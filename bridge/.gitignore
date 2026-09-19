@@ -31,3 +31,8 @@ game_list.txt
 vsgen/__pycache__/**
 
 /gametargets.conf
+# local build and test output
+_*.log
+sims3/test/*.exe
+sims3/test/*.obj
+sims3/test/*.log

@@ -1,0 +1,47 @@
+--- "/c/Program Files/EA Games/The Sims 3/Game/Bin/GraphicsRules.sgr.stock-2026-09-19"	2026-09-19 14:56:36.901118300 +0100
++++ "/c/Program Files/EA Games/The Sims 3/Game/Bin/GraphicsRules.sgr"	2026-09-19 14:57:49.879386600 +0100
+@@ -541,8 +541,8 @@
+ 	prop $ConfigGroup ActiveLODLimit 200
+ 	prop $ConfigGroup ShaderSkinCompositing true
+ 	setting $VeryHigh
+-	    prop $ConfigGroup RenderSimLODDistances "25, 50, 100, 1000"
+-	    prop $ConfigGroup RenderSimTextureSizes "2048, 2048, 512, 128"
++	    prop $ConfigGroup RenderSimLODDistances "200, 500, 1000, 3000"
++	    prop $ConfigGroup RenderSimTextureSizes "2048, 2048, 2048, 1024"
+ 	    prop $ConfigGroup RenderSimUseSpecular  "1, 1, 1, 1"
+         prop $ConfigGroup CASLightMapWidth 1024
+         prop $ConfigGroup CASLightMapFilteringEnabled true
+@@ -579,10 +579,10 @@
+ 	    prop $ConfigGroup RenderTreeShrubLODDistances  "30, 200,  3000, 3300"
+ 	    prop $ConfigGroup RenderTreeGroundLODDistances "15, 60,  3000, 3300"
+ 	setting $VeryHigh
+-	    prop $ConfigGroup RenderTreeLargeLODDistances  "30, 400, 3000, 3300"
+-	    prop $ConfigGroup RenderTreeSmallLODDistances  "30, 350,  3000, 3300"
+-	    prop $ConfigGroup RenderTreeShrubLODDistances  "30, 300,  3000, 3300"
+-	    prop $ConfigGroup RenderTreeGroundLODDistances "15, 80,  3000, 3300"
++	    prop $ConfigGroup RenderTreeLargeLODDistances  "400, 1500, 8000, 8800"
++	    prop $ConfigGroup RenderTreeSmallLODDistances  "350, 1200, 8000, 8800"
++	    prop $ConfigGroup RenderTreeShrubLODDistances  "300, 1000, 8000, 8800"
++	    prop $ConfigGroup RenderTreeGroundLODDistances "150, 500, 8000, 8800"
+ end
+ if (($cardLevel >= $cardLevelHigh) and ($cpuLevel >= $cpuLevelHigh))
+     setOption TreeQuality $High
+@@ -613,14 +613,14 @@
+ 	prop $ConfigGroup ObjectSizeCullFactor "150"
+ 	prop $ConfigGroup AllowImpostorUnload false
+     setting $High
+-        prop $ConfigGroup ClipPlaneDistances "0.25, 0.25, 3000, 3000"
+-	prop $ConfigGroup ClipPlaneMapViewDistances "1.0, 1500.0"
++        prop $ConfigGroup ClipPlaneDistances "0.25, 0.25, 8000, 8000"
++	prop $ConfigGroup ClipPlaneMapViewDistances "1.0, 8000.0"
+         prop $ConfigGroup ClipPlaneExponent "1"
+         prop $ConfigGroup ClipPlaneZoomClose "100"
+         prop $ConfigGroup ClipPlaneZoomDistant "200"
+-        prop $ConfigGroup FogDistances "10000, 10, 100000, 3000"
++        prop $ConfigGroup FogDistances "10000, 10, 100000, 8000"
+         prop $ConfigGroup FogCurveModifier "1, 3"
+-	prop $ConfigGroup ObjectSizeCullFactor "200"
++	prop $ConfigGroup ObjectSizeCullFactor "1000"
+ 	prop $ConfigGroup AllowImpostorUnload false
+ end
+ if ($cardLevel >= $cardLevelHigh)

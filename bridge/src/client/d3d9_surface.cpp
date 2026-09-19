@@ -245,6 +245,7 @@ void Direct3DSurface9_LSS::unlock() {
   m_lockInfoQueue.pop();
   // If this is a read only access then don't bother sending anything to the server
   if ((lockInfo.flags & D3DLOCK_READONLY) == 0) {
+    ++sims3Version;
     sendDataToServer(lockInfo);
   }
 }

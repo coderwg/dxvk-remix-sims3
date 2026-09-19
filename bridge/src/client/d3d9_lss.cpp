@@ -53,6 +53,9 @@
 #include <sstream>
 #include <stdio.h>
 #include <string>
+
+// The Sims 3 camera hook (d3d9_device.cpp): the statistics line printed at shutdown.
+void sims3LogFinalStats();
 #include <mutex>
 
 using namespace bridge_util;
@@ -460,6 +463,9 @@ void RemixDetach() {
 
     // Clean up resources
     delete gpPresent;
+
+    // The Sims 3 camera hook: report the last stretch of the session (d3d9_device.cpp).
+    sims3LogFinalStats();
 
     Logger::info("Shutdown cleanup successful, exiting now!");
     BridgeState::setClientState(BridgeState::ProcessState::Exited);

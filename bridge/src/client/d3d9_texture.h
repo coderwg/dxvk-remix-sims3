@@ -41,6 +41,15 @@ public:
 
   D3DSURFACE_DESC getLevelDesc(const UINT level) const;
 
+  // The Sims 3 camera hook (milestone 13): the client's copy of level 0 (null until the game has
+  // locked it) and how many times the game has written it.
+  const uint8_t* sims3Level0Data() const;
+  uint32_t sims3Level0Version() const;
+  // The Sims 3 camera hook: XXH3 of level 0 as the runtime hashes it, from the client's copy of
+  // the texel data (0 when the client holds none); cached per upload (sims3Level0Version).
+  uint64_t sims3Level0Hash();
+  uint64_t sims3Hash = 0; uint32_t sims3HashVersion = 0xFFFFFFFFu;
+
   /*** IUnknown methods ***/
   STDMETHOD(QueryInterface)(THIS_ REFIID riid, void** ppvObj);
   STDMETHOD_(ULONG, AddRef)(THIS);

@@ -46,6 +46,9 @@ public:
     m_elements.push_back(*counter);
   }
 
+  // Client-side copy of the elements (terminated by D3DDECL_END), for the Sims 3 camera hook.
+  const D3DVERTEXELEMENT9* sims3Elements() const { return m_elements.empty() ? nullptr : m_elements.data(); }
+
   /*** IUnknown methods ***/
   STDMETHOD(QueryInterface)(THIS_ REFIID riid, void** ppvObj);
   STDMETHOD_(ULONG, AddRef)(THIS);

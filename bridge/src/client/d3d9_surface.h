@@ -90,6 +90,14 @@ public:
     return m_desc;
   }
 
+  // The Sims 3 camera hook (milestone 13): the client's copy of the surface's pixels (null until
+  // the game has locked it), and how many times the game has written it.
+  const uint8_t* sims3Data() const {
+    if (m_bUseSharedHeap) return m_bufferId != SharedHeap::kInvalidId ? (const uint8_t*) SharedHeap::getBuf(m_bufferId) : nullptr;
+    return m_shadow.get();
+  }
+  uint32_t sims3Version = 0;
+
 private:
   /*** Lock/Unlock Functionality ***/
   bool m_isBackBuffer;

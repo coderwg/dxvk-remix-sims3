@@ -25,6 +25,8 @@
 #include "base.h"
 #include "d3d9_device_base.h"
 #include "d3d9_commonshader.h"
+#include "sims3_camera_hook.h"
+#include "sims3_walls.h"
 
 class Direct3DVertexShader9_LSS: public D3DBase<IDirect3DVertexShader9> {
   void onDestroy() override;
@@ -37,6 +39,15 @@ public:
     , m_pDevice(pDevice)
     , m_shader(shader) {
   }
+
+  // The Sims 3 camera hook: constant-patch rule for this shader (by bytecode hash), or null;
+  // and whether its draws are never captured (1), or not when alpha-blended (2): neverCaptureMode.
+  const sims3cam::ShaderPatch* sims3Patch = nullptr;
+  uint8_t sims3NeverCapture = 0;
+  bool sims3SkyDome = false;    // its draws are presented to the runtime as the sky (isSkyDomeShader)
+  uint64_t sims3Hash = 0;     // FNV-1a-64 of the original bytecode (diagnostics)
+  sims3cam::VsNormalInfo sims3Normal;   // where the world-space normal leaves this shader (milestone 11)
+  sims3cam::WallVsInfo sims3Wall;       // a wall shader's clamp of the up-ness flag, for the opening cut (milestone 13)
 
   /*** IUnknown methods ***/
   STDMETHOD(QueryInterface)(THIS_ REFIID riid, void** ppvObj);
