@@ -213,8 +213,8 @@ namespace {
     // to the game's values at the first other draw, at the end of a replay burst or at Present
     // (before: copied and put back for every draw, ~1,400 bridge commands a frame). A game
     // SetSamplerState on a held state cancels that state's restore: the game's value is current.
-    bool tblockActive = false; uint16_t tblockStages = 0;   // stages whose copied sampler states are held
-    uint8_t tblockSet[16] = {}; DWORD tblockSaved[16][kSamplerCopies] = {};   // per stage: the held copies and the game's values
+    bool tblockActive = false; int tblockStage = -1;   // the one free stage whose copied sampler states are held (released on a switch: another terrain draw may read that stage as its own layer, run 116)
+    uint8_t tblockSet = 0; DWORD tblockSaved[kSamplerCopies] = {};   // the held copies and the game's values
     uint16_t tblockSrgb = 0;                            // stages whose SRGBTEXTURE the hook holds off
     bool ourSampler = false;                            // our own SetSamplerState calls: no cancelling
     uint32_t tblockFlushes = 0, tblockCancelled = 0, tblockKept = 0;   // ...and the uncaptured draws that touched no held stage
@@ -298,6 +298,8 @@ namespace {
     struct AltCam { float fovY, nearZ, farZ, aspect, p33, p43, pos[3], fwdY; uint64_t vs; uint32_t count; bool first; };
     AltCam frameAlts[4] = {}; uint32_t frameAltCount = 0;
   } g_sims3;
+
+  template<typename Dev> void sims3TerrainBlockEnd(Sims3Hook& h, Dev* dev);   // defined with the terrain path (milestone 18g)
 
   // The hook's facts about a bound object, from the object (milestone 17w; defined after the
   // vertex shader and declaration headers are included). The setters call them, and so does
@@ -689,6 +691,7 @@ namespace {
   void sims3ReplayLotDraws(Sims3Hook& h, Dev* dev, bool atPresent) {
     if (h.replayCount == 0 || h.replaying) return;
     const uint64_t triggerVs = h.vsHash, triggerPs = h.psHash;
+    sims3TerrainBlockEnd(h, dev);   // the snapshot below must hold the game's sampler states, not the block's (milestone 18i)
     Sims3Hook::ReplayDraw saved; sims3ReplayCapture(h, dev, saved);
     IDirect3DSurface9* rt0 = nullptr; IDirect3DSurface9* bb = nullptr;
     if (h.rt0 != h.sceneRt) {   // the fallback at Present: the scene's target back for the replay (the back buffer if none was seen)
@@ -869,14 +872,25 @@ namespace {
   // back in sims3EndDraw. Returns false when the draw has to be captured the ordinary way.
   // Ends the terrain block (milestone 18g): the game's sampler states back on the free stage and
   // sRGB sampling back on where the hook turned it off, unless the game set them meanwhile.
+  // Puts the game's sampler states back on the held free stage (milestone 18i).
+  template<typename Dev>
+  void sims3TerrainStageRelease(Sims3Hook& h, Dev* dev) {
+    if (h.tblockStage < 0) return;
+    h.ourSampler = true;
+    for (int i = 0; i < Sims3Hook::kSamplerCopies; ++i) if (h.tblockSet & (1u << i)) dev->SetSamplerState((DWORD) h.tblockStage, kSims3SamplerCopy[i], h.tblockSaved[i]);
+    h.ourSampler = false;
+    h.tblockStage = -1; h.tblockSet = 0;
+  }
   template<typename Dev>
   void sims3TerrainBlockEnd(Sims3Hook& h, Dev* dev) {
     if (!h.tblockActive) return;
     h.ourSampler = true;
     for (DWORD s = 0; s < 16; ++s) if (h.tblockSrgb & (1u << s)) dev->SetSamplerState(s, D3DSAMP_SRGBTEXTURE, TRUE);
-    for (DWORD s = 0; s < 16; ++s) if (h.tblockStages & (1u << s)) { for (int i = 0; i < Sims3Hook::kSamplerCopies; ++i) if (h.tblockSet[s] & (1u << i)) dev->SetSamplerState(s, kSims3SamplerCopy[i], h.tblockSaved[s][i]); h.tblockSet[s] = 0; }
     h.ourSampler = false;
-    h.tblockActive = false; h.tblockStages = 0; h.tblockSrgb = 0; ++h.tblockFlushes;
+    sims3TerrainStageRelease(h, dev);
+    h.ourSampler = true;
+    h.ourSampler = false;
+    h.tblockActive = false; h.tblockSrgb = 0; ++h.tblockFlushes;
   }
   // Ends the block only if the draw about to go out samples a stage the block holds: an
   // uncaptured draw is rasterized with the device's sampler states, so a held stage it reads
@@ -885,7 +899,7 @@ namespace {
   template<typename Dev>
   void sims3TerrainBlockEndIfUsed(Sims3Hook& h, Dev* dev) {
     if (!h.tblockActive) return;
-    for (DWORD s = 0; s < 16; ++s) if (h.boundTex[s] != nullptr && ((h.tblockSrgb | h.tblockStages) & (1u << s))) { sims3TerrainBlockEnd(h, dev); return; }
+    for (DWORD s = 0; s < 16; ++s) if (h.boundTex[s] != nullptr && ((h.tblockSrgb & (1u << s)) || (int) s == h.tblockStage)) { sims3TerrainBlockEnd(h, dev); return; }
     ++h.tblockKept;
   }
 
@@ -937,14 +951,14 @@ namespace {
     // texels -- the bake then holds sRGB-encoded texels, which the ray tracer gamma-corrects
     // itself (the game samples its layers as sRGB). Both are held across the terrain block
     // (milestone 18g) and only re-sent where the device's current value differs.
-    if (!h.tblockActive) { h.tblockActive = true; h.tblockStages = 0; h.tblockSrgb = 0; }
-    h.tblockStages |= (uint16_t) (1u << freeStage);
+    if (!h.tblockActive) { h.tblockActive = true; h.tblockSrgb = 0; }
+    if (h.tblockStage != freeStage) { sims3TerrainStageRelease(h, dev); h.tblockStage = freeStage; }   // another free stage: the previous one back to the game's states first
     h.ourSampler = true;
     for (int i = 0; i < Sims3Hook::kSamplerCopies; ++i) {
       DWORD v0 = 0, vf = 0;
       dev->GetSamplerState(0, kSims3SamplerCopy[i], &v0); dev->GetSamplerState((DWORD) freeStage, kSims3SamplerCopy[i], &vf);
       if (v0 == vf) continue;
-      if (!(h.tblockSet[freeStage] & (1u << i))) { h.tblockSaved[freeStage][i] = vf; h.tblockSet[freeStage] |= (uint8_t) (1u << i); }   // the game's value, saved once per block
+      if (!(h.tblockSet & (1u << i))) { h.tblockSaved[i] = vf; h.tblockSet |= (uint8_t) (1u << i); }   // the game's value, saved once while the stage is held
       dev->SetSamplerState((DWORD) freeStage, kSims3SamplerCopy[i], v0); ++h.samplerCopies;
     }
     for (DWORD s = 0; s < 16; ++s) {
@@ -1190,7 +1204,7 @@ namespace {
     if (h.psRestore) { h.psRestore->Release(); h.psRestore = nullptr; }
     if (h.freeStageRestore) { h.freeStageRestore->Release(); h.freeStageRestore = nullptr; }
     for (int i = 0; i < sims3cam::kTerrainMarkers; ++i) { if (h.marker[i]) h.marker[i]->Release(); h.marker[i] = nullptr; h.markerHash[i] = 0; }
-    h.markerFailed = false; h.markersConfigSent = false; h.terrainFreeStage = -1; h.tblockActive = false; h.tblockStages = 0; memset(h.tblockSet, 0, sizeof h.tblockSet); h.tblockSrgb = 0; h.ourSampler = false; h.psBound = nullptr; h.vsTerrain = nullptr; h.lotFurtherCopy = false; h.swappingPs = false;
+    h.markerFailed = false; h.markersConfigSent = false; h.terrainFreeStage = -1; h.tblockActive = false; h.tblockStage = -1; h.tblockSet = 0; h.tblockSrgb = 0; h.ourSampler = false; h.psBound = nullptr; h.vsTerrain = nullptr; h.lotFurtherCopy = false; h.swappingPs = false;
     h.cwOurs = false; h.atOurs = false;
     h.compositePass = 0; h.extraActive = false; h.splitDraw = false; h.ourConsts = false; h.deferDraw = false; h.replayKind = 0; h.replaysThisFrame = 0;
     for (int i = 0; i < 2; ++i) { if (h.extraRestore[i]) h.extraRestore[i]->Release(); h.extraRestore[i] = nullptr; }
@@ -3858,7 +3872,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetSamplerState(DWORD Sampler, D3DSAM
   // holds cancels that state's restore -- the game's value is the current one
   if (sims3cam::enabled() && !g_sims3.ourSampler && !m_stateRecording && g_sims3.tblockActive) {
     auto& h = g_sims3;
-    if (Sampler < 16 && (h.tblockStages & (1u << Sampler))) for (int i = 0; i < Sims3Hook::kSamplerCopies; ++i) if (kSims3SamplerCopy[i] == Type && (h.tblockSet[Sampler] & (1u << i))) { h.tblockSet[Sampler] &= (uint8_t) ~(1u << i); ++h.tblockCancelled; }
+    if ((int) Sampler == h.tblockStage) for (int i = 0; i < Sims3Hook::kSamplerCopies; ++i) if (kSims3SamplerCopy[i] == Type && (h.tblockSet & (1u << i))) { h.tblockSet &= (uint8_t) ~(1u << i); ++h.tblockCancelled; }
     if (Type == D3DSAMP_SRGBTEXTURE && Sampler < 16 && (h.tblockSrgb & (1u << Sampler))) { h.tblockSrgb &= (uint16_t) ~(1u << Sampler); ++h.tblockCancelled; }
   }
   UID currentUID = 0;
