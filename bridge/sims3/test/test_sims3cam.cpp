@@ -767,6 +767,23 @@ int main() {
       }
       std::vector<DWORD> w2 = world, c2 = comp;
       uint32_t opW = 0; DWORD sW = 0; lastColourWrite(world, opW, sW);
+      {
+        // the world terrain kept out from under the lots (milestone 19): the rectangle test appended
+        std::vector<DWORD> k(world);
+        const size_t before = k.size();
+        const uint32_t added = psKillInsideRects(k, kLotRectConst, kLotRects);
+        uint32_t kills = 0; int maxTemp = -1;
+        dxsoForEach(k.data(), k.size(), [&](size_t pos, uint32_t op, uint32_t len) { if (op == 0x41u) ++kills; if (!dxsoIsDef(op)) for (size_t i = 1; i <= len; ++i) if ((k[pos + i] & 0x80000000u) && dxsoRegType(k[pos + i]) == kDxsoRegTemp) maxTemp = (std::max)(maxTemp, (int) dxsoRegNum(k[pos + i])); return true; });
+        CHECK(added == 25 * kLotRects && k.size() == before + added && k.back() == kDxsoEnd && shaderTokenCount(k.data(), k.size()) == k.size() && kills == kLotRects && maxTemp >= 6,
+              "psKillInsideRects 028ce2dd: %u rectangles = %u tokens appended before END, one texkill each, two fresh temps (highest r%d)", kLotRects, added, maxTemp);
+        float rect[4]; const float c9[4] = { 1.f / 30.f, 1.f / 40.f, 0.f, 0.f }, c10[4] = { 100.f, 7.f, 200.f, 1.f };
+        const bool ok = lotRectFromConstants(c9, c10, rect);
+        const float c9n[4] = { -1.f / 30.f, 1.f / 40.f, 1.f, 0.25f }, bad[4] = { 0.f, 1.f, 0.f, 0.f };
+        float rect2[4], rect3[4];
+        const bool ok2 = lotRectFromConstants(c9n, c10, rect2), ok3 = lotRectFromConstants(bad, c10, rect3);
+        CHECK(ok && rect[0] == 50.f && rect[1] == 100.f && rect[2] == 65.f && rect[3] == 120.f && ok2 && rect2[0] == 50.f && rect2[2] == 65.f && rect2[1] == 95.f && rect2[3] == 115.f && !ok3,
+              "lotRectFromConstants: a 30x40 lot at (100, 200) -> half-world rectangle (50, 100)-(65, 120); a negative scale and an offset still order the corners; a zero scale is refused");
+      }
       CHECK(!psUnlitOutput(w2) && w2.size() == world.size() && opW == 5u /*MUL*/, "psUnlitOutput 028ce2dd: the world terrain's final mul is left alone (not a mad)");
       CHECK(psUnlitOutput(c2) && !wantsUnlitPatch(0x99ee53ff6ef1b0b6ull), "psUnlitOutput would rewrite the composite's final mad too, which is why the patch is applied by hash only");
     }
