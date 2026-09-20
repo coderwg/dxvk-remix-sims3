@@ -256,7 +256,8 @@ void Direct3DSurface9_LSS::unlock() {
     ++sims3Version;
     LockInfo li = lockInfo;
     const bool partial = li.rect.left != 0 || li.rect.top != 0 || li.rect.right != (LONG) m_desc.Width || li.rect.bottom != (LONG) m_desc.Height;
-    const bool maskLike = m_desc.Format == D3DFMT_A8R8G8B8 && m_desc.Width <= 256 && m_desc.Height <= 256;
+    const bool maskLike = m_desc.Format == D3DFMT_A8R8G8B8 && m_desc.Width == 128 && (m_desc.Height == 128 || m_desc.Height == 256);   // the lot paint masks
+    const bool layerLike = m_desc.Format == D3DFMT_DXT5 && m_desc.Width == 1024 && m_desc.Height == 1024;                              // the paint layer tiles
     const bool discardPartial = partial && (li.flags & D3DLOCK_DISCARD) != 0;
     if (discardPartial) { li.flags &= ~(DWORD) D3DLOCK_DISCARD; ++g_sims3DiscardPartialLocks; }
     bool sentWhole = false;
@@ -266,10 +267,10 @@ void Direct3DSurface9_LSS::unlock() {
       li.lockedRect.Pitch = bridge_util::calcRowSize(m_desc.Width, m_desc.Format);
       sentWhole = true; ++g_sims3WholeSends;
     }
-    if (maskLike && sims3Version >= 2 && g_sims3SurfaceLocksLogged < 60) {
+    if (((maskLike && sims3Version >= 2) || (layerLike && sims3Version <= 2)) && g_sims3SurfaceLocksLogged < 60) {
       ++g_sims3SurfaceLocksLogged;
-      Logger::info(format_string("Sims 3 camera hook: surface [%p] %ux%u A8R8G8B8 rewritten (write %u): rect %ld,%ld-%ld,%ld (%s), flags 0x%lx, usage 0x%lx pool %lu%s%s; whole sends %u, discard-partial locks %u",
-                                 this, (unsigned) m_desc.Width, (unsigned) m_desc.Height, sims3Version, lockInfo.rect.left, lockInfo.rect.top, lockInfo.rect.right, lockInfo.rect.bottom, partial ? "partial" : "whole",
+      Logger::info(format_string("Sims 3 camera hook: surface [%p] %ux%u %s written (write %u): rect %ld,%ld-%ld,%ld (%s), flags 0x%lx, usage 0x%lx pool %lu%s%s; whole sends %u, discard-partial locks %u",
+                                 this, (unsigned) m_desc.Width, (unsigned) m_desc.Height, maskLike ? "A8R8G8B8" : "DXT5", sims3Version, lockInfo.rect.left, lockInfo.rect.top, lockInfo.rect.right, lockInfo.rect.bottom, partial ? "partial" : "whole",
                                  (unsigned long) lockInfo.flags, (unsigned long) m_desc.Usage, (unsigned long) m_desc.Pool, sentWhole ? " -> sent whole" : "", discardPartial ? ", DISCARD dropped" : "",
                                  g_sims3WholeSends, g_sims3DiscardPartialLocks));
     }
