@@ -221,6 +221,14 @@ namespace {
     // The game's own paint composite draw just went out as pass 1; pass 2 follows in place (the
     // draw member re-issues it hidden, blended ONE / ONE; milestone 19).
     bool compositeSecond = false;
+    // Diagnostic (milestone 19c, run 119's paint-stroke corruption): the lot paint textures as seen
+    // at the game's own composite draw -- the mask at stage 0 and the layers at stages 1-4 -- with
+    // the client's write count (LockableBuffer::sims3Version) and the mask's content hash; a change
+    // between two draws of the same lot is logged, so a corrupted frame can be matched to what the
+    // game uploaded just before.
+    struct LotPaintRec { IDirect3DBaseTexture9* mask; uint32_t version; uint64_t hash; uint16_t w, h; IDirect3DBaseTexture9* layer[4]; uint32_t layerVersion[4]; };
+    static constexpr uint32_t kLotPaintRecs = 8;
+    LotPaintRec lotPaint[kLotPaintRecs] = {}; uint32_t lotPaintCount = 0, lotPaintChanges = 0, lotPaintLogged = 0;
     IDirect3DTexture9* marker[sims3cam::kTerrainMarkers] = {};   // the terrain / layer-pass / composite marker textures (terrainMarkerPixels)
     uint64_t markerHash[sims3cam::kTerrainMarkers] = {};         // their level-0 hashes as the runtime computes them (0 = not computed)
     bool markerFailed = false, markersConfigSent = false;
@@ -681,6 +689,49 @@ namespace {
   // back in sims3EndDraw. Returns false when the draw has to be captured the ordinary way.
   // Ends the terrain block (milestone 18g): the game's sampler states back on the free stage and
   // sRGB sampling back on where the hook turned it off, unless the game set them meanwhile.
+  // The lot paint textures at the game's composite draw (milestone 19c): any change since the
+  // last draw with the same mask -- a new object, a further write, a different content hash --
+  // is logged with the frame, bounded.
+  inline void sims3LotPaintDiag(Sims3Hook& h) {
+    IDirect3DBaseTexture9* mask = h.boundTex[0];
+    if (mask == nullptr || (h.boundKind[0] & 0x7F) != 1) return;
+    auto* const tex = bridge_cast<Direct3DTexture9_LSS*>(mask);
+    if (tex == nullptr) return;
+    Sims3Hook::LotPaintRec now = {};
+    now.mask = mask; now.version = tex->sims3Level0Version(); now.hash = tex->sims3Level0Hash(); now.w = h.boundW[0]; now.h = h.boundH[0];
+    for (int s = 0; s < 4; ++s) {
+      now.layer[s] = h.boundTex[s + 1];
+      auto* const lt = (now.layer[s] && (h.boundKind[s + 1] & 0x7F) == 1) ? bridge_cast<Direct3DTexture9_LSS*>(now.layer[s]) : nullptr;
+      now.layerVersion[s] = lt ? lt->sims3Level0Version() : 0;
+    }
+    Sims3Hook::LotPaintRec* rec = nullptr;
+    for (uint32_t i = 0; i < h.lotPaintCount; ++i) if (h.lotPaint[i].mask == mask) { rec = &h.lotPaint[i]; break; }
+    if (rec == nullptr) {
+      if (h.lotPaintCount < Sims3Hook::kLotPaintRecs) rec = &h.lotPaint[h.lotPaintCount++];
+      else rec = &h.lotPaint[h.frames % Sims3Hook::kLotPaintRecs];
+      *rec = now; rec->version = ~0u;   // a first sight logs as a change below
+    }
+    char what[200] = {}; size_t n = 0;
+    if (rec->version == ~0u) n += (size_t) snprintf(what + n, sizeof what - n, " first seen");
+    else {
+      if (now.version != rec->version) n += (size_t) snprintf(what + n, sizeof what - n, " mask written (%u -> %u)", rec->version, now.version);
+      if (now.hash != rec->hash) n += (size_t) snprintf(what + n, sizeof what - n, " mask content changed");
+      for (int s = 0; s < 4 && n < sizeof what - 40; ++s) {
+        if (now.layer[s] != rec->layer[s]) n += (size_t) snprintf(what + n, sizeof what - n, " layer %d replaced", s + 1);
+        else if (now.layerVersion[s] != rec->layerVersion[s]) n += (size_t) snprintf(what + n, sizeof what - n, " layer %d written (%u -> %u)", s + 1, rec->layerVersion[s], now.layerVersion[s]);
+      }
+    }
+    if (n == 0) return;
+    *rec = now; ++h.lotPaintChanges;
+    if (h.lotPaintLogged < 80) {
+      ++h.lotPaintLogged; char msg[460];
+      snprintf(msg, sizeof msg, "Sims 3 camera hook: lot paint textures at frame %u ->%s; mask %p %ux%u version %u hash %016llx; layers %p v%u, %p v%u, %p v%u, %p v%u",
+               h.frames + 1, what, (void*) now.mask, (unsigned) now.w, (unsigned) now.h, now.version, (unsigned long long) now.hash,
+               (void*) now.layer[0], now.layerVersion[0], (void*) now.layer[1], now.layerVersion[1], (void*) now.layer[2], now.layerVersion[2], (void*) now.layer[3], now.layerVersion[3]);
+      Logger::info(msg);
+    }
+  }
+
   // Puts the game's sampler states back on the held free stage (milestone 18i).
   template<typename Dev>
   void sims3TerrainStageRelease(Sims3Hook& h, Dev* dev) {
@@ -736,7 +787,7 @@ namespace {
     // paint layer's stage and the black marker takes that layer out; two passes in the replay
     const bool composite = h.psHash == sims3cam::kLotCompositePs;
     const int pass = composite ? (h.compositePass ? (int) h.compositePass : 1) : 0;
-    if (composite && pass == 1 && !h.reissue) h.compositeSecond = true;   // the second pass follows in place (milestone 19)
+    if (composite && pass == 1 && !h.reissue) { h.compositeSecond = true; sims3LotPaintDiag(h); }   // the second pass follows in place (milestone 19)
     IDirect3DPixelShader9* variant = sims3PsVariant(h, dev, h.psBound, h.psHash, alphaMode, sims3cam::lotCompositeStage(pass), freeStage);
     if (!variant || freeStage < 1 || freeStage > 15) { ++h.terrainNoVariant; return false; }
     // which marker: base draws visible (0); every layer pass hidden -- the world's blended layers
@@ -1781,7 +1832,7 @@ static void sims3LogStats(bool withTable) {
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   terrain: %u base draws and %u layer passes (%u lot chunk copies) for the baker, %u without a variant; %u pixel shader variants (%u unlit, %u with alpha forced to 1), %u sampler states copied, sRGB sampling turned off %u times, both held across %u terrain blocks (%u holds cancelled by the game, %u uncaptured draws let through); markers %s; %u lot chunk copies dropped",
            h.terrainBaseDraws, h.terrainLayerDraws, h.terrainLotCopyDraws, h.terrainNoVariant, h.psVariantsMade, h.psVariantsUnlit, h.psVariantsAlpha, h.samplerCopies, h.srgbOffs, h.tblockFlushes, h.tblockCancelled, h.tblockKept, h.markersConfigSent ? "tagged in rtx.conf" : (h.marker[0] ? "made, NOT tagged in rtx.conf" : "not made yet"), h.lotCopyDrops);
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   lot paint: %u composite second passes, %u lot re-submissions split in two", h.compositePasses, h.splitDraws);
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   lot paint: %u composite second passes, %u lot re-submissions split in two; %u changes seen on the lot paint textures (milestone 19c diagnostic)", h.compositePasses, h.splitDraws, h.lotPaintChanges);
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   cameras: transforms sent to the runtime %u times (%u with the projection changed); %u frames with a second main camera (%u uploads not adopted); sky dome draws presented as the sky %u",
            h.transformSends, h.transformSendsProj, h.framesWithAlt, h.altUploadsTotal, h.skyDraws);
