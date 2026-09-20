@@ -202,6 +202,8 @@ HRESULT Direct3DSurface9_LSS::ReleaseDC(HDC hdc) {
   return hr;
 }
 
+static constexpr uint8_t kSims3Unwritten = 0xA5;   // milestone 19i: the marker byte of a fresh paint copy (see unlock)
+
 bool Direct3DSurface9_LSS::lock(D3DLOCKED_RECT& lockedRect, const RECT* pRect, const DWORD& flags) {
   const RECT rect = resolveLockInfoRect(pRect, m_desc);
   lockedRect.Pitch = bridge_util::calcRowSize(m_desc.Width, m_desc.Format);
@@ -222,6 +224,7 @@ bool Direct3DSurface9_LSS::lock(D3DLOCKED_RECT& lockedRect, const RECT* pRect, c
   } else {
     if (!m_shadow) {
       m_shadow.reset(new uint8_t[surfaceSize]());   // zero-filled (milestone 19h): a read before the first write sees zeros, not heap leftovers
+      if (sims3PaintTextureLike(m_desc.Format, m_desc.Width, m_desc.Height)) memset(m_shadow.get(), kSims3Unwritten, surfaceSize);   // milestone 19i
       g_totalSurfaceShadow += surfaceSize;
       Logger::trace(format_string("Allocated a shadow for surface [%p] "
                                   "(size: %zd, total surface shadow size: %zd)",
@@ -245,6 +248,10 @@ bool Direct3DSurface9_LSS::lock(D3DLOCKED_RECT& lockedRect, const RECT* pRect, c
 // the rare events on these textures only -- the first write, a partial rect, an unusual flag, a
 // read by the game -- never the per-frame rewrites.
 static uint32_t g_sims3SurfaceLocksLogged = 0, g_sims3DiscardPartialLocks = 0, g_sims3WholeSends = 0;
+// Milestone 19i: a fresh copy of a paint texture starts as this marker byte; every write of the
+// surface is followed by a scan for rows the game never touched (a whole row of the marker),
+// which are logged and sent as zeros -- the zero fill of 19h, made visible.
+static uint32_t g_sims3UnwrittenRowsTotal = 0;
 
 void Direct3DSurface9_LSS::unlock() {
   // Some game engines may attempt to Unlock a non-locked resource "just in case"
@@ -267,6 +274,26 @@ void Direct3DSurface9_LSS::unlock() {
     return;
   }
   ++sims3Version;
+  if (paintLike && !m_bUseSharedHeap && m_shadow) {   // rows the game left untouched since the copy was made (milestone 19i)
+    const size_t rowBytes = bridge_util::calcRowSize(m_desc.Width, m_desc.Format);
+    const size_t rows = bridge_util::calcStride(m_desc.Height, m_desc.Format);
+    uint32_t left = 0; size_t first = 0, last = 0;
+    for (size_t r = 0; r < rows; ++r) {
+      uint8_t* const row = m_shadow.get() + r * rowBytes;
+      size_t k = 0;
+      while (k < rowBytes && row[k] == kSims3Unwritten) ++k;
+      if (k == rowBytes) { if (left == 0) first = r; last = r; ++left; memset(row, 0, rowBytes); }
+    }
+    if (left) {
+      g_sims3UnwrittenRowsTotal += left;
+      if (g_sims3SurfaceLocksLogged < 400) {
+        ++g_sims3SurfaceLocksLogged;
+        Logger::info(format_string("Sims 3 camera hook: paint surface [%p] %ux%u %s: the game left %u of %u rows untouched at write %u (rows %u-%u, rect %ld,%ld-%ld,%ld, flags 0x%lx, pool %lu) -> sent as zeros; %u such rows so far",
+                                   this, (unsigned) m_desc.Width, (unsigned) m_desc.Height, kind, left, (unsigned) rows, sims3Version, (unsigned) first, (unsigned) last,
+                                   lockInfo.rect.left, lockInfo.rect.top, lockInfo.rect.right, lockInfo.rect.bottom, (unsigned long) lockInfo.flags, (unsigned long) m_desc.Pool, g_sims3UnwrittenRowsTotal));
+      }
+    }
+  }
   LockInfo li = lockInfo;
   const bool maskLike = paintLike && m_desc.Format == D3DFMT_A8R8G8B8;
   const bool discardPartial = partial && (li.flags & D3DLOCK_DISCARD) != 0;
