@@ -1989,17 +1989,19 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
         }
       }
       // Colour: the brightest matching candidate. Brighter is adopted at once; a much darker
-      // one (a view of indoor objects, which see the sun attenuated) only after 20 seconds,
-      // which is still far shorter than dusk.
+      // one (a view of indoor objects, which see the sun attenuated -- or dusk) after a second
+      // and then half-way per update (milestone 19e: the former 20-second hold and 20 % steps
+      // took four minutes of real time to reach night, longer than a game night at top speed;
+      // run 121's sun trace).
       sims3cam::SunVote match;
       if (h.voter.matching(h.shadowDir, match)) {
         const float lm = sims3cam::luminance(match.col), lc = sims3cam::luminance(h.sun.col);
         bool adopt = !h.sunSet || lm >= 0.7f * lc;
-        if (!adopt && ++h.sunDarkFrames >= 1200) adopt = true;
+        if (!adopt && ++h.sunDarkFrames >= 60) adopt = true;
         if (!adopt && h.sunDarkFrames == 1 && ++h.sunDarkHeld <= 20) { char msg[200]; snprintf(msg, sizeof msg, "Sims 3 camera hook: sun: a darker matching rig candidate (luminance %.3f vs the sun's %.3f) held back at frame %u", lm, lc, h.frames); Logger::info(msg); }
         if (adopt) {
           h.sunDarkFrames = 0;
-          const float a = h.sunSet ? 0.2f : 1.f;
+          const float a = h.sunSet ? 0.5f : 1.f;
           for (int q = 0; q < 3; ++q) next.col[q] = h.sun.col[q] + a * (match.col[q] - h.sun.col[q]);
           next.count = match.count;
         }

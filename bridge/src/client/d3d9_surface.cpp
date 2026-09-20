@@ -236,6 +236,13 @@ bool Direct3DSurface9_LSS::lock(D3DLOCKED_RECT& lockedRect, const RECT* pRect, c
   return true;
 }
 
+// The Sims 3 camera hook (milestone 19e, run 121's paint-stroke corruption): a lock of part of a
+// surface that carries D3DLOCK_DISCARD is sent to the server without the flag -- the server locks
+// the runtime's surface with the game's flags and copies only the locked rows, and a discard lock
+// leaves every other texel undefined. The client's own copy is complete either way. Locks of small
+// A8R8G8B8 surfaces (the lot paint masks) are logged with their rectangle and flags, bounded.
+static uint32_t g_sims3SurfaceLocksLogged = 0, g_sims3DiscardPartialLocks = 0;
+
 void Direct3DSurface9_LSS::unlock() {
   // Some game engines may attempt to Unlock a non-locked resource "just in case"
   if (m_lockInfoQueue.empty()) {
@@ -246,7 +253,17 @@ void Direct3DSurface9_LSS::unlock() {
   // If this is a read only access then don't bother sending anything to the server
   if ((lockInfo.flags & D3DLOCK_READONLY) == 0) {
     ++sims3Version;
-    sendDataToServer(lockInfo);
+    LockInfo li = lockInfo;
+    const bool partial = li.rect.left != 0 || li.rect.top != 0 || li.rect.right != (LONG) m_desc.Width || li.rect.bottom != (LONG) m_desc.Height;
+    const bool discardPartial = partial && (li.flags & D3DLOCK_DISCARD) != 0;
+    if (discardPartial) { li.flags &= ~(DWORD) D3DLOCK_DISCARD; ++g_sims3DiscardPartialLocks; }
+    if (m_desc.Format == D3DFMT_A8R8G8B8 && m_desc.Width <= 256 && m_desc.Height <= 256 && g_sims3SurfaceLocksLogged < 40) {
+      ++g_sims3SurfaceLocksLogged;
+      Logger::info(format_string("Sims 3 camera hook: surface [%p] %ux%u A8R8G8B8 unlocked (write %u): rect %ld,%ld-%ld,%ld (%s), flags 0x%lx%s; discard-partial locks so far %u",
+                                 this, (unsigned) m_desc.Width, (unsigned) m_desc.Height, sims3Version, li.rect.left, li.rect.top, li.rect.right, li.rect.bottom, partial ? "partial" : "whole",
+                                 (unsigned long) lockInfo.flags, discardPartial ? " -> DISCARD dropped for the server" : "", g_sims3DiscardPartialLocks));
+    }
+    sendDataToServer(li);
   }
 }
 
