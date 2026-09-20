@@ -253,20 +253,6 @@ namespace bridge_util {
     decomp.height = (pRect) ? pRect->bottom - pRect->top : desc.Height;
     return decomp;
   }
-
-  // The Sims 3 camera hook (milestone 19h, the upload check): CRC-32 (IEEE) of a byte range,
-  // chained by passing the previous result as crc.
-  static inline uint32_t sims3Crc32(const void* data, size_t bytes, uint32_t crc = 0) {
-    static uint32_t table[256]; static bool tableReady = false;
-    if (!tableReady) {
-      for (uint32_t i = 0; i < 256; ++i) { uint32_t c = i; for (int k = 0; k < 8; ++k) c = (c & 1u) ? (0xEDB88320u ^ (c >> 1)) : (c >> 1); table[i] = c; }
-      tableReady = true;
-    }
-    crc = ~crc;
-    const uint8_t* p = static_cast<const uint8_t*>(data);
-    for (size_t i = 0; i < bytes; ++i) crc = table[(crc ^ p[i]) & 0xFFu] ^ (crc >> 8);
-    return ~crc;
-  }
 }
 
 #define FOR_EACH_RECT_ROW(LOCKED_RECT, HEIGHT, FORMAT, DO_THIS_TO_ptr)   \

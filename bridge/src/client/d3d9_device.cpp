@@ -2112,26 +2112,6 @@ void Direct3DDevice9Ex_LSS<EnableSync>::GetGammaRamp(UINT iSwapChain, D3DGAMMARA
   }
 }
 
-// The Sims 3 camera hook (milestone 19h): the life of the lot paint textures outside of locks --
-// creation and the server-side copies (UpdateTexture, UpdateSurface, StretchRect,
-// GetRenderTargetData, ColorFill) -- logged, bounded only against a flood.
-static uint32_t g_sims3PaintOpsLogged = 0;
-static inline void sims3PaintOpLog(const std::string& s) {
-  if (g_sims3PaintOpsLogged < 400) { ++g_sims3PaintOpsLogged; Logger::info("Sims 3 camera hook: " + s); }
-}
-static inline uint32_t sims3PaintWrites(Direct3DTexture9_LSS* t) { return t ? t->sims3Level0Version() : 0; }
-template<typename T> static inline uint32_t sims3PaintWrites(T*) { return 0; }
-static inline bool sims3PaintSurfaceLike(Direct3DSurface9_LSS* s) {
-  if (s == nullptr) return false;
-  const D3DSURFACE_DESC d = s->getDesc();
-  return sims3PaintTextureLike(d.Format, d.Width, d.Height);
-}
-static inline std::string sims3PaintSurfaceText(const char* role, Direct3DSurface9_LSS* s) {
-  if (s == nullptr) return format_string("%s null", role);
-  const D3DSURFACE_DESC d = s->getDesc();
-  return format_string("%s [%p] %ux%u format %u pool %u usage 0x%lx written %u times", role, (void*) s, d.Width, d.Height, (unsigned) d.Format, (unsigned) d.Pool, (unsigned long) d.Usage, s->sims3Version);
-}
-
 template<bool EnableSync>
 HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreateTexture(UINT Width, UINT Height, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DTexture9** ppTexture, HANDLE* pSharedHandle) {
   ZoneScoped;
@@ -2151,8 +2131,6 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreateTexture(UINT Width, UINT Height
     const TEXTURE_DESC desc { Width, Height, 1, Levels, Usage, Format, Pool };
     auto* const pLssTexture = trackWrapper(new Direct3DTexture9_LSS(this, desc));
     (*ppTexture) = pLssTexture;
-    if (sims3PaintTextureLike(Format, Width, Height))
-      sims3PaintOpLog(format_string("paint texture %p created: %ux%u %s, %u levels, usage 0x%lx, pool %u", (void*) pLssTexture, Width, Height, Format == D3DFMT_DXT5 ? "DXT5" : "A8R8G8B8", Levels, (unsigned long) Usage, (unsigned) Pool));
     {
       ClientMessage c(Commands::IDirect3DDevice9Ex_CreateTexture, getId());
       currentUID = c.get_uid();
@@ -2350,8 +2328,6 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::UpdateSurface(IDirect3DSurface9* pSou
 
   const auto pLssSrcSurface = bridge_cast<Direct3DSurface9_LSS*>(pSourceSurface);
   const auto pLssDestSurface = bridge_cast<Direct3DSurface9_LSS*>(pDestinationSurface);
-  if (sims3PaintSurfaceLike(pLssSrcSurface) || sims3PaintSurfaceLike(pLssDestSurface))
-    sims3PaintOpLog("UpdateSurface " + sims3PaintSurfaceText("source", pLssSrcSurface) + " -> " + sims3PaintSurfaceText("destination", pLssDestSurface) + (pSourceRect ? " (part)" : " (whole)"));
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_UpdateSurface, getId());
@@ -2376,13 +2352,6 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::UpdateTextureImpl(IDirect3DBaseTextur
   auto pLssDestinationTexture = bridge_cast<T*>(pDestinationTexture);
   assert(pLssSourceTexture && "UpdateTexture: unable to cast source texture!");
   assert(pLssDestinationTexture && "UpdateTexture: unable to cast destination texture!");
-  if (pLssSourceTexture && pLssDestinationTexture) {
-    const TEXTURE_DESC& sd = pLssSourceTexture->getDesc(); const TEXTURE_DESC& dd = pLssDestinationTexture->getDesc();
-    if (sims3PaintTextureLike(sd.Format, sd.Width, sd.Height) || sims3PaintTextureLike(dd.Format, dd.Width, dd.Height))
-      sims3PaintOpLog(format_string("UpdateTexture %p (%ux%u format %u pool %u, written %u times) -> %p (%ux%u format %u pool %u, written %u times)",
-                                    (void*) pSourceTexture, sd.Width, sd.Height, (unsigned) sd.Format, (unsigned) sd.Pool, sims3PaintWrites(pLssSourceTexture),
-                                    (void*) pDestinationTexture, dd.Width, dd.Height, (unsigned) dd.Format, (unsigned) dd.Pool, sims3PaintWrites(pLssDestinationTexture)));
-  }
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_UpdateTexture, getId());
@@ -2422,8 +2391,6 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::GetRenderTargetData(IDirect3DSurface9
   const auto pLssSourceSurface = bridge_cast<Direct3DSurface9_LSS*>(pRenderTarget);
   const auto pLssDestinationSurface = bridge_cast<Direct3DSurface9_LSS*>(pDestSurface);
 
-  if (sims3PaintSurfaceLike(pLssSourceSurface) || sims3PaintSurfaceLike(pLssDestinationSurface))
-    sims3PaintOpLog("GetRenderTargetData " + sims3PaintSurfaceText("source", pLssSourceSurface) + " -> " + sims3PaintSurfaceText("destination", pLssDestinationSurface));
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_GetRenderTargetData, getId());
@@ -2474,8 +2441,6 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::StretchRect(IDirect3DSurface9* pSourc
 
   const auto pLssSrcSurface = bridge_cast<Direct3DSurface9_LSS*>(pSourceSurface);
   const auto pLssDstSurface = bridge_cast<Direct3DSurface9_LSS*>(pDestSurface);
-  if (sims3PaintSurfaceLike(pLssSrcSurface) || sims3PaintSurfaceLike(pLssDstSurface))
-    sims3PaintOpLog("StretchRect " + sims3PaintSurfaceText("source", pLssSrcSurface) + " -> " + sims3PaintSurfaceText("destination", pLssDstSurface));
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_StretchRect, getId());
@@ -2499,8 +2464,6 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::ColorFill(IDirect3DSurface9* pSurface
   }
 
   const auto pLssSurface = bridge_cast<Direct3DSurface9_LSS*>(pSurface);
-  if (sims3PaintSurfaceLike(pLssSurface))
-    sims3PaintOpLog("ColorFill " + sims3PaintSurfaceText("surface", pLssSurface) + (pRect ? " (part)" : " (whole)"));
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_ColorFill, getId());

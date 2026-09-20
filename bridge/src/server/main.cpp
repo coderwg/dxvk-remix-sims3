@@ -62,50 +62,6 @@ using namespace Commands;
 using namespace bridge_util;
 using namespace remixapi::util;
 
-// The Sims 3 camera hook (milestone 19h, the upload check): the client appends a CRC-32 of the
-// rows it packed to every surface upload sent through the data queue. Here the rows received,
-// the rows written into the runtime's surface and, for the lot paint textures (A8R8G8B8 128x128
-// or 128x256, DXT5 1024x1024, not in the default pool), the rows read back after the unlock are
-// checked against it. Mismatches are logged; a count goes out now and then.
-static uint32_t g_sims3UploadChecks = 0, g_sims3UploadMismatches = 0, g_sims3ReadbackChecks = 0;
-static bool sims3PaintLike(const D3DSURFACE_DESC& d) {
-  return ((d.Format == D3DFMT_A8R8G8B8 && d.Width == 128 && (d.Height == 128 || d.Height == 256)) || (d.Format == D3DFMT_DXT5 && d.Width == 1024 && d.Height == 1024)) && d.Pool != D3DPOOL_DEFAULT;
-}
-static void sims3UploadCheck(IDirect3DSurface9* pSurface, unsigned long long handle, const RECT& rect, D3DFORMAT format, uint32_t height, size_t rowSize, size_t pitch, const void* pData, const D3DLOCKED_RECT& lockedRect, uint32_t sentCrc) {
-  const uint32_t rows = bridge_util::calcStride(height, format);
-  uint32_t received = 0, written = 0;
-  for (uint32_t y = 0; y < rows; ++y) received = bridge_util::sims3Crc32((const BYTE*) pData + y * pitch, rowSize, received);
-  for (uint32_t y = 0; y < rows; ++y) written = bridge_util::sims3Crc32((const BYTE*) lockedRect.pBits + y * lockedRect.Pitch, rowSize, written);
-  ++g_sims3UploadChecks;
-  if (received != sentCrc || written != sentCrc) {
-    ++g_sims3UploadMismatches;
-    D3DSURFACE_DESC d = {}; pSurface->GetDesc(&d);
-    Logger::err(format_string("Sims 3 upload check: MISMATCH on surface %llx (%ux%u format %u pool %u usage 0x%lx) rect %ld,%ld-%ld,%ld: sent %08x, received %08x, written %08x (check %u)",
-                              handle, d.Width, d.Height, (unsigned) d.Format, (unsigned) d.Pool, (unsigned long) d.Usage, rect.left, rect.top, rect.right, rect.bottom, sentCrc, received, written, g_sims3UploadChecks));
-  }
-  if (g_sims3UploadChecks == 1 || g_sims3UploadChecks % 2000 == 0)
-    Logger::info(format_string("Sims 3 upload check: %u uploads verified, %u mismatches, %u paint textures read back", g_sims3UploadChecks, g_sims3UploadMismatches, g_sims3ReadbackChecks));
-}
-static void sims3UploadReadback(IDirect3DSurface9* pSurface, unsigned long long handle, const RECT& rect, D3DFORMAT format, uint32_t height, size_t rowSize, uint32_t sentCrc) {
-  D3DSURFACE_DESC d = {}; pSurface->GetDesc(&d);
-  if (!sims3PaintLike(d)) return;
-  D3DLOCKED_RECT lr = {};
-  if (FAILED(pSurface->LockRect(&lr, &rect, D3DLOCK_READONLY))) {
-    Logger::err(format_string("Sims 3 upload check: the read-back lock failed on surface %llx (%ux%u format %u pool %u)", handle, d.Width, d.Height, (unsigned) d.Format, (unsigned) d.Pool));
-    return;
-  }
-  const uint32_t rows = bridge_util::calcStride(height, format);
-  uint32_t back = 0;
-  for (uint32_t y = 0; y < rows; ++y) back = bridge_util::sims3Crc32((const BYTE*) lr.pBits + y * lr.Pitch, rowSize, back);
-  pSurface->UnlockRect();
-  ++g_sims3ReadbackChecks;
-  if (back != sentCrc) {
-    ++g_sims3UploadMismatches;
-    Logger::err(format_string("Sims 3 upload check: READ-BACK MISMATCH on surface %llx (%ux%u format %u pool %u) rect %ld,%ld-%ld,%ld: sent %08x, read back %08x",
-                              handle, d.Width, d.Height, (unsigned) d.Format, (unsigned) d.Pool, rect.left, rect.top, rect.right, rect.bottom, sentCrc, back));
-  }
-}
-
 // NOTE: This extension is really useful for debugging the Bridge child process from the parent process:
 // https://marketplace.visualstudio.com/items?itemName=vsdbgplat.MicrosoftChildProcessDebuggingPowerTool
 
@@ -2620,7 +2576,6 @@ void ProcessDeviceCommandQueue() {
         // to the equivalent of a fully allocated pitch line. If we're
         // using the data queue then we've only allocated just enough 
         // space as the requested rect would fill. 
-        uint32_t sentCrc = 0; bool hasCrc = false;   // the upload check (milestone 19h)
         const bool useSharedHeap = Commands::IsDataInSharedHeap(rpcHeader.flags);
         if (useSharedHeap) {
           PULL_U(allocId);
@@ -2629,17 +2584,13 @@ void ProcessDeviceCommandQueue() {
         } else {
           size_t pulledSize = DeviceBridge::get_data(&pData);
           const size_t numRows = bridge_util::calcStride(height, format);
-          const size_t payload = numRows * IncomingPitch;
-          assert(pulledSize == payload || pulledSize == payload + sizeof(uint32_t));
-          if (pulledSize == payload + sizeof(uint32_t)) { memcpy(&sentCrc, (PBYTE) pData + payload, sizeof sentCrc); hasCrc = true; }
+          assert(pulledSize == numRows * IncomingPitch);
         }
         FOR_EACH_RECT_ROW(lockedRect, height, format,
           memcpy(ptr, (PBYTE) pData + y * IncomingPitch, rowSize);
         )
-        if (hasCrc) sims3UploadCheck(pSurface, (unsigned long long) pHandle, *pRect, format, height, rowSize, IncomingPitch, pData, lockedRect, sentCrc);
         hresult = pSurface->UnlockRect();
         assert(SUCCEEDED(hresult));
-        if (hasCrc) sims3UploadReadback(pSurface, (unsigned long long) pHandle, *pRect, format, height, rowSize, sentCrc);
 
         break;
       }
