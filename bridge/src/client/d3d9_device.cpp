@@ -228,7 +228,7 @@ namespace {
     // game uploaded just before.
     struct LotPaintRec { IDirect3DBaseTexture9* mask; uint32_t version; uint64_t hash; uint16_t w, h; IDirect3DBaseTexture9* layer[4]; uint32_t layerVersion[4]; };
     static constexpr uint32_t kLotPaintRecs = 64;
-    LotPaintRec lotPaint[kLotPaintRecs] = {}; uint32_t lotPaintCount = 0, lotPaintChanges = 0, lotPaintLogged = 0;
+    LotPaintRec lotPaint[kLotPaintRecs] = {}; uint32_t lotPaintCount = 0, lotPaintChanges = 0, lotPaintLogged = 0, lotPaintReplLogged = 0;
     IDirect3DTexture9* marker[sims3cam::kTerrainMarkers] = {};   // the terrain / layer-pass / composite marker textures (terrainMarkerPixels)
     uint64_t markerHash[sims3cam::kTerrainMarkers] = {};         // their level-0 hashes as the runtime computes them (0 = not computed)
     bool markerFailed = false, markersConfigSent = false;
@@ -711,20 +711,20 @@ namespace {
       else return;                   // table full: not tracked
       *rec = now; rec->version = ~0u;   // a first sight logs as a change below
     }
-    char what[200] = {}; size_t n = 0;
-    if (rec->version == ~0u) { *rec = now; return; }   // a first sighting is recorded, not logged
+    char what[200] = {}; size_t n = 0; bool rare = false;   // rare: a composite first seen, a layer object replaced (milestone 19h)
+    if (rec->version == ~0u) { n += (size_t) snprintf(what + n, sizeof what - n, " composite first seen"); rare = true; }
     else {
       if (now.version != rec->version) n += (size_t) snprintf(what + n, sizeof what - n, " mask written (%u -> %u)", rec->version, now.version);
       if (now.hash != rec->hash) n += (size_t) snprintf(what + n, sizeof what - n, " mask content changed");
       for (int s = 0; s < 4 && n < sizeof what - 40; ++s) {
-        if (now.layer[s] != rec->layer[s]) n += (size_t) snprintf(what + n, sizeof what - n, " layer %d replaced", s + 1);
+        if (now.layer[s] != rec->layer[s]) { n += (size_t) snprintf(what + n, sizeof what - n, " layer %d replaced", s + 1); rare = true; }
         else if (now.layerVersion[s] != rec->layerVersion[s]) n += (size_t) snprintf(what + n, sizeof what - n, " layer %d written (%u -> %u)", s + 1, rec->layerVersion[s], now.layerVersion[s]);
       }
     }
     if (n == 0) return;
     *rec = now; ++h.lotPaintChanges;
-    if (h.lotPaintLogged < 80) {
-      ++h.lotPaintLogged; char msg[460];
+    if (h.lotPaintLogged < 80 || (rare && h.lotPaintReplLogged < 300)) {   // the rare events past the cap (milestone 19h)
+      ++h.lotPaintLogged; if (rare) ++h.lotPaintReplLogged; char msg[460];
       snprintf(msg, sizeof msg, "Sims 3 camera hook: lot paint textures at frame %u ->%s; mask %p %ux%u version %u hash %016llx; layers %p v%u, %p v%u, %p v%u, %p v%u",
                h.frames + 1, what, (void*) now.mask, (unsigned) now.w, (unsigned) now.h, now.version, (unsigned long long) now.hash,
                (void*) now.layer[0], now.layerVersion[0], (void*) now.layer[1], now.layerVersion[1], (void*) now.layer[2], now.layerVersion[2], (void*) now.layer[3], now.layerVersion[3]);
@@ -1832,7 +1832,9 @@ static void sims3LogStats(bool withTable) {
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   terrain: %u base draws and %u layer passes (%u lot chunk copies) for the baker, %u without a variant; %u pixel shader variants (%u unlit, %u with alpha forced to 1), %u sampler states copied, sRGB sampling turned off %u times, both held across %u terrain blocks (%u holds cancelled by the game, %u uncaptured draws let through); markers %s; %u lot chunk copies dropped",
            h.terrainBaseDraws, h.terrainLayerDraws, h.terrainLotCopyDraws, h.terrainNoVariant, h.psVariantsMade, h.psVariantsUnlit, h.psVariantsAlpha, h.samplerCopies, h.srgbOffs, h.tblockFlushes, h.tblockCancelled, h.tblockKept, h.markersConfigSent ? "tagged in rtx.conf" : (h.marker[0] ? "made, NOT tagged in rtx.conf" : "not made yet"), h.lotCopyDrops);
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   lot paint: %u composite second passes, %u lot re-submissions split in two; %u changes seen on the lot paint textures (milestone 19c diagnostic)", h.compositePasses, h.splitDraws, h.lotPaintChanges);
+  MEMORYSTATUSEX ms = {}; ms.dwLength = sizeof ms; GlobalMemoryStatusEx(&ms);
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   lot paint: %u composite second passes, %u lot re-submissions split in two; %u changes seen on the lot paint textures; client copies of surfaces %u MB, address space in use %u of %u MB",
+           h.compositePasses, h.splitDraws, h.lotPaintChanges, (unsigned) (Direct3DSurface9_LSS::sims3ShadowBytes() >> 20), (unsigned) ((ms.ullTotalVirtual - ms.ullAvailVirtual) >> 20), (unsigned) (ms.ullTotalVirtual >> 20));
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   cameras: transforms sent to the runtime %u times (%u with the projection changed); %u frames with a second main camera (%u uploads not adopted); sky dome draws presented as the sky %u",
            h.transformSends, h.transformSendsProj, h.framesWithAlt, h.altUploadsTotal, h.skyDraws);
@@ -2110,6 +2112,26 @@ void Direct3DDevice9Ex_LSS<EnableSync>::GetGammaRamp(UINT iSwapChain, D3DGAMMARA
   }
 }
 
+// The Sims 3 camera hook (milestone 19h): the life of the lot paint textures outside of locks --
+// creation and the server-side copies (UpdateTexture, UpdateSurface, StretchRect,
+// GetRenderTargetData, ColorFill) -- logged, bounded only against a flood.
+static uint32_t g_sims3PaintOpsLogged = 0;
+static inline void sims3PaintOpLog(const std::string& s) {
+  if (g_sims3PaintOpsLogged < 400) { ++g_sims3PaintOpsLogged; Logger::info("Sims 3 camera hook: " + s); }
+}
+static inline uint32_t sims3PaintWrites(Direct3DTexture9_LSS* t) { return t ? t->sims3Level0Version() : 0; }
+template<typename T> static inline uint32_t sims3PaintWrites(T*) { return 0; }
+static inline bool sims3PaintSurfaceLike(Direct3DSurface9_LSS* s) {
+  if (s == nullptr) return false;
+  const D3DSURFACE_DESC d = s->getDesc();
+  return sims3PaintTextureLike(d.Format, d.Width, d.Height);
+}
+static inline std::string sims3PaintSurfaceText(const char* role, Direct3DSurface9_LSS* s) {
+  if (s == nullptr) return format_string("%s null", role);
+  const D3DSURFACE_DESC d = s->getDesc();
+  return format_string("%s [%p] %ux%u format %u pool %u usage 0x%lx written %u times", role, (void*) s, d.Width, d.Height, (unsigned) d.Format, (unsigned) d.Pool, (unsigned long) d.Usage, s->sims3Version);
+}
+
 template<bool EnableSync>
 HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreateTexture(UINT Width, UINT Height, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DTexture9** ppTexture, HANDLE* pSharedHandle) {
   ZoneScoped;
@@ -2129,6 +2151,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreateTexture(UINT Width, UINT Height
     const TEXTURE_DESC desc { Width, Height, 1, Levels, Usage, Format, Pool };
     auto* const pLssTexture = trackWrapper(new Direct3DTexture9_LSS(this, desc));
     (*ppTexture) = pLssTexture;
+    if (sims3PaintTextureLike(Format, Width, Height))
+      sims3PaintOpLog(format_string("paint texture %p created: %ux%u %s, %u levels, usage 0x%lx, pool %u", (void*) pLssTexture, Width, Height, Format == D3DFMT_DXT5 ? "DXT5" : "A8R8G8B8", Levels, (unsigned long) Usage, (unsigned) Pool));
     {
       ClientMessage c(Commands::IDirect3DDevice9Ex_CreateTexture, getId());
       currentUID = c.get_uid();
@@ -2326,6 +2350,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::UpdateSurface(IDirect3DSurface9* pSou
 
   const auto pLssSrcSurface = bridge_cast<Direct3DSurface9_LSS*>(pSourceSurface);
   const auto pLssDestSurface = bridge_cast<Direct3DSurface9_LSS*>(pDestinationSurface);
+  if (sims3PaintSurfaceLike(pLssSrcSurface) || sims3PaintSurfaceLike(pLssDestSurface))
+    sims3PaintOpLog("UpdateSurface " + sims3PaintSurfaceText("source", pLssSrcSurface) + " -> " + sims3PaintSurfaceText("destination", pLssDestSurface) + (pSourceRect ? " (part)" : " (whole)"));
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_UpdateSurface, getId());
@@ -2350,6 +2376,13 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::UpdateTextureImpl(IDirect3DBaseTextur
   auto pLssDestinationTexture = bridge_cast<T*>(pDestinationTexture);
   assert(pLssSourceTexture && "UpdateTexture: unable to cast source texture!");
   assert(pLssDestinationTexture && "UpdateTexture: unable to cast destination texture!");
+  if (pLssSourceTexture && pLssDestinationTexture) {
+    const TEXTURE_DESC& sd = pLssSourceTexture->getDesc(); const TEXTURE_DESC& dd = pLssDestinationTexture->getDesc();
+    if (sims3PaintTextureLike(sd.Format, sd.Width, sd.Height) || sims3PaintTextureLike(dd.Format, dd.Width, dd.Height))
+      sims3PaintOpLog(format_string("UpdateTexture %p (%ux%u format %u pool %u, written %u times) -> %p (%ux%u format %u pool %u, written %u times)",
+                                    (void*) pSourceTexture, sd.Width, sd.Height, (unsigned) sd.Format, (unsigned) sd.Pool, sims3PaintWrites(pLssSourceTexture),
+                                    (void*) pDestinationTexture, dd.Width, dd.Height, (unsigned) dd.Format, (unsigned) dd.Pool, sims3PaintWrites(pLssDestinationTexture)));
+  }
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_UpdateTexture, getId());
@@ -2389,6 +2422,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::GetRenderTargetData(IDirect3DSurface9
   const auto pLssSourceSurface = bridge_cast<Direct3DSurface9_LSS*>(pRenderTarget);
   const auto pLssDestinationSurface = bridge_cast<Direct3DSurface9_LSS*>(pDestSurface);
 
+  if (sims3PaintSurfaceLike(pLssSourceSurface) || sims3PaintSurfaceLike(pLssDestinationSurface))
+    sims3PaintOpLog("GetRenderTargetData " + sims3PaintSurfaceText("source", pLssSourceSurface) + " -> " + sims3PaintSurfaceText("destination", pLssDestinationSurface));
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_GetRenderTargetData, getId());
@@ -2439,6 +2474,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::StretchRect(IDirect3DSurface9* pSourc
 
   const auto pLssSrcSurface = bridge_cast<Direct3DSurface9_LSS*>(pSourceSurface);
   const auto pLssDstSurface = bridge_cast<Direct3DSurface9_LSS*>(pDestSurface);
+  if (sims3PaintSurfaceLike(pLssSrcSurface) || sims3PaintSurfaceLike(pLssDstSurface))
+    sims3PaintOpLog("StretchRect " + sims3PaintSurfaceText("source", pLssSrcSurface) + " -> " + sims3PaintSurfaceText("destination", pLssDstSurface));
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_StretchRect, getId());
@@ -2462,6 +2499,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::ColorFill(IDirect3DSurface9* pSurface
   }
 
   const auto pLssSurface = bridge_cast<Direct3DSurface9_LSS*>(pSurface);
+  if (sims3PaintSurfaceLike(pLssSurface))
+    sims3PaintOpLog("ColorFill " + sims3PaintSurfaceText("surface", pLssSurface) + (pRect ? " (part)" : " (whole)"));
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_ColorFill, getId());

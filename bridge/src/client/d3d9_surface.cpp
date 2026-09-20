@@ -221,7 +221,7 @@ bool Direct3DSurface9_LSS::lock(D3DLOCKED_RECT& lockedRect, const RECT* pRect, c
     m_lockInfoQueue.push({ lockedRect, rect, flags, m_bufferId, discardBufId });
   } else {
     if (!m_shadow) {
-      m_shadow.reset(new uint8_t[surfaceSize]);
+      m_shadow.reset(new uint8_t[surfaceSize]());   // zero-filled (milestone 19h): a read before the first write sees zeros, not heap leftovers
       g_totalSurfaceShadow += surfaceSize;
       Logger::trace(format_string("Allocated a shadow for surface [%p] "
                                   "(size: %zd, total surface shadow size: %zd)",
@@ -236,12 +236,14 @@ bool Direct3DSurface9_LSS::lock(D3DLOCKED_RECT& lockedRect, const RECT* pRect, c
   return true;
 }
 
-// The Sims 3 camera hook (milestones 19e-19f, run 121's paint-stroke corruption): the lot paint
-// masks (A8R8G8B8, 128x128 or 128x256) are rewritten in place on every stroke. A rewrite of part
-// of such a surface is sent to the server whole, from the client's complete copy, and never with
-// D3DLOCK_DISCARD (the server locks the runtime's surface with the game's flags and copies only
-// the locked rows; a discard lock leaves the rest undefined). Rewrites are logged with rectangle,
-// flags, usage and pool, bounded; the first upload of a surface is not (startup mip chains).
+// The Sims 3 camera hook (milestones 19e-19h, the paint-stroke corruption): the lot paint masks
+// (A8R8G8B8, 128x128 or 128x256) are rewritten whole on every stroke, a paint layer tile (DXT5
+// 1024x1024) is filled once. A rewrite of part of a mask is sent to the server whole, from the
+// client's complete copy, and never with D3DLOCK_DISCARD (the server locks the runtime's surface
+// with the game's flags and copies only the locked rows). Every upload through the data queue
+// carries a CRC-32 of its rows for the server's upload check. Logged, without a practical cap:
+// the rare events on these textures only -- the first write, a partial rect, an unusual flag, a
+// read by the game -- never the per-frame rewrites.
 static uint32_t g_sims3SurfaceLocksLogged = 0, g_sims3DiscardPartialLocks = 0, g_sims3WholeSends = 0;
 
 void Direct3DSurface9_LSS::unlock() {
@@ -251,31 +253,40 @@ void Direct3DSurface9_LSS::unlock() {
   }
   const auto lockInfo = m_lockInfoQueue.front();
   m_lockInfoQueue.pop();
+  const bool paintLike = sims3PaintTextureLike(m_desc.Format, m_desc.Width, m_desc.Height);
+  const char* const kind = m_desc.Format == D3DFMT_DXT5 ? "DXT5" : "A8R8G8B8";
+  const bool partial = lockInfo.rect.left != 0 || lockInfo.rect.top != 0 || lockInfo.rect.right != (LONG) m_desc.Width || lockInfo.rect.bottom != (LONG) m_desc.Height;
   // If this is a read only access then don't bother sending anything to the server
-  if ((lockInfo.flags & D3DLOCK_READONLY) == 0) {
-    ++sims3Version;
-    LockInfo li = lockInfo;
-    const bool partial = li.rect.left != 0 || li.rect.top != 0 || li.rect.right != (LONG) m_desc.Width || li.rect.bottom != (LONG) m_desc.Height;
-    const bool maskLike = m_desc.Format == D3DFMT_A8R8G8B8 && m_desc.Width == 128 && (m_desc.Height == 128 || m_desc.Height == 256);   // the lot paint masks
-    const bool layerLike = m_desc.Format == D3DFMT_DXT5 && m_desc.Width == 1024 && m_desc.Height == 1024;                              // the paint layer tiles
-    const bool discardPartial = partial && (li.flags & D3DLOCK_DISCARD) != 0;
-    if (discardPartial) { li.flags &= ~(DWORD) D3DLOCK_DISCARD; ++g_sims3DiscardPartialLocks; }
-    bool sentWhole = false;
-    if (maskLike && partial && !m_bUseSharedHeap && m_shadow) {   // the whole surface from the client's copy (milestone 19f)
-      li.rect = RECT { 0, 0, (LONG) m_desc.Width, (LONG) m_desc.Height };
-      li.lockedRect.pBits = m_shadow.get();
-      li.lockedRect.Pitch = bridge_util::calcRowSize(m_desc.Width, m_desc.Format);
-      sentWhole = true; ++g_sims3WholeSends;
-    }
-    if (((maskLike && sims3Version >= 2) || (layerLike && sims3Version <= 2)) && g_sims3SurfaceLocksLogged < 60) {
+  if ((lockInfo.flags & D3DLOCK_READONLY) != 0) {
+    if (paintLike && g_sims3SurfaceLocksLogged < 400) {
       ++g_sims3SurfaceLocksLogged;
-      Logger::info(format_string("Sims 3 camera hook: surface [%p] %ux%u %s written (write %u): rect %ld,%ld-%ld,%ld (%s), flags 0x%lx, usage 0x%lx pool %lu%s%s; whole sends %u, discard-partial locks %u",
-                                 this, (unsigned) m_desc.Width, (unsigned) m_desc.Height, maskLike ? "A8R8G8B8" : "DXT5", sims3Version, lockInfo.rect.left, lockInfo.rect.top, lockInfo.rect.right, lockInfo.rect.bottom, partial ? "partial" : "whole",
-                                 (unsigned long) lockInfo.flags, (unsigned long) m_desc.Usage, (unsigned long) m_desc.Pool, sentWhole ? " -> sent whole" : "", discardPartial ? ", DISCARD dropped" : "",
-                                 g_sims3WholeSends, g_sims3DiscardPartialLocks));
+      Logger::info(format_string("Sims 3 camera hook: paint surface [%p] %ux%u %s read by the game (written %u times before): rect %ld,%ld-%ld,%ld (%s), flags 0x%lx, pool %lu",
+                                 this, (unsigned) m_desc.Width, (unsigned) m_desc.Height, kind, sims3Version, lockInfo.rect.left, lockInfo.rect.top, lockInfo.rect.right, lockInfo.rect.bottom,
+                                 partial ? "partial" : "whole", (unsigned long) lockInfo.flags, (unsigned long) m_desc.Pool));
     }
-    sendDataToServer(li);
+    return;
   }
+  ++sims3Version;
+  LockInfo li = lockInfo;
+  const bool maskLike = paintLike && m_desc.Format == D3DFMT_A8R8G8B8;
+  const bool discardPartial = partial && (li.flags & D3DLOCK_DISCARD) != 0;
+  if (discardPartial) { li.flags &= ~(DWORD) D3DLOCK_DISCARD; ++g_sims3DiscardPartialLocks; }
+  bool sentWhole = false;
+  if (maskLike && partial && !m_bUseSharedHeap && m_shadow) {   // the whole surface from the client's copy (milestone 19f)
+    li.rect = RECT { 0, 0, (LONG) m_desc.Width, (LONG) m_desc.Height };
+    li.lockedRect.pBits = m_shadow.get();
+    li.lockedRect.Pitch = bridge_util::calcRowSize(m_desc.Width, m_desc.Format);
+    sentWhole = true; ++g_sims3WholeSends;
+  }
+  const bool rare = sims3Version == 1 || partial || (lockInfo.flags & (D3DLOCK_DISCARD | D3DLOCK_NO_DIRTY_UPDATE | D3DLOCK_NOOVERWRITE)) != 0;
+  if (paintLike && rare && g_sims3SurfaceLocksLogged < 400) {
+    ++g_sims3SurfaceLocksLogged;
+    Logger::info(format_string("Sims 3 camera hook: paint surface [%p] %ux%u %s written (write %u): rect %ld,%ld-%ld,%ld (%s), flags 0x%lx, usage 0x%lx pool %lu%s%s; whole sends %u, discard-partial locks %u",
+                               this, (unsigned) m_desc.Width, (unsigned) m_desc.Height, kind, sims3Version, lockInfo.rect.left, lockInfo.rect.top, lockInfo.rect.right, lockInfo.rect.bottom, partial ? "partial" : "whole",
+                               (unsigned long) lockInfo.flags, (unsigned long) m_desc.Usage, (unsigned long) m_desc.Pool, sentWhole ? " -> sent whole" : "", discardPartial ? ", DISCARD dropped" : "",
+                               g_sims3WholeSends, g_sims3DiscardPartialLocks));
+  }
+  sendDataToServer(li);
 }
 
 RECT Direct3DSurface9_LSS::resolveLockInfoRect(const RECT* const pRect, const D3DSURFACE_DESC& desc) {
@@ -305,11 +316,16 @@ void Direct3DSurface9_LSS::sendDataToServer(const LockInfo& lockInfo) const {
       const size_t totalSize = bridge_util::calcTotalSizeOfRect(width, height, m_desc.Format);
       const size_t rowSize = bridge_util::calcRowSize(width, m_desc.Format);
       c.send_data(rowSize);
-      if (auto* blobPacketPtr = c.begin_data_blob(totalSize)) {
+      // The rows, then a CRC-32 of them for the server's upload check (milestone 19h); a server
+      // without the check reads the rows only.
+      if (auto* blobPacketPtr = c.begin_data_blob(totalSize + sizeof(uint32_t))) {
+        uint32_t crc = 0;
         FOR_EACH_RECT_ROW(lockInfo.lockedRect, height, m_desc.Format, {
           memcpy(blobPacketPtr, ptr, rowSize);
+          crc = bridge_util::sims3Crc32(ptr, rowSize, crc);
           blobPacketPtr += rowSize;
         });
+        memcpy(blobPacketPtr, &crc, sizeof crc);
         c.end_data_blob();
       }
     }

@@ -29,6 +29,13 @@
 
 #include <queue>
 
+// The Sims 3 camera hook (milestone 19h): the lot paint textures by shape -- the masks (A8R8G8B8,
+// 128x128 or 128x256) and the paint layer tiles (DXT5 1024x1024).
+inline bool sims3PaintTextureLike(D3DFORMAT format, UINT width, UINT height) {
+  return (format == D3DFMT_A8R8G8B8 && width == 128 && (height == 128 || height == 256))
+      || (format == D3DFMT_DXT5 && width == 1024 && height == 1024);
+}
+
 /*
  * IDirect3DSurface9 LSS Interceptor Class
  */
@@ -97,6 +104,7 @@ public:
     return m_shadow.get();
   }
   uint32_t sims3Version = 0;
+  static size_t sims3ShadowBytes() { return g_totalSurfaceShadow; }
 
 private:
   /*** Lock/Unlock Functionality ***/
