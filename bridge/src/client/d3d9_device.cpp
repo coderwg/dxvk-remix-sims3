@@ -85,7 +85,7 @@ namespace {
     sims3cam::SunVoter voter;            // this frame's votes for the sun
     sims3cam::SunVote sun = {};          // the sun currently forwarded as light 0
     bool sunSet = false;
-    uint32_t sunChanges = 0;
+    uint32_t sunChanges = 0, sunLogged = 0, framesNoSunVote = 0, sunDarkHeld = 0; float sunLogLum = -1.f, sunLogDir[3] = {};   // the sun trace (milestone 19d)
     sims3cam::SunVote sunCand = {};      // a different vote winner, waiting out the hysteresis
     uint32_t sunCandFrames = 0;
     int vsShadowReg = -1;                // bound vertex shader's shadow view-projection rows (kShadowSources), or -1
@@ -227,7 +227,7 @@ namespace {
     // between two draws of the same lot is logged, so a corrupted frame can be matched to what the
     // game uploaded just before.
     struct LotPaintRec { IDirect3DBaseTexture9* mask; uint32_t version; uint64_t hash; uint16_t w, h; IDirect3DBaseTexture9* layer[4]; uint32_t layerVersion[4]; };
-    static constexpr uint32_t kLotPaintRecs = 8;
+    static constexpr uint32_t kLotPaintRecs = 64;
     LotPaintRec lotPaint[kLotPaintRecs] = {}; uint32_t lotPaintCount = 0, lotPaintChanges = 0, lotPaintLogged = 0;
     IDirect3DTexture9* marker[sims3cam::kTerrainMarkers] = {};   // the terrain / layer-pass / composite marker textures (terrainMarkerPixels)
     uint64_t markerHash[sims3cam::kTerrainMarkers] = {};         // their level-0 hashes as the runtime computes them (0 = not computed)
@@ -708,11 +708,11 @@ namespace {
     for (uint32_t i = 0; i < h.lotPaintCount; ++i) if (h.lotPaint[i].mask == mask) { rec = &h.lotPaint[i]; break; }
     if (rec == nullptr) {
       if (h.lotPaintCount < Sims3Hook::kLotPaintRecs) rec = &h.lotPaint[h.lotPaintCount++];
-      else rec = &h.lotPaint[h.frames % Sims3Hook::kLotPaintRecs];
+      else return;                   // table full: not tracked
       *rec = now; rec->version = ~0u;   // a first sight logs as a change below
     }
     char what[200] = {}; size_t n = 0;
-    if (rec->version == ~0u) n += (size_t) snprintf(what + n, sizeof what - n, " first seen");
+    if (rec->version == ~0u) { *rec = now; return; }   // a first sighting is recorded, not logged
     else {
       if (now.version != rec->version) n += (size_t) snprintf(what + n, sizeof what - n, " mask written (%u -> %u)", rec->version, now.version);
       if (now.hash != rec->hash) n += (size_t) snprintf(what + n, sizeof what - n, " mask content changed");
@@ -1820,8 +1820,8 @@ static void sims3LogStats(bool withTable) {
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   state: the game's put back %u times; masked writes emulated %u + %u + %u copied (skipped %u, copy failed %u)",
            h.restoreCount, h.maskEmuA, h.maskEmuB, h.maskEmuC, h.maskEmuSkipped, h.copyFailed);
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   lights: lamps %u (created %u, dropped %u, %u light calls); sun updates %u, frames without shadow rows %u",
-           h.lamps.nLamps, h.lamps.created, h.lamps.dropped, h.lampEvents, h.sunChanges, h.framesNoShadow);
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   lights: lamps %u (created %u, dropped %u, %u light calls); sun updates %u, frames without shadow rows %u, frames without a sun candidate %u, sun luminance now %.3f",
+           h.lamps.nLamps, h.lamps.created, h.lamps.dropped, h.lampEvents, h.sunChanges, h.framesNoShadow, h.framesNoSunVote, sims3cam::luminance(h.sun.col));
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   walls: %u draws, openings cut in %u (%u triangles cut, %u removed, %u hidden dropped; %u geometries built, %u evicted, %u build failures, %u skipped, %u masks decoded)",
            h.wallDraws, h.wallCutDraws, h.wallCutTriangles, h.wallRemovedTriangles, h.wallHiddenTriangles, h.wallBuilt, h.wallEvicted, h.wallBuildFailed, h.wallSkipped, h.wallMasksDecoded);
@@ -1967,6 +1967,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
     auto& h = g_sims3;
     sims3cam::SunVote v;
     const bool haveVote = h.voter.best(v);
+    if (!haveVote) ++h.framesNoSunVote;   // no rig light above the horizon brighter than the floor this frame (milestone 19d)
     if (h.frames != h.shadowDirFrame) ++h.framesNoShadow;
     bool send = false;
     sims3cam::SunVote next = h.sun;
@@ -1995,6 +1996,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
         const float lm = sims3cam::luminance(match.col), lc = sims3cam::luminance(h.sun.col);
         bool adopt = !h.sunSet || lm >= 0.7f * lc;
         if (!adopt && ++h.sunDarkFrames >= 1200) adopt = true;
+        if (!adopt && h.sunDarkFrames == 1 && ++h.sunDarkHeld <= 20) { char msg[200]; snprintf(msg, sizeof msg, "Sims 3 camera hook: sun: a darker matching rig candidate (luminance %.3f vs the sun's %.3f) held back at frame %u", lm, lc, h.frames); Logger::info(msg); }
         if (adopt) {
           h.sunDarkFrames = 0;
           const float a = h.sunSet ? 0.2f : 1.f;
@@ -2032,10 +2034,14 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
       SetLight(0, &light);
       LightEnable(0, TRUE);
       h.sun = next; h.sunSet = true;
-      if (++h.sunChanges <= 3) {
-        char msg[200];
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: sun forwarded as light 0 (toward %.3f,%.3f,%.3f; colour %.2f,%.2f,%.2f; %u votes of %u candidates)",
-                 next.dir[0], next.dir[1], next.dir[2], next.col[0], next.col[1], next.col[2], next.count, h.voter.n);
+      ++h.sunChanges;
+      const float lum = sims3cam::luminance(next.col);
+      const bool moved = h.sunLogLum < 0.f || std::fabs(lum - h.sunLogLum) > 0.1f * (h.sunLogLum > 0.f ? h.sunLogLum : 1.f) || sims3cam::dot3(next.dir, h.sunLogDir) < 0.996f;
+      if (moved && h.sunLogged < 200) {   // the sun trace (milestone 19d): every step of brightness or direction
+        ++h.sunLogged; h.sunLogLum = lum; for (int q = 0; q < 3; ++q) h.sunLogDir[q] = next.dir[q];
+        char msg[240];
+        snprintf(msg, sizeof msg, "Sims 3 camera hook: sun forwarded as light 0 at frame %u (toward %.3f,%.3f,%.3f; colour %.2f,%.2f,%.2f, luminance %.3f; %u votes of %u candidates)",
+                 h.frames, next.dir[0], next.dir[1], next.dir[2], next.col[0], next.col[1], next.col[2], lum, next.count, h.voter.n);
         Logger::info(msg);
       }
     }
