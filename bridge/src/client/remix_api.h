@@ -30,4 +30,9 @@ extern PFN_remixapi_BridgeCallback g_beginSceneCallback;
 extern PFN_remixapi_BridgeCallback g_endSceneCallback;
 extern PFN_remixapi_BridgeCallback g_presentCallback;
 
+// The Sims 3 camera hook (milestone 20a): the entry points the hook calls from the device
+// (defined in remix_api.cpp; they send the command to the server, which needs
+// exposeRemixApi = True in .trex\bridge.conf to have the runtime's API loaded).
+remixapi_ErrorCode REMIXAPI_CALL remixapi_SetConfigVariable(const char* var, const char* value);
+
 }

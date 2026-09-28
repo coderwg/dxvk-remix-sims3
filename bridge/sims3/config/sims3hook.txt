@@ -2,6 +2,13 @@
 # terrain       1 = terrain through the runtime's terrain baker (0 = the pre-M17 capture)
 # ringTrace     1 = keep a rolling trace of every draw and event of the last ~300 frames; the mark key writes it to the log (diagnostic; 0 = off)
 # markKey       virtual-key code of the mark key (F9 and backtick always work); 45 = Insert, 220 = backslash, 36 = Home, 35 = End, 19 = Pause, 145 = Scroll Lock
+# skyFromRig    1 = drive the runtime's sky brightness (rtx.skyBrightness) from the game's own sky light, read from the
+#               fill lights of the per-object light rig, so nights go dark; needs exposeRemixApi = True in .trex\bridge.conf
+# skyDayLevel   the rig fill level of full day, in thousandths (the reference; a higher level seen in the run raises it)
+# skyMinBrightness  the darkest sky brightness, in thousandths
 terrain = 1
 ringTrace = 0
 markKey = 220
+skyFromRig = 1
+skyDayLevel = 250
+skyMinBrightness = 30
