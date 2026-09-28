@@ -7,10 +7,15 @@ and its model (MODL / MLOD), and writes one line per model that has lights:
     <index hash> <index bytes> <vertex hash> <vertex bytes> <model instance> <lights...>
 
 The hashes are FNV-1a 64 of the mesh chunks' data, raw and with the index differences
-decoded, so they can be compared with the hashes the camera hook logs for the Direct3D
-buffers ("object buffers" lines, milestone 21d). Run:
+decoded. The game uploads its chunks verbatim (run 133: 32 of 115 Direct3D index buffers
+matched the decoded hashes exactly), so the decoded index hash identifies a drawn model.
 
-    python lite_table.py "C:\\Program Files\\EA Games\\The Sims 3" out.txt [--verbose]
+    python lite_table.py "C:\\Program Files\\EA Games\\The Sims 3" out.txt [--hook sims3lights.txt]
+
+--hook writes the compact table the camera hook reads from next to its DLL (milestone 22):
+one line per mesh, `<decoded index hash> <model instance> <count> [<type> x y z r g b intensity]...`
+with type 3 point, 4 spot, 5 lamp shade, 6 tube light; window, area and world lights are left
+out (daylight portals, not lamps).
 """
 import os, struct, sys, collections, time
 
@@ -159,6 +164,8 @@ def main():
     if len(sys.argv) < 3: print(__doc__); return
     root, outPath = sys.argv[1], sys.argv[2]
     verbose = '--verbose' in sys.argv
+    hookPath = sys.argv[sys.argv.index('--hook') + 1] if '--hook' in sys.argv else None
+    hookRows = []
     t0 = time.time()
     store = Store()
     pk = []
@@ -190,10 +197,20 @@ def main():
             meshes = []
             for mi in modls: meshes += model_meshes(store, mi)
             if meshes: withMesh += 1
+            lampLights = [L for L in lights if L[0] in ('Point', 'Spot', 'LampShade', 'TubeLight')]
             for (ih, ihd, ilen, vh, vlen, flags, disp) in meshes:
                 out.write('%016x %016x %d %016x %d %016x %d %d | %s\n' % (ih, ihd, ilen, vh, vlen, inst, flags, disp,
                           '; '.join('%s (%.2f,%.2f,%.2f) rgb %.2f,%.2f,%.2f i %.1f' % L[:8] for L in lights)))
                 rows += 1
+                if lampLights:
+                    kinds = {'Point': 3, 'Spot': 4, 'LampShade': 5, 'TubeLight': 6}
+                    hookRows.append('%016x %016x %d %s' % (ihd, inst, len(lampLights), ' '.join('%d %.4f %.4f %.4f %.4f %.4f %.4f %.2f' % ((kinds[L[0]],) + L[1:8]) for L in lampLights)))
     print('%d visual proxies, %d with lights, %d of those with mesh chunks found; %d mesh rows written to %s in %.1f s' % (len(vpxys), withLite, withMesh, rows, outPath, time.time() - t0))
+    if hookPath:
+        with open(hookPath, 'w') as hk:
+            hk.write('# The Sims 3 camera hook: the game\'s own lamp lights per mesh (milestone 22), written by sims3/tools/lite_table.py.\n')
+            hk.write('# <decoded index hash> <model instance> <count> [<type> x y z r g b intensity]...  type 3 point, 4 spot, 5 lamp shade, 6 tube\n')
+            for r in hookRows: hk.write(r + '\n')
+        print('%d mesh lines for the hook written to %s' % (len(hookRows), hookPath))
 
 if __name__ == '__main__': main()

@@ -1521,6 +1521,64 @@ inline void makeSunLight(const SunVote& v, D3DLIGHT9& l) {
   l.Direction.x = -v.dir[0]; l.Direction.y = -v.dir[1]; l.Direction.z = -v.dir[2];   // D3D: the direction the light travels
 }
 
+// ---- the game's own lamp lights (milestone 22) --------------------------------------------
+// The game keeps every lamp model's lights in a LITE resource: type, position in the model's
+// own space, colour, intensity. sims3/tools/lite_table.py reads the package files and writes
+// sims3lights.txt next to this DLL: one line per mesh, keyed by the FNV-1a 64 hash of the
+// model's index data as the game uploads it (run 133: the Direct3D index buffers match the
+// package chunks byte for byte, differences decoded). At a draw of an object shader the index
+// buffer's hash names the model, and the object's World rows carry each light to the world.
+struct LiteLight { uint8_t type; float pos[3]; float col[3]; float intensity; };   // type 3 point, 4 spot, 5 lamp shade, 6 tube
+struct LiteModel { uint64_t ibHash; uint64_t inst; uint8_t n; LiteLight lights[4]; };
+struct LiteTable {
+  static const int kMax = 1024;
+  LiteModel models[kMax]; uint32_t n = 0; bool loaded = false; uint32_t lines = 0;
+};
+inline LiteTable& liteTable() {
+  static LiteTable t;
+  if (t.loaded) return t;
+  t.loaded = true;
+  char path[MAX_PATH] = {};
+  HMODULE self = GetModuleHandleA("d3d9.dll");
+  if (!self || !GetModuleFileNameA(self, path, MAX_PATH)) return t;
+  char* slash = strrchr(path, '\\');
+  if (!slash) return t;
+  snprintf(slash + 1, (size_t) (MAX_PATH - (slash + 1 - path)), "sims3lights.txt");
+  FILE* f = fopen(path, "rb");
+  if (!f) return t;
+  char line[1024];
+  while (fgets(line, sizeof line, f) && t.n < (uint32_t) LiteTable::kMax) {
+    ++t.lines;
+    if (line[0] == '#' || line[0] == '\r' || line[0] == '\n' || !line[0]) continue;
+    char* e = line;
+    LiteModel m = {};
+    m.ibHash = strtoull(e, &e, 16); m.inst = strtoull(e, &e, 16);
+    const long cnt = strtol(e, &e, 10);
+    if (cnt < 1) continue;
+    for (long i = 0; i < cnt && m.n < 4; ++i) {
+      LiteLight& L = m.lights[m.n];
+      const long typ = strtol(e, &e, 10);
+      float v[7]; for (int k = 0; k < 7; ++k) v[k] = (float) strtod(e, &e);
+      if (typ < 3 || typ > 6) continue;
+      L.type = (uint8_t) typ; L.pos[0] = v[0]; L.pos[1] = v[1]; L.pos[2] = v[2]; L.col[0] = v[3]; L.col[1] = v[4]; L.col[2] = v[5]; L.intensity = v[6];
+      ++m.n;
+    }
+    if (m.n) t.models[t.n++] = m;
+  }
+  fclose(f);
+  return t;
+}
+inline const LiteModel* findLiteModel(uint64_t ibHash) {
+  LiteTable& t = liteTable();
+  for (uint32_t k = 0; k < t.n; ++k) if (t.models[k].ibHash == ibHash) return &t.models[k];
+  return nullptr;
+}
+// A model-space point through the World rows the object shaders carry (three rows of four:
+// row . (x, y, z, 1), the translation in .w).
+inline void worldPoint(const float* rows, const float* p, float* out) {
+  for (int i = 0; i < 3; ++i) out[i] = rows[4*i] * p[0] + rows[4*i + 1] * p[1] + rows[4*i + 2] * p[2] + rows[4*i + 3];
+}
+
 // ---- lamps, from the per-object light rig (milestones 3a, 21) ----------------------------
 // The rig is computed by the game at each object's position, so a rig direction toward a
 // lamp is a ray from that object (its World translation, c12..c14 for the object shaders)
@@ -1557,6 +1615,10 @@ struct Lamp {
   int slot;            // fixed-function light index (1..7), or -1 (an API light needs none)
   void* api;           // the Remix API light handle when forwarded that way (the device destroys it on drop)
   float sentPos[3], sentCol[3]; bool sent;   // what the runtime holds for this lamp
+  bool model;          // from the game's own light definitions (milestone 22): the position is exact, the rays only say lit or not
+  uint8_t kind;        // the LITE light type (3 point, 4 spot, 5 lamp shade, 6 tube)
+  bool drawn;          // the object was drawn this frame (model lamps)
+  bool confirmedOnce;  // it was forwarded at least once (for the event log)
 };
 
 // World register of the vertex shaders whose draws may contribute rays (the rig is only
@@ -1714,6 +1776,35 @@ struct LampSolver {
     return true;
   }
   bool hasSelfRay(const float* O) const { for (uint32_t k = 0; k < nSelf; ++k) if (lampDist(selfOrigins[k], O) < 0.3f) return true; return false; }
+
+  // A lamp from the game's own definitions (milestone 22), once per draw of its object: the
+  // light's exact world position, the LITE colour as the fallback until the rays give one.
+  void addModelLamp(uint32_t id, const float* anchor, const float* pos, const float* col, float intensity, uint8_t kind) {
+    for (uint32_t k = 0; k < nLamps; ++k) {
+      Lamp& L = lamps[k];
+      if (L.id != id) continue;
+      for (int q = 0; q < 3; ++q) { L.anchor[q] = anchor[q]; L.pos[q] = pos[q]; }   // the object may have moved
+      L.drawn = true;
+      return;
+    }
+    if (nLamps >= (uint32_t) kMaxLamps) return;
+    Lamp& L = lamps[nLamps++];
+    std::memset(&L, 0, sizeof L);
+    for (int q = 0; q < 3; ++q) { L.anchor[q] = anchor[q]; L.pos[q] = pos[q]; L.col[q] = col[q] * intensity / 100.f; }
+    L.id = id; L.model = true; L.kind = kind; L.drawn = true; L.slot = freeSlot();
+    if (L.slot >= 1) slotUsed[L.slot] = true;
+    ++created;
+  }
+  // Does ray r pass within `radius` of point P, 0.3 to 20 units along it? d receives the distance from the ray's object to P.
+  static bool passesPoint(const LampRay& r, const float* P, float radius, float& d) {
+    const float v[3] = { P[0] - r.pos[0], P[1] - r.pos[1], P[2] - r.pos[2] };
+    const float t = dot3(v, r.dir);
+    if (t < kMinT || t > kMaxT) return false;
+    const float perp[3] = { v[0] - t * r.dir[0], v[1] - t * r.dir[1], v[2] - t * r.dir[2] };
+    if (len3(perp) > radius) return false;
+    d = len3(v);
+    return true;
+  }
   int freeSlot() const { for (int s = 1; s <= kMaxSlots; ++s) if (!slotUsed[s]) return s; return -1; }
   void record(uint8_t kind, const Lamp& L, uint32_t votes, uint32_t agree, bool spr, bool self) {
     if (nEvents >= 16) return;
@@ -1726,24 +1817,30 @@ struct LampSolver {
   // objects drawn; refine, create, age out. Returns the number of lamps.
   uint32_t solve(bool discover = true) {
     nDropped = 0; nEvents = 0;
-    // the lamps known: support from the votes crossing at the lamp's height, height, colour
+    // the lamps known: support from the votes crossing at the lamp's height, height, colour;
+    // a model lamp's position is exact, so its votes are the rays passing its light (milestone 22)
     for (uint32_t k = 0; k < nLamps; ++k) {
       Lamp& L = lamps[k];
       Acc a; clearAcc(a);
-      for (uint32_t i = 0; i < nRays; ++i) { float y, d; if (passes(rays[i], L.anchor, y, d)) vote(a, rays[i], L.anchor, y, d); }
       uint8_t idx[kMaxVotes]; uint8_t n = 0;
-      for (uint8_t i = 0; i < a.n; ++i) if (std::fabs(a.y[i] - L.pos[1]) < kKeepHeight) idx[n++] = i;
+      if (L.model) {
+        for (uint32_t i = 0; i < nRays; ++i) { float d; if (passesPoint(rays[i], L.pos, 0.45f, d)) vote(a, rays[i], L.pos, L.pos[1], d); }
+        for (uint8_t i = 0; i < a.n; ++i) idx[n++] = i;
+      } else {
+        for (uint32_t i = 0; i < nRays; ++i) { float y, d; if (passes(rays[i], L.anchor, y, d)) vote(a, rays[i], L.anchor, y, d); }
+        for (uint8_t i = 0; i < a.n; ++i) if (std::fabs(a.y[i] - L.pos[1]) < kKeepHeight) idx[n++] = i;
+      }
       L.support = n;
       if (n == 0) { ++L.missing; continue; }
       L.missing = 0;
       if (L.age < 100000u) ++L.age;
-      float ys[kMaxVotes]; for (uint8_t i = 0; i < n; ++i) ys[i] = a.y[idx[i]];
-      const float y = median(ys, n); const float s = L.age <= 1 ? 1.f : 0.1f; L.pos[1] += s * (y - L.pos[1]);
+      if (!L.model) { float ys[kMaxVotes]; for (uint8_t i = 0; i < n; ++i) ys[i] = a.y[idx[i]]; const float y = median(ys, n); const float s = L.age <= 1 ? 1.f : 0.1f; L.pos[1] += s * (y - L.pos[1]); }
       float c[3];
       if (colourOf(a, idx, n, c)) { const float sc = L.age <= 1 ? 1.f : 0.2f; for (int q = 0; q < 3; ++q) L.col[q] += sc * (c[q] - L.col[q]); }
+      if (L.model && L.age == kConfirmFrames && !L.confirmedOnce) { L.confirmedOnce = true; record(1, L, a.votes, n, true, false); }
     }
-    // the objects drawn: new lamps where the rays cross at one height
-    if (discover) {
+    // the objects drawn: new lamps where the rays cross at one height (only without the game's own table)
+    if (discover && liteTable().n == 0) {
       for (uint32_t o = 0; o < nOrigins; ++o) clearAcc(acc[o]);
       for (uint32_t i = 0; i < nRays; ++i)
         for (uint32_t o = 0; o < nOrigins; ++o) { float y, d; if (passes(rays[i], origins[o], y, d)) { vote(acc[o], rays[i], origins[o], y, d); ++votesTotal; } }
@@ -1772,10 +1869,11 @@ struct LampSolver {
         record(1, L, a.votes, n, spr, hasSelfRay(origins[o]));
       }
     }
-    // age out
+    // age out (a model lamp not drawn this frame counts as missing too: off screen, its light fades in three seconds)
+    for (uint32_t k = 0; k < nLamps; ++k) { if (lamps[k].model && !lamps[k].drawn) ++lamps[k].missing; lamps[k].drawn = false; }
     for (uint32_t k = 0; k < nLamps; ) {
       if (lamps[k].missing > kMissingLimit) {
-        record(2, lamps[k], 0, 0, false, false);
+        if (!lamps[k].model || lamps[k].confirmedOnce) record(2, lamps[k], 0, 0, false, false);
         droppedApi[nDropped] = lamps[k].api; droppedSlot[nDropped] = lamps[k].slot; droppedSent[nDropped] = lamps[k].sent; ++nDropped;
         if (lamps[k].slot >= 1) slotUsed[lamps[k].slot] = false;
         lamps[k] = lamps[nLamps - 1]; --nLamps; ++dropped;
