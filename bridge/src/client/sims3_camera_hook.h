@@ -967,14 +967,18 @@ inline int markKey() { static int s = -1; if (s < 0) { s = hookOption("markKey",
 // ringTrace = 1 keeps the rolling trace of every draw and event (the last ~300 frames) that the
 // mark key writes to the log (diagnostic; 0 = off).
 inline int ringTrace() { static int s = -1; if (s < 0) s = hookOption("ringTrace", 0) != 0; return s; }
-// The sky brightness from the rig (milestone 20a): skyFromRig = 1 drives rtx.skyBrightness from
-// the rig's fill lights through the Remix API (the server loads the runtime's API only with
-// exposeRemixApi = True in .trex\bridge.conf). skyDayLevel = the fill level of full day in
-// thousandths, the reference (a higher level measured raises it); skyMinBrightness = the floor
-// in thousandths.
-inline int skyFromRig() { static int s = -1; if (s < 0) s = hookOption("skyFromRig", 1) != 0; return s; }
-inline float skyDayLevel() { static float s = -1.f; if (s < 0.f) { int v = hookOption("skyDayLevel", 250); if (v < 10) v = 10; s = (float) v / 1000.f; } return s; }
+// Night from the sun (milestone 20d): skyFromSun = 1 drives the runtime's sky brightness
+// (rtx.skyBrightness) and the ceiling of its auto-exposure (rtx.autoExposure.evMaxValue) from
+// the luminance of the sun the hook holds, through the Remix API (the server loads the
+// runtime's API only with exposeRemixApi = True in .trex\bridge.conf). skyDayLevel = the sun
+// luminance of full day in thousandths, the reference (a higher one measured raises it);
+// skyMinBrightness = the sky's floor in thousandths; dayEvMax / nightEvMax = the exposure
+// ceiling in hundredths of an EV at full day and at the floor (the runtime's default is 5.0).
+inline int skyFromSun() { static int s = -1; if (s < 0) s = hookOption("skyFromSun", 1) != 0; return s; }
+inline float skyDayLevel() { static float s = -1.f; if (s < 0.f) { int v = hookOption("skyDayLevel", 900); if (v < 10) v = 10; s = (float) v / 1000.f; } return s; }
 inline float skyMinBrightness() { static float s = -1.f; if (s < 0.f) { int v = hookOption("skyMinBrightness", 30); if (v < 0) v = 0; if (v > 1000) v = 1000; s = (float) v / 1000.f; } return s; }
+inline float dayEvMax() { static float s = -99.f; if (s < -98.f) { int v = hookOption("dayEvMax", 500); if (v < -1000) v = -1000; if (v > 1000) v = 1000; s = (float) v / 100.f; } return s; }
+inline float nightEvMax() { static float s = -99.f; if (s < -98.f) { int v = hookOption("nightEvMax", 100); if (v < -1000) v = -1000; if (v > 1000) v = 1000; s = (float) v / 100.f; } return s; }
 // Lights through the Remix API (milestone 20b): apiLights = 1 forwards the sun as a distant
 // light and the lamps as sphere lights through the Remix API, with explicit radiance and size,
 // instead of fixed-function lights converted by the runtime (needs exposeRemixApi = True;
@@ -983,6 +987,10 @@ inline float skyMinBrightness() { static float s = -1.f; if (s < 0.f) { int v = 
 // colour, thousandths (the conversion used 1); lampRadius = the lamps' sphere radius in
 // thousandths of a unit; lampRadiance = radiance per unit of rig colour, thousandths.
 inline int apiLights() { static int s = -1; if (s < 0) s = hookOption("apiLights", 1) != 0; return s; }
+// apiLamps = 0 keeps the lamps on the fixed-function path while the sun goes through the API
+// (milestone 20d: until the lamps come from the bulb geometry, the solver's estimates wander
+// and the runtime's 4-unit conversion spheres hide that better than the API spheres).
+inline int apiLamps() { static int s = -1; if (s < 0) s = hookOption("apiLamps", 1) != 0; return s; }
 inline float sunAngle() { static float s = -1.f; if (s < 0.f) { int v = hookOption("sunAngle", 2000); if (v < 100) v = 100; if (v > 90000) v = 90000; s = (float) v / 1000.f; } return s; }
 inline float sunRadiance() { static float s = -1.f; if (s < 0.f) { int v = hookOption("sunRadiance", 1000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
 inline float lampRadius() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampRadius", 300); if (v < 20) v = 20; s = (float) v / 1000.f; } return s; }
@@ -1220,37 +1228,30 @@ inline const AlbedoStage* findLightRig(uint64_t hash) { const AlbedoStage* a = f
 
 inline float luminance(const float* c) { return 0.2126f*c[0] + 0.7152f*c[1] + 0.0722f*c[2]; }
 
-struct SunVote { float dir[3]; float col[3]; uint32_t count; float fill; uint32_t fillCount; };   // fill: the summed luminance of the rig's other lights, over fillCount rigs (milestone 20a)
+struct SunVote { float dir[3]; float col[3]; uint32_t count; };
 
 struct SunVoter {
   SunVote votes[8];
   uint32_t n = 0;
-  // Rigs without a key above the floor (night: no light brighter than the floor from above):
-  // the whole rig is sky light (milestone 20a).
-  float nightFill = 0.f; uint32_t nightCount = 0;
-  void clear() { n = 0; nightFill = 0.f; nightCount = 0; }
+  void clear() { n = 0; }
   // dirs: c0..c3 (4 float4), cols: c4..c7 (4 float4)
   void add(const float* dirs, const float* cols) {
-    int best = -1; float bestLum = 0.f, total = 0.f;
+    int best = -1; float bestLum = 0.f;
     for (int i = 0; i < 4; ++i) {
       const float* d = dirs + i*4; const float* c = cols + i*4;
       const float len = len3(d);
-      if (len < 0.9f || len > 1.1f) continue;   // a unit direction (an unused slot is a zero vector)
+      if (len < 0.9f || len > 1.1f || d[1] / len < 0.15f) continue;   // a unit direction, from above the horizon
       const float lum = luminance(c);
-      total += lum;                              // every light of the rig, for the fills (milestone 20a)
-      if (d[1] / len < 0.15f) continue;          // the key: from above the horizon
       if (lum > bestLum) { bestLum = lum; best = i; }
     }
-    if (best < 0) return;
-    if (bestLum < 0.05f) { nightFill += total; ++nightCount; return; }
-    const float fill = total - bestLum;
+    if (best < 0 || bestLum < 0.05f) return;
     const float* d = dirs + best*4; const float* c = cols + best*4;
     const float len = len3(d); const float nd[3] = { d[0]/len, d[1]/len, d[2]/len };
     for (uint32_t k = 0; k < n; ++k) {
       SunVote& v = votes[k];
-      if (dot3(v.dir, nd) > 0.999f && std::fabs(luminance(v.col) - bestLum) < 0.05f) { ++v.count; v.fill += fill; ++v.fillCount; return; }
+      if (dot3(v.dir, nd) > 0.999f && std::fabs(luminance(v.col) - bestLum) < 0.05f) { ++v.count; return; }
     }
-    if (n < 8) { SunVote& v = votes[n++]; for (int j = 0; j < 3; ++j) { v.dir[j] = nd[j]; v.col[j] = c[j]; } v.count = 1; v.fill = fill; v.fillCount = 1; }
+    if (n < 8) { SunVote& v = votes[n++]; for (int j = 0; j < 3; ++j) { v.dir[j] = nd[j]; v.col[j] = c[j]; } v.count = 1; }
   }
   // The sun is the brightest candidate with real support (two rigs and a fifth of the votes):
   // a view of mostly indoor objects votes for the dim sky fill by majority, and that must

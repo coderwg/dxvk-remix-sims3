@@ -117,8 +117,8 @@ namespace {
     LampSent lampSent[sims3cam::LampSolver::kMaxLamps + 1] = {};   // what the runtime holds per slot
     uint32_t lampEvents = 0;             // SetLight/LightEnable calls made for lamps
     bool loggedLamp = false;
-    // the sky brightness from the rig's fills (milestone 20a)
-    float skyLevel = -1.f, skyDayRef = 0.f, skyBrightnessSent = -1.f; uint32_t skySends = 0, skySendFrame = 0, skyBrightLogged = 0; bool skyApiWarned = false;
+    // night from the sun (milestone 20d): the sun's luminance smoothed, the day reference, what was sent
+    float skyLevel = -1.f, skyDayRef = 0.f, skyBrightnessSent = -1.f, evMaxSent = -99.f; uint32_t skySends = 0, skySendFrame = 0, skyBrightLogged = 0, skyNoCandFrames = 0; bool skyApiWarned = false;
     // lights through the Remix API (milestone 20b): the handles of the sun and of each lamp slot (remixapi_LightHandle, declared later in this file)
     void* sunApi = nullptr; void* lampApi[sims3cam::LampSolver::kMaxLamps + 1] = {}; uint32_t apiLightCalls = 0; bool loggedApiLights = false, apiLightsWarned = false;
     // untabled pixel shaders (milestone 7): the albedo chosen from the bytecode at draw time,
@@ -1827,13 +1827,13 @@ static void sims3LogStats(bool withTable) {
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   lights: lamps %u (created %u, dropped %u, %u light calls); sun updates %u, frames without shadow rows %u, frames without a sun candidate %u, sun luminance now %.3f",
            h.lamps.nLamps, h.lamps.created, h.lamps.dropped, h.lampEvents, h.sunChanges, h.framesNoShadow, h.framesNoSunVote, sims3cam::luminance(h.sun.col));
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   sky: rig fill level %.3f (day reference %.3f), brightness %.3f sent %u times%s",
-           h.skyLevel, h.skyDayRef, h.skyBrightnessSent, h.skySends, GlobalOptions::getExposeRemixApi() ? "" : " (Remix API off: nothing sent)");
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   night: sun level %.3f (day reference %.3f), sky brightness %.3f and exposure ceiling %.2f EV sent %u times%s",
+           h.skyLevel, h.skyDayRef, h.skyBrightnessSent, h.evMaxSent, h.skySends, GlobalOptions::getExposeRemixApi() ? "" : " (Remix API off: nothing sent)");
   Logger::info(msg);
   uint32_t lampHandles = 0;
   for (int s = 1; s <= sims3cam::LampSolver::kMaxLamps; ++s) if (h.lampApi[s]) ++lampHandles;
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   api lights: %s; %u calls, sun %s, %u lamp handles",
-           (sims3cam::apiLights() && GlobalOptions::getExposeRemixApi()) ? "on" : "off (fixed-function lights)", h.apiLightCalls, h.sunApi ? "live" : "none", lampHandles);
+           (sims3cam::apiLights() && GlobalOptions::getExposeRemixApi()) ? (sims3cam::apiLamps() ? "on" : "sun only (lamps fixed-function)") : "off (fixed-function lights)", h.apiLightCalls, h.sunApi ? "live" : "none", lampHandles);
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   walls: %u draws, openings cut in %u (%u triangles cut, %u removed, %u hidden dropped; %u geometries built, %u evicted, %u build failures, %u skipped, %u masks decoded)",
            h.wallDraws, h.wallCutDraws, h.wallCutTriangles, h.wallRemovedTriangles, h.wallHiddenTriangles, h.wallBuilt, h.wallEvicted, h.wallBuildFailed, h.wallSkipped, h.wallMasksDecoded);
@@ -1943,7 +1943,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
   // The Sims 3 camera hook: lamps triangulated from this frame's object rigs -> point lights 1..7.
   if (sims3cam::enabled()) {
     auto& h = g_sims3;
-    const bool apiLights = sims3cam::apiLights() && GlobalOptions::getExposeRemixApi();   // milestone 20b
+    const bool apiLights = sims3cam::apiLights() && sims3cam::apiLamps() && GlobalOptions::getExposeRemixApi();   // milestones 20b, 20d
     const uint32_t raysThisFrame = h.lamps.nRays;
     h.lamps.solve((h.frames & 3) == 0);   // the quadratic ray pairing every fourth frame; assignment and refinement every frame
     bool live[sims3cam::LampSolver::kMaxLamps + 1] = {};
@@ -2083,42 +2083,43 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
       }
     }
     if (h.sunApi) remixapi::remixapi_DrawLightInstance((remixapi_LightHandle) h.sunApi);   // every frame (milestone 20b)
-    // The sky brightness from the rig's fills (milestone 20a): the fills of the rigs that voted
-    // for the sun (outdoor objects) are the game's own sky light and follow its clock; a rig
-    // without a key above the floor (night) is sky light entirely. The level, relative to full
-    // day, drives rtx.skyBrightness through the Remix API: the runtime scales its sky probe by
-    // it wherever a ray escapes, so the ambient and the backdrop darken together.
-    if (sims3cam::skyFromRig()) {
-      float level = -1.f;
-      sims3cam::SunVote m = {};
-      bool have = false;
-      if (h.shadowDirValid) have = h.voter.matching(h.shadowDir, m);
-      else if (haveVote) { m = v; have = true; }
-      if (have && m.fillCount > 0) level = m.fill / (float) m.fillCount;
-      else if (h.voter.nightCount > 0) level = h.voter.nightFill / (float) h.voter.nightCount;
-      if (level >= 0.f) {
-        h.skyLevel = h.skyLevel < 0.f ? level : h.skyLevel + 0.1f * (level - h.skyLevel);
+    // Night from the sun (milestone 20d): the luminance of the sun the hook holds follows the
+    // game's clock (0.97 at noon, orange 0.3 at dusk, 0.07 late, then no candidate above the
+    // floor at all); the game's rig carries no sky light of its own (an outdoor rig is the sun
+    // alone). Relative to full day it sets the runtime's sky brightness -- the sky probe scaled
+    // wherever a ray escapes, ambient and backdrop together -- and the ceiling of the
+    // auto-exposure, which would otherwise brighten the dark scene back up (its default range
+    // reaches +5 EV). Without a candidate for a second the level decays to the floor: night.
+    if (sims3cam::skyFromSun()) {
+      if (haveVote) h.skyNoCandFrames = 0; else ++h.skyNoCandFrames;
+      float target = -1.f;
+      if (h.skyNoCandFrames > 60) target = 0.f;
+      else if (h.sunSet) target = sims3cam::luminance(h.sun.col);
+      if (target >= 0.f) {
+        h.skyLevel = h.skyLevel < 0.f ? target : h.skyLevel + 0.05f * (target - h.skyLevel);
         if (h.skyLevel > h.skyDayRef) h.skyDayRef = h.skyLevel;
         const float dayRef = h.skyDayRef > sims3cam::skyDayLevel() ? h.skyDayRef : sims3cam::skyDayLevel();
         float b = h.skyLevel / dayRef;
         if (b > 1.f) b = 1.f;
         if (b < sims3cam::skyMinBrightness()) b = sims3cam::skyMinBrightness();
-        const bool due = h.skyBrightnessSent < 0.f || (std::fabs(b - h.skyBrightnessSent) > 0.01f && h.frames - h.skySendFrame >= 10);
+        const float ev = sims3cam::nightEvMax() + (sims3cam::dayEvMax() - sims3cam::nightEvMax()) * b;
+        const bool due = h.skyBrightnessSent < 0.f || ((std::fabs(b - h.skyBrightnessSent) > 0.01f || std::fabs(ev - h.evMaxSent) > 0.05f) && h.frames - h.skySendFrame >= 10);
         if (due) {
           if (GlobalOptions::getExposeRemixApi()) {
-            char val[32]; snprintf(val, sizeof val, "%.3f", b);
-            remixapi::remixapi_SetConfigVariable("rtx.skyBrightness", val);
+            char val[32];
+            snprintf(val, sizeof val, "%.3f", b); remixapi::remixapi_SetConfigVariable("rtx.skyBrightness", val);
+            snprintf(val, sizeof val, "%.2f", ev); remixapi::remixapi_SetConfigVariable("rtx.autoExposure.evMaxValue", val);
             const bool step = h.skyBrightnessSent < 0.f || std::fabs(b - h.skyBrightnessSent) > 0.1f;
-            h.skyBrightnessSent = b; h.skySendFrame = h.frames; ++h.skySends;
+            h.skyBrightnessSent = b; h.evMaxSent = ev; h.skySendFrame = h.frames; ++h.skySends;
             if (step && h.skyBrightLogged < 100) {
               ++h.skyBrightLogged; char msg[220];
-              snprintf(msg, sizeof msg, "Sims 3 camera hook: sky brightness %.3f sent at frame %u (rig fill level %.3f, day reference %.3f, %s)",
-                       b, h.frames, h.skyLevel, dayRef, (have && m.fillCount > 0) ? "from the sun's rigs" : "from rigs without a key");
+              snprintf(msg, sizeof msg, "Sims 3 camera hook: sky brightness %.3f and exposure ceiling %.2f EV sent at frame %u (sun level %.3f, day reference %.3f%s)",
+                       b, ev, h.frames, h.skyLevel, dayRef, h.skyNoCandFrames > 60 ? ", no sun candidate: night" : "");
               Logger::info(msg);
             }
           } else if (!h.skyApiWarned) {
             h.skyApiWarned = true;
-            Logger::warn("Sims 3 camera hook: sky brightness not driven: the Remix API is off (exposeRemixApi = True in .trex\\bridge.conf turns it on for the bridge server)");
+            Logger::warn("Sims 3 camera hook: night not driven: the Remix API is off (exposeRemixApi = True in .trex\\bridge.conf turns it on for the bridge server)");
           }
         }
       }
