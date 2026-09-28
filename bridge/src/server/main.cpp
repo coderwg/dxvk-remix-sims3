@@ -62,6 +62,16 @@ using namespace Commands;
 using namespace bridge_util;
 using namespace remixapi::util;
 
+// The Sims 3 camera hook (milestone 20c): a Remix API command must not reach the runtime's
+// function table when its initialisation failed (an incompatible API version, for one): the
+// pointers are null and the process dies at address 0. Logged once, then ignored.
+static bool remixApiReady() {
+  if (remixapi::g_remix_initialized) return true;
+  static bool warned = false;
+  if (!warned) { warned = true; bridge_util::Logger::err("[RemixApi] A Remix API call arrived but the runtime's API is not initialised (see the initialization error above); this and further calls are ignored."); }
+  return false;
+}
+
 // NOTE: This extension is really useful for debugging the Bridge child process from the parent process:
 // https://marketplace.visualstudio.com/items?itemName=vsdbgplat.MicrosoftChildProcessDebuggingPowerTool
 
@@ -330,7 +340,7 @@ void ProcessDeviceCommandQueue() {
         } else {
           Logger::info("Server side D3D9 DeviceEx created successfully!");
           gpD3DDevices[pHandle] = pD3DDevice;
-          if(GlobalOptions::getExposeRemixApi()) {
+          if(GlobalOptions::getExposeRemixApi() && remixApiReady()) {
             remixapi::g_device = pD3DDevice;
             remixapi::g_remix.dxvk_RegisterD3D9Device(remixapi::g_device);
           }
@@ -365,7 +375,7 @@ void ProcessDeviceCommandQueue() {
         } else {
           Logger::info("Server side D3D9 Device created successfully!");
           gpD3DDevices[pHandle] = (IDirect3DDevice9Ex*) pD3DDevice;
-          if(GlobalOptions::getExposeRemixApi()) {
+          if(GlobalOptions::getExposeRemixApi() && remixApiReady()) {
             remixapi::g_device = (IDirect3DDevice9Ex*) pD3DDevice;
             remixapi::g_remix.dxvk_RegisterD3D9Device(remixapi::g_device);
           }
@@ -2867,7 +2877,7 @@ void ProcessDeviceCommandQueue() {
 
         auto bridgeHandle = DeviceBridge::get_data();
         remixapi_MaterialHandle remixApiHandle = nullptr;
-        if(remixapi::g_remix.CreateMaterial(&matInfo, &remixApiHandle) == REMIXAPI_ERROR_CODE_SUCCESS) {
+        if(remixApiReady() && remixapi::g_remix.CreateMaterial(&matInfo, &remixApiHandle) == REMIXAPI_ERROR_CODE_SUCCESS) {
           MaterialHandle(bridgeHandle, remixApiHandle);
         } else {
           Logger::err("[RemixApi_CreateMaterial] Remix API call failed!");
@@ -2880,7 +2890,7 @@ void ProcessDeviceCommandQueue() {
       {
         MaterialHandle handle(DeviceBridge::get_data());
         if(handle.isValid()) {
-          remixapi::g_remix.DestroyMaterial(handle);
+          if (remixApiReady()) remixapi::g_remix.DestroyMaterial(handle);
           handle.invalidate();
         } else {
           Logger::err("[RemixApi_DestroyMaterial] Invalid material handle!" );
@@ -2908,7 +2918,7 @@ void ProcessDeviceCommandQueue() {
 
         auto bridgeHandle = DeviceBridge::get_data();
         remixapi_MeshHandle remixApiHandle = nullptr;
-        if(remixapi::g_remix.CreateMesh(&meshInfo, &remixApiHandle) == REMIXAPI_ERROR_CODE_SUCCESS) {
+        if(remixApiReady() && remixapi::g_remix.CreateMesh(&meshInfo, &remixApiHandle) == REMIXAPI_ERROR_CODE_SUCCESS) {
           MeshHandle handle(bridgeHandle, remixApiHandle);
         } else {
           Logger::err("[RemixApi_CreateMesh] Remix API call failed!");
@@ -2921,7 +2931,7 @@ void ProcessDeviceCommandQueue() {
       {
         MeshHandle handle(DeviceBridge::get_data());
         if(handle.isValid()) {
-          remixapi::g_remix.DestroyMesh(handle);
+          if (remixApiReady()) remixapi::g_remix.DestroyMesh(handle);
           handle.invalidate();
         } else {
           Logger::err("[RemixApi_DestroyMesh] Invalid mesh handle!" );
@@ -3002,7 +3012,7 @@ void ProcessDeviceCommandQueue() {
           bInstExtExists = remixapi::pullBool();
         }
 
-        if(remixapi::g_remix.DrawInstance(&instInfo) != REMIXAPI_ERROR_CODE_SUCCESS) {
+        if(remixApiReady() && remixapi::g_remix.DrawInstance(&instInfo) != REMIXAPI_ERROR_CODE_SUCCESS) {
           Logger::err("[RemixApi_DrawInstance] Remix API call failed!");
         }
 
@@ -3103,7 +3113,7 @@ void ProcessDeviceCommandQueue() {
 
         auto bridgeHandle = DeviceBridge::get_data();
         remixapi_LightHandle lightHandle = nullptr;
-        if(remixapi::g_remix.CreateLight(&lightInfo, &lightHandle) == REMIXAPI_ERROR_CODE_SUCCESS) {
+        if(remixApiReady() && remixapi::g_remix.CreateLight(&lightInfo, &lightHandle) == REMIXAPI_ERROR_CODE_SUCCESS) {
           LightHandle handle(bridgeHandle, lightHandle);
         } else {
           Logger::err("[RemixApi_CreateLight] Remix API call failed!");
@@ -3116,7 +3126,7 @@ void ProcessDeviceCommandQueue() {
       {
         LightHandle handle(DeviceBridge::get_data());
         if(handle.isValid()) {
-          remixapi::g_remix.DestroyLight(handle);
+          if (remixApiReady()) remixapi::g_remix.DestroyLight(handle);
           handle.invalidate();
         } else {
           Logger::err("[RemixApi_DestroyLight] Invalid light handle!" );
@@ -3128,7 +3138,7 @@ void ProcessDeviceCommandQueue() {
       {
         LightHandle handle(DeviceBridge::get_data());
         if(handle.isValid()) {
-          remixapi::g_remix.DrawLightInstance(handle);
+          if (remixApiReady()) remixapi::g_remix.DrawLightInstance(handle);
         } else {
           Logger::err("[RemixApi_DrawLightInstance] Invalid light handle!" );
         }
@@ -3145,7 +3155,7 @@ void ProcessDeviceCommandQueue() {
         const uint32_t value_size = DeviceBridge::getReaderChannel().data->pull(&value_ptr);
         std::string value_str((const char*) value_ptr, value_size);
 
-        remixapi::g_remix.SetConfigVariable(var_str.c_str(), value_str.c_str());
+        if (remixApiReady()) remixapi::g_remix.SetConfigVariable(var_str.c_str(), value_str.c_str());
         break;
       }
 
