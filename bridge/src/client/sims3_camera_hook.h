@@ -989,6 +989,34 @@ inline float sunAngle() { static float s = -1.f; if (s < 0.f) { int v = hookOpti
 inline float sunRadiance() { static float s = -1.f; if (s < 0.f) { int v = hookOption("sunRadiance", 1000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
 inline float lampRadius() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampRadius", 150); if (v < 20) v = 20; s = (float) v / 1000.f; } return s; }
 inline float lampRadiance() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampRadiance", 40000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
+// lampOnTexture (milestone 25): the content hash (hex) of the texture the game binds at the lamp
+// shader's s2 for every lamp that is on (run 138: f3e6c2b1f83e7fd8 on this install); a lamp
+// object drawn with it, or with a rig that is not all zeros, is on.
+inline uint64_t lampOnTexture() {
+  static uint64_t s = 0; static bool read = false;
+  if (!read) {
+    read = true; s = 0xf3e6c2b1f83e7fd8ull;
+    char path[MAX_PATH] = {};
+    HMODULE self = GetModuleHandleA("d3d9.dll");
+    if (self && GetModuleFileNameA(self, path, MAX_PATH)) {
+      if (char* slash = strrchr(path, '\\')) {
+        snprintf(slash + 1, (size_t) (MAX_PATH - (slash + 1 - path)), "sims3hook.txt");
+        if (FILE* f = fopen(path, "rb")) {
+          char line[256];
+          while (fgets(line, sizeof line, f)) {
+            char* p = line; while (*p == ' ' || *p == '\t') ++p;
+            if (strncmp(p, "lampOnTexture", 13) != 0) continue;
+            char* eq = strchr(p, '='); if (!eq) continue;
+            const uint64_t v = strtoull(eq + 1, nullptr, 16);
+            if (v) s = v;
+          }
+          fclose(f);
+        }
+      }
+    }
+  }
+  return s;
+}
 
 // layerPass: every draw is a layer pass. lotFamily: a lot's ground and its paint composite --
 // drawn in place, the first copy visible and every re-submission (further chunk copies, the
@@ -1585,6 +1613,12 @@ inline void worldPoint(const float* rows, const float* p, float* out) {
 // gives the colour the player set; one drawn and not pointing at it says off; none drawn
 // holds the last state. The game keeps a lamp's own light out of that lamp's rig (run 136),
 // so a lamp cannot vouch for itself.
+//
+// Milestone 25: it can, after all -- not through its rig's directions but through its draw.
+// Run 138's marks: a lamp switched on gets one shared lit texture bound at s2 (the stage its
+// shader reads as the light map: the shade glows) and a rig with four small lights; switched
+// off, its own model texture at s2 and a rig of zeros. So the lamp object's own draw says on
+// or off, authoritatively, whenever it is drawn; the witnesses' rays only colour it.
 struct LampRay { float pos[3]; float dir[3]; float col[3]; };
 
 struct Lamp {
@@ -1601,6 +1635,8 @@ struct Lamp {
   uint32_t unseen;     // consecutive frames its object was not drawn
   uint32_t held;       // frames held for want of witnesses (statistics)
   bool drawn;          // the object was drawn this frame
+  int8_t state;        // what the object's own draw said this frame: 1 on, 0 off, -1 not drawn (milestone 25)
+  float ownCol[3];     // the brightest of its own rig's four colours when on (its hue is the player's colour choice)
   bool confirmedOnce;  // forwarded at least once (the event log)
   void* api;           // the Remix API light handle (the device destroys it on drop)
   float sentPos[3], sentCol[3]; bool sent;   // what the runtime holds
@@ -1679,20 +1715,21 @@ struct LampSolver {
 
   // A lamp from the game's definitions, once per draw of its object: the light's exact world
   // position; the definition's colour and intensity until the witnesses give the colour.
-  void addModelLamp(uint32_t id, uint8_t light, const float* anchor, const float* pos, const float* col, float intensity, uint8_t kind) {
+  // ...`on` is what the object's own draw says (milestone 25), `ownCol` the brightest colour of its rig then.
+  void addModelLamp(uint32_t id, uint8_t light, const float* anchor, const float* pos, const float* col, float intensity, uint8_t kind, bool on, const float* ownCol) {
     for (uint32_t k = 0; k < nLamps; ++k) {
       Lamp& L = lamps[k];
       if (L.light != light || lampDist(L.anchor, anchor) > 0.5f) continue;   // the same object (its position may jitter across the id's quantisation)
-      for (int q = 0; q < 3; ++q) { L.anchor[q] = anchor[q]; L.pos[q] = pos[q]; }
-      L.drawn = true;
+      for (int q = 0; q < 3; ++q) { L.anchor[q] = anchor[q]; L.pos[q] = pos[q]; if (ownCol) L.ownCol[q] = ownCol[q]; }
+      L.drawn = true; L.state = on ? 1 : 0;
       return;
     }
     if (nLamps >= (uint32_t) kMaxLamps) return;
     Lamp& L = lamps[nLamps++];
     std::memset(&L, 0, sizeof L);
-    for (int q = 0; q < 3; ++q) { L.anchor[q] = anchor[q]; L.pos[q] = pos[q]; L.col[q] = col[q] * intensity / 100.f; }
+    for (int q = 0; q < 3; ++q) { L.anchor[q] = anchor[q]; L.pos[q] = pos[q]; L.col[q] = col[q] * intensity / 100.f; if (ownCol) L.ownCol[q] = ownCol[q]; }
     L.base = luminance(col) * intensity / 100.f;
-    L.id = id; L.light = light; L.kind = kind; L.drawn = true;
+    L.id = id; L.light = light; L.kind = kind; L.drawn = true; L.state = on ? 1 : 0;
     ++created;
   }
 
@@ -1721,34 +1758,35 @@ struct LampSolver {
     e.y = L.pos[1]; e.votes = votes; e.age = L.age;
   }
 
-  // Frame end: the witnesses decide each lamp's state; the lamps gone are handed to the device.
+  // Frame end: each lamp's own draw decides its state when drawn (the witnesses' rays give the
+  // colour); undrawn, the state holds. The lamps gone are handed to the device.
   uint32_t solve() {
     nDropped = 0; nEvents = 0;
     for (uint32_t k = 0; k < nLamps; ++k) {
       Lamp& L = lamps[k];
-      uint32_t witnesses = 0, pointing = 0; float sum[3] = {};
-      for (uint32_t o = 0; o < nOrigins; ++o) if (witness(origins[o], L) && canTestify(origins[o], originSlots[o], L)) ++witnesses;
+      uint32_t pointing = 0; float sum[3] = {};
       for (uint32_t i = 0; i < nRays; ++i)
         if (witness(rays[i].pos, L) && pointsAt(rays[i], L.pos)) { ++pointing; for (int q = 0; q < 3; ++q) sum[q] += rays[i].col[q]; }
       L.support = pointing;
-      if (pointing) {
+      if (L.state == 1) {
         L.missing = 0;
         if (L.age < 100000u) ++L.age;
-        const float sl = luminance(sum);   // the witnesses' hue (the player's colour choice) at the game's brightness
-        if (sl > 1e-6f) { const float sc = L.age <= 1 ? 1.f : 0.2f; for (int q = 0; q < 3; ++q) L.col[q] += sc * (sum[q] / sl * L.base - L.col[q]); }
+        // the hue: the witnesses' rays, else the lamp's own rig colour; the brightness the game's
+        const float* hue = luminance(sum) > 1e-6f ? sum : (luminance(L.ownCol) > 1e-6f ? L.ownCol : nullptr);
+        if (hue) { const float hl = luminance(hue); const float sc = L.age <= 1 ? 1.f : 0.2f; for (int q = 0; q < 3; ++q) L.col[q] += sc * (hue[q] / hl * L.base - L.col[q]); }
         if (L.age == kConfirmFrames && !L.confirmedOnce) { L.confirmedOnce = true; record(1, L, pointing); }
-      } else if (witnesses) {
-        L.missing += 2;
+      } else if (L.state == 0) {
+        L.missing += 6;   // its own draw says off: out within half a second
       } else {
-        ++L.held;
+        ++L.held;         // not drawn: the last state holds
       }
       L.unseen = L.drawn ? 0 : L.unseen + 1;
-      L.drawn = false;
+      L.drawn = false; L.state = -1;
     }
     for (uint32_t k = 0; k < nLamps; ) {
       Lamp& L = lamps[k];
       if (L.missing > kMissingLimit || L.unseen > kUnseenLimit) {
-        if (L.confirmedOnce) record(2, L, L.support);
+        if (L.confirmedOnce) record(2, L, L.missing > kMissingLimit ? 1u : 0u);
         droppedApi[nDropped++] = L.api;
         L = lamps[nLamps - 1]; --nLamps; ++dropped;
       }
