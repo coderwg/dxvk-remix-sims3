@@ -1619,6 +1619,9 @@ struct Lamp {
   uint8_t kind;        // the LITE light type (3 point, 4 spot, 5 lamp shade, 6 tube)
   bool drawn;          // the object was drawn this frame (model lamps)
   bool confirmedOnce;  // it was forwarded at least once (for the event log)
+  float base;          // the game's brightness for it: intensity / 100 x the LITE colour's luminance (milestone 22b)
+  uint32_t unseen;     // consecutive frames its object was not drawn (model lamps)
+  uint32_t held;       // frames held in the last known state for want of witnesses (statistics)
 };
 
 // World register of the vertex shaders whose draws may contribute rays (the rig is only
@@ -1660,6 +1663,8 @@ struct LampSolver {
   static const int kMaxOrigins = 512;
   static const int kMaxVotes = 16;             // votes kept per point
   static const uint32_t kMissingLimit = 180;   // frames without support before a lamp is dropped (three seconds)
+  static const uint32_t kUnseenLimit = 600;    // frames a model lamp's object may go undrawn before the lamp is dropped (milestone 22b)
+  static constexpr float kWitness = 6.f;       // objects drawn this close to a model lamp's light are its witnesses: lit, their rays point at it
   static const uint32_t kConfirmFrames = 3;    // supported frames before a lamp is forwarded
   static const uint32_t kMinVotes = 3;         // votes at one height an origin needs to become a lamp
   static constexpr float kAxisDist = 0.35f;    // a ray votes for an object when it passes this close to the object's vertical axis...
@@ -1791,6 +1796,7 @@ struct LampSolver {
     Lamp& L = lamps[nLamps++];
     std::memset(&L, 0, sizeof L);
     for (int q = 0; q < 3; ++q) { L.anchor[q] = anchor[q]; L.pos[q] = pos[q]; L.col[q] = col[q] * intensity / 100.f; }
+    L.base = luminance(col) * intensity / 100.f;
     L.id = id; L.model = true; L.kind = kind; L.drawn = true; L.slot = freeSlot();
     if (L.slot >= 1) slotUsed[L.slot] = true;
     ++created;
@@ -1831,12 +1837,31 @@ struct LampSolver {
         for (uint8_t i = 0; i < a.n; ++i) if (std::fabs(a.y[i] - L.pos[1]) < kKeepHeight) idx[n++] = i;
       }
       L.support = n;
-      if (n == 0) { ++L.missing; continue; }
+      if (n == 0) {
+        // A model lamp without a ray pointing at it is off only when witnesses say so: objects
+        // drawn near its light whose rays go elsewhere. With none drawn (the camera looking
+        // away) the last state holds (milestone 22b: run 134 lost lit lamps to camera moves).
+        if (L.model) {
+          uint32_t witnesses = 0;
+          for (uint32_t o = 0; o < nOrigins; ++o) {
+            const float dx = origins[o][0] - L.pos[0], dy = origins[o][1] - L.pos[1], dz = origins[o][2] - L.pos[2];
+            if (std::fabs(dy) < 3.f && dx*dx + dz*dz < kWitness * kWitness && lampDist(origins[o], L.anchor) > 0.3f) ++witnesses;
+          }
+          if (witnesses < 2) { ++L.held; continue; }
+        }
+        ++L.missing; continue;
+      }
       L.missing = 0;
       if (L.age < 100000u) ++L.age;
       if (!L.model) { float ys[kMaxVotes]; for (uint8_t i = 0; i < n; ++i) ys[i] = a.y[idx[i]]; const float y = median(ys, n); const float s = L.age <= 1 ? 1.f : 0.1f; L.pos[1] += s * (y - L.pos[1]); }
       float c[3];
-      if (colourOf(a, idx, n, c)) { const float sc = L.age <= 1 ? 1.f : 0.2f; for (int q = 0; q < 3; ++q) L.col[q] += sc * (c[q] - L.col[q]); }
+      if (colourOf(a, idx, n, c)) {
+        if (L.model) {   // the rig gives the hue (the player's colour choice); the brightness is the game's own for this lamp
+          const float cl = luminance(c);
+          if (cl > 1e-6f) for (int q = 0; q < 3; ++q) c[q] = c[q] / cl * L.base;
+        }
+        const float sc = L.age <= 1 ? 1.f : 0.2f; for (int q = 0; q < 3; ++q) L.col[q] += sc * (c[q] - L.col[q]);
+      }
       if (L.model && L.age == kConfirmFrames && !L.confirmedOnce) { L.confirmedOnce = true; record(1, L, a.votes, n, true, false); }
     }
     // the objects drawn: new lamps where the rays cross at one height (only without the game's own table)
@@ -1869,10 +1894,10 @@ struct LampSolver {
         record(1, L, a.votes, n, spr, hasSelfRay(origins[o]));
       }
     }
-    // age out (a model lamp not drawn this frame counts as missing too: off screen, its light fades in three seconds)
-    for (uint32_t k = 0; k < nLamps; ++k) { if (lamps[k].model && !lamps[k].drawn) ++lamps[k].missing; lamps[k].drawn = false; }
+    // age out: unlit with witnesses for three seconds, or (a model lamp) its object undrawn for ten
+    for (uint32_t k = 0; k < nLamps; ++k) { if (lamps[k].model) lamps[k].unseen = lamps[k].drawn ? 0 : lamps[k].unseen + 1; lamps[k].drawn = false; }
     for (uint32_t k = 0; k < nLamps; ) {
-      if (lamps[k].missing > kMissingLimit) {
+      if (lamps[k].missing > kMissingLimit || (lamps[k].model && lamps[k].unseen > kUnseenLimit)) {
         if (!lamps[k].model || lamps[k].confirmedOnce) record(2, lamps[k], 0, 0, false, false);
         droppedApi[nDropped] = lamps[k].api; droppedSlot[nDropped] = lamps[k].slot; droppedSent[nDropped] = lamps[k].sent; ++nDropped;
         if (lamps[k].slot >= 1) slotUsed[lamps[k].slot] = false;
