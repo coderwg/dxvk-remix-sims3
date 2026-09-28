@@ -979,18 +979,12 @@ inline float skyDayLevel() { static float s = -1.f; if (s < 0.f) { int v = hookO
 inline float skyMinBrightness() { static float s = -1.f; if (s < 0.f) { int v = hookOption("skyMinBrightness", 30); if (v < 0) v = 0; if (v > 1000) v = 1000; s = (float) v / 1000.f; } return s; }
 inline float dayEvMax() { static float s = -99.f; if (s < -98.f) { int v = hookOption("dayEvMax", 500); if (v < -1000) v = -1000; if (v > 1000) v = 1000; s = (float) v / 100.f; } return s; }
 inline float nightEvMax() { static float s = -99.f; if (s < -98.f) { int v = hookOption("nightEvMax", 100); if (v < -1000) v = -1000; if (v > 1000) v = 1000; s = (float) v / 100.f; } return s; }
-// Lights through the Remix API (milestone 20b): apiLights = 1 forwards the sun as a distant
-// light and the lamps as sphere lights through the Remix API, with explicit radiance and size,
-// instead of fixed-function lights converted by the runtime (needs exposeRemixApi = True;
-// otherwise the fixed-function path stays). sunAngle = the sun's angular diameter, thousandths
-// of a degree (the runtime's conversion used 2 degrees); sunRadiance = radiance per unit of rig
-// colour, thousandths (the conversion used 1); lampRadius = the lamps' sphere radius in
-// thousandths of a unit; lampRadiance = radiance per unit of rig colour, thousandths.
-inline int apiLights() { static int s = -1; if (s < 0) s = hookOption("apiLights", 1) != 0; return s; }
-// apiLamps = 0 keeps the lamps on the fixed-function path while the sun goes through the API
-// (milestone 20d: until the lamps come from the bulb geometry, the solver's estimates wander
-// and the runtime's 4-unit conversion spheres hide that better than the API spheres).
-inline int apiLamps() { static int s = -1; if (s < 0) s = hookOption("apiLamps", 1) != 0; return s; }
+// The lights go to the runtime through the Remix API (milestones 20b, 23): the sun as a distant
+// light, the lamps as sphere lights, with explicit radiance and size. The API needs
+// exposeRemixApi = True in .trex\bridge.conf; without it there are no lights and one warning.
+// sunAngle = the sun's angular diameter, thousandths of a degree; sunRadiance = radiance per
+// unit of rig colour, thousandths; lampRadius = the lamps' sphere radius in thousandths of a
+// unit; lampRadiance = radiance per unit of colour, thousandths.
 inline float sunAngle() { static float s = -1.f; if (s < 0.f) { int v = hookOption("sunAngle", 2000); if (v < 100) v = 100; if (v > 90000) v = 90000; s = (float) v / 1000.f; } return s; }
 inline float sunRadiance() { static float s = -1.f; if (s < 0.f) { int v = hookOption("sunRadiance", 1000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
 inline float lampRadius() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampRadius", 150); if (v < 20) v = 20; s = (float) v / 1000.f; } return s; }
@@ -1579,50 +1573,36 @@ inline void worldPoint(const float* rows, const float* p, float* out) {
   for (int i = 0; i < 3; ++i) out[i] = rows[4*i] * p[0] + rows[4*i + 1] * p[1] + rows[4*i + 2] * p[2] + rows[4*i + 3];
 }
 
-// ---- lamps, from the per-object light rig (milestones 3a, 21) ----------------------------
-// The rig is computed by the game at each object's position, so a rig direction toward a
-// lamp is a ray from that object (its World translation, c12..c14 for the object shaders)
-// to the game's light position -- which the game keeps at the bulb -- and the rays of the
-// objects around one lamp converge there. The sun and the sky fills are the same direction
-// for every object (parallel rays never meet), so only local lights survive. The game keeps
-// no bulb geometry and no emissive map (the object shaders' s2 is the lot's light map, seen
-// in run 130: switching every lamp changed no draw of the main pass), so the rays are the
-// one pointer at the bulb. Free triangulation wandered (run 129: 114 lamps made and 107
-// dropped in 18 minutes), and snapping pairwise meeting points to the nearest object did not
-// help (run 131: 107,703 points over some object, 149,203 over nothing -- a furnished room
-// always has an object near a stray crossing). Since milestone 21b no rays are intersected:
-// each ray VOTES for the objects whose vertical axis it passes close to, at a bulb's height
-// above their origin. A ray on its way to a lamp elsewhere passes an object's axis too, so
-// votes alone still made lamps of chairs (run 132: 28 lamps in a house, a bulk switch-on
-// putting lights on the wrong objects); what only the true light position has is AGREEMENT
-// IN HEIGHT: rays from different objects cross the bulb's axis at the bulb, while they cross
-// a bystander's axis at scattered heights (milestone 21c). An object with three votes
-// crossing within 0.35 units of one height, two of them from directions more than 60
-// degrees apart, is a lamp: anchored to that object (its ground position and its identity),
-// its height that median, and it lives while rays keep crossing at that height -- a Sim
-// switching the lamp off ends them. API lights are not limited to the seven fixed-function
-// slots. A rig light straight above or below its own object (the lamp's own bulb, if the
-// game lists it) is recorded per object as a self ray, for the record.
+// ---- lamps (milestones 3a, 21, 22, 23) ----------------------------------------------------
+// A lamp is one of the game's own lights (the table above): its object's index buffer names the
+// model, the model's definition names the light, the object's World rows carry it to the
+// world. Whether it is ON comes from the per-object light rig the game uploads with every
+// object-shader draw: c0..c3 are unit directions toward the four strongest lights at that
+// object, c4..c7 their colours. An object right next to a lamp has that lamp among its
+// strongest lights whenever it is on, and not otherwise; a far object's rig is full of other
+// lights and proves nothing either way (runs 134-136). So only the objects drawn within two
+// units of a lamp's light are its witnesses: one of them pointing at the light says on, and
+// gives the colour the player set; one drawn and not pointing at it says off; none drawn
+// holds the last state. The game keeps a lamp's own light out of that lamp's rig (run 136),
+// so a lamp cannot vouch for itself.
 struct LampRay { float pos[3]; float dir[3]; float col[3]; };
 
 struct Lamp {
-  float pos[3]; float col[3];
-  float anchor[3];     // the origin of the object the lamp is anchored to: pos.xz = anchor.xz (milestone 21)
-  uint32_t id;         // the anchor quantised, the lamp's identity across frames (the API light's hash)
-  uint32_t support;    // rays voting for it this frame
-  uint32_t missing;    // consecutive frames without support
-  uint32_t age;        // supported frames so far (forwarded once >= kConfirmFrames)
-  int slot;            // fixed-function light index (1..7), or -1 (an API light needs none)
-  void* api;           // the Remix API light handle when forwarded that way (the device destroys it on drop)
-  float sentPos[3], sentCol[3]; bool sent;   // what the runtime holds for this lamp
-  bool model;          // from the game's own light definitions (milestone 22): the position is exact, the rays only say lit or not
-  uint8_t kind;        // the LITE light type (3 point, 4 spot, 5 lamp shade, 6 tube)
-  bool drawn;          // the object was drawn this frame (model lamps)
-  bool confirmedOnce;  // it was forwarded at least once (for the event log)
-  float base;          // the game's brightness for it: intensity / 100 x the LITE colour's luminance (milestone 22b)
-  uint32_t unseen;     // consecutive frames its object was not drawn (model lamps)
-  uint32_t held;       // frames held in the last known state for want of witnesses (statistics)
-  uint32_t witnesses;  // objects drawn this frame within kWitness of the light whose rigs do not point at it (milestone 22d: the evidence of off)
+  float pos[3];        // the light, in the world (from the game's definition through the object's World rows)
+  float col[3];        // colour x brightness as forwarded
+  float anchor[3];     // the object's origin
+  uint32_t id;         // the object's origin quantised, with the light's index: the lamp's identity across frames (the API light's hash)
+  uint8_t kind;        // the light type (3 point, 4 spot, 5 lamp shade, 6 tube)
+  float base;          // the game's brightness for it: intensity / 100 x the definition's colour luminance
+  uint32_t support;    // witness rays pointing at the light this frame
+  uint32_t missing;    // grows by two per frame of witnesses saying off
+  uint32_t age;        // supported frames (forwarded once >= kConfirmFrames)
+  uint32_t unseen;     // consecutive frames its object was not drawn
+  uint32_t held;       // frames held for want of witnesses (statistics)
+  bool drawn;          // the object was drawn this frame
+  bool confirmedOnce;  // forwarded at least once (the event log)
+  void* api;           // the Remix API light handle (the device destroys it on drop)
+  float sentPos[3], sentCol[3]; bool sent;   // what the runtime holds
 };
 
 // World register of the vertex shaders whose draws may contribute rays (the rig is only
@@ -1645,51 +1625,25 @@ inline float lampDist(const float* a, const float* b) {
   return len3(d);
 }
 
-// Cramer's rule for a 3x3 system; false when singular (all rays parallel).
-inline bool solve3(const float M[3][3], const float* r, float* x) {
-  const float det = M[0][0]*(M[1][1]*M[2][2]-M[1][2]*M[2][1]) - M[0][1]*(M[1][0]*M[2][2]-M[1][2]*M[2][0]) + M[0][2]*(M[1][0]*M[2][1]-M[1][1]*M[2][0]);
-  if (std::fabs(det) < 1e-4f) return false;
-  for (int c = 0; c < 3; ++c) {
-    float A[3][3];
-    for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) A[i][j] = (j == c) ? r[i] : M[i][j];
-    x[c] = (A[0][0]*(A[1][1]*A[2][2]-A[1][2]*A[2][1]) - A[0][1]*(A[1][0]*A[2][2]-A[1][2]*A[2][0]) + A[0][2]*(A[1][0]*A[2][1]-A[1][1]*A[2][0])) / det;
-  }
-  return true;
-}
-
 struct LampSolver {
   static const int kMaxRays = 768;
-  static const int kMaxLamps = 48;             // API lights; the fixed-function fallback takes the first seven (slots 1..7)
-  static const int kMaxSlots = 7;
+  static const int kMaxLamps = 48;
   static const int kMaxOrigins = 512;
-  static const int kMaxVotes = 16;             // votes kept per point
-  static const uint32_t kMissingLimit = 180;   // frames without support before a lamp is dropped (three seconds)
-  static const uint32_t kUnseenLimit = 600;    // frames a model lamp's object may go undrawn before the lamp is dropped (milestone 22b)
-  static constexpr float kWitness = 2.f;       // objects drawn this close to a model lamp's light are its witnesses: an object's rig holds only its
-                                               // four strongest lights, so only a near one is sure to point at the lamp when it is on (milestone 22d)
+  static const uint32_t kMissingLimit = 180;   // off after a second and a half of witnesses saying so (missing grows by two per frame)
+  static const uint32_t kUnseenLimit = 600;    // released after ten seconds undrawn
   static const uint32_t kConfirmFrames = 3;    // supported frames before a lamp is forwarded
-  static const uint32_t kMinVotes = 3;         // votes at one height an origin needs to become a lamp
-  static constexpr float kAxisDist = 0.35f;    // a ray votes for an object when it passes this close to the object's vertical axis...
-  static constexpr float kMinAbove = -1.5f, kMaxAbove = 3.5f;   // ...at a height this far from the object's origin (a bulb over a base, under a ceiling mount)
-  static constexpr float kMinT = 0.3f, kMaxT = 20.f;            // ...this far along the ray
-  static constexpr float kSameHeight = 0.35f;  // votes within this of the median height agree (milestone 21c)
-  static constexpr float kKeepHeight = 0.5f;   // a known lamp's support: votes within this of its height
-  LampRay rays[kMaxRays]; uint32_t nRays = 0;
-  float origins[kMaxOrigins][3]; uint32_t nOrigins = 0;   // the object origins drawn this frame (milestone 21)
-  float selfOrigins[64][3]; uint32_t nSelf = 0;           // origins whose rig holds a light straight above or below them (a self ray)
-  // The votes gathered for one point of the ground plane this frame.
-  struct Acc { uint32_t votes; uint8_t n; float y[kMaxVotes]; float val[kMaxVotes]; float bear[kMaxVotes]; float col[kMaxVotes][3]; };
-  Acc acc[kMaxOrigins];
+  static constexpr float kWitness = 2.f;       // a witness stands this close to the light in the ground plane (and within 3 units in height)
+  static constexpr float kAim = 0.45f;         // a witness ray points at the light when it passes this close to it
+  static constexpr float kMinT = 0.3f, kMaxT = 20.f;
+  LampRay rays[kMaxRays]; uint32_t nRays = 0;             // this frame's rig rays
+  float origins[kMaxOrigins][3]; uint32_t nOrigins = 0;   // this frame's object origins (every object-shader draw)
   Lamp lamps[kMaxLamps]; uint32_t nLamps = 0;
-  bool slotUsed[kMaxSlots + 1] = {};           // index = slot; slot 0 (the sun) never used here
-  uint32_t created = 0, dropped = 0, votesTotal = 0, objectsVoted = 0, selfRaysTotal = 0;   // statistics
-  // The lamps dropped this frame: what the device has to release.
-  void* droppedApi[kMaxLamps]; int droppedSlot[kMaxLamps]; bool droppedSent[kMaxLamps]; uint32_t nDropped = 0;
-  // What happened this frame, for the log (the device writes it): 1 created, 2 dropped.
-  struct Event { uint8_t kind; float anchor[3]; float y; float col[3]; uint32_t votes, agreeing, age; bool spread, selfRay; };
+  uint32_t created = 0, dropped = 0;                      // statistics
+  void* droppedApi[kMaxLamps]; uint32_t nDropped = 0;     // the API lights of the lamps dropped this frame, for the device to destroy
+  struct Event { uint8_t kind; float anchor[3]; float y; float col[3]; uint32_t votes, age; };   // 1 lit (first forwarded), 2 dropped
   Event events[16]; uint32_t nEvents = 0;
 
-  // The anchor quantised to a quarter unit, hashed: the same object gives the same id.
+  // An origin quantised to a quarter unit, hashed: the same object gives the same id.
   static uint32_t originId(const float* p) {
     const int32_t q[3] = { (int32_t) std::floor(p[0] * 4.f + 0.5f), (int32_t) std::floor(p[1] * 4.f + 0.5f), (int32_t) std::floor(p[2] * 4.f + 0.5f) };
     uint32_t h = 2166136261u;
@@ -1709,7 +1663,6 @@ struct LampSolver {
       if (len < 0.9f || len > 1.1f || luminance(c) < 0.02f) continue;
       const float nd[3] = { d[0]/len, d[1]/len, d[2]/len };
       if (sunDir && dot3(sunDir, nd) > 0.999f) continue;
-      if (std::fabs(nd[1]) > 0.95f && !known && nSelf < 64) { for (int j = 0; j < 3; ++j) selfOrigins[nSelf][j] = pos[j]; ++nSelf; ++selfRaysTotal; }   // noted; the ray is kept (milestone 22c: a lamp's ray to its own bulb)
       bool dup = false;   // the same object's earlier draws carry the same rig
       for (uint32_t k = nRays > 4 ? nRays - 4 : 0; k < nRays && !dup; ++k)
         dup = lampDist(rays[k].pos, pos) < 1e-3f && dot3(rays[k].dir, nd) > 0.9999f;
@@ -1720,69 +1673,8 @@ struct LampSolver {
     }
   }
 
-  // Does ray r pass the vertical axis through point O at a bulb's height? y receives the
-  // crossing height, d the distance from the ray's object to that point.
-  static bool passes(const LampRay& r, const float* O, float& y, float& d) {
-    const float hxz = std::sqrt(r.dir[0]*r.dir[0] + r.dir[2]*r.dir[2]);
-    if (hxz < 0.15f) return false;
-    const float wx = O[0] - r.pos[0], wz = O[2] - r.pos[2];
-    if (std::fabs(wx) > kMaxT || std::fabs(wz) > kMaxT) return false;
-    const float t = (wx * r.dir[0] + wz * r.dir[2]) / (hxz * hxz);
-    if (t < kMinT || t > kMaxT) return false;
-    const float dx = r.pos[0] + t * r.dir[0] - O[0], dz = r.pos[2] + t * r.dir[2] - O[2];
-    if (dx*dx + dz*dz > kAxisDist * kAxisDist) return false;
-    y = r.pos[1] + t * r.dir[1];
-    if (y - O[1] < kMinAbove || y - O[1] > kMaxAbove) return false;
-    const float dy = y - r.pos[1];
-    d = std::sqrt(wx*wx + wz*wz + dy*dy);
-    return true;
-  }
-
-  static void clearAcc(Acc& a) { a.votes = 0; a.n = 0; }
-  static void vote(Acc& a, const LampRay& r, const float* O, float y, float d) {
-    ++a.votes;
-    if (a.n < kMaxVotes) {
-      a.y[a.n] = y; a.val[a.n] = luminance(r.col) * d * d; a.bear[a.n] = std::atan2(r.pos[2] - O[2], r.pos[0] - O[0]);
-      for (int q = 0; q < 3; ++q) a.col[a.n][q] = r.col[q];
-      ++a.n;
-    }
-  }
-  static float median(float* v, uint8_t n) { std::nth_element(v, v + n / 2, v + n); return v[n / 2]; }
-  // The votes crossing at one height: the median of the crossing heights and the indices of
-  // the votes within kSameHeight of it (returns their count).
-  static uint8_t agreeing(const Acc& a, float& yMed, uint8_t* idx) {
-    if (a.n == 0) return 0;
-    float ys[kMaxVotes]; for (uint8_t i = 0; i < a.n; ++i) ys[i] = a.y[i];
-    yMed = median(ys, a.n);
-    uint8_t n = 0;
-    for (uint8_t i = 0; i < a.n; ++i) if (std::fabs(a.y[i] - yMed) < kSameHeight) idx[n++] = i;
-    return n;
-  }
-  // Two voters more than 60 degrees apart around the point: not a line of objects looking through it.
-  static bool spread(const Acc& a, const uint8_t* idx, uint8_t n) {
-    for (uint8_t i = 0; i < n; ++i) for (uint8_t j = (uint8_t) (i + 1); j < n; ++j) {
-      float d = std::fabs(a.bear[idx[i]] - a.bear[idx[j]]); if (d > 3.14159265f) d = 6.2831853f - d;
-      if (d > 1.0471976f) return true;
-    }
-    return false;
-  }
-  // The colour from the given votes: the hue is the summed rig colours; the intensity is the
-  // median of luminance x distance^2 (an inverse-square reading of the attenuated colours), as
-  // the colour at three units. Independent of which objects happen to be drawn.
-  static bool colourOf(const Acc& a, const uint8_t* idx, uint8_t n, float* out) {
-    if (n == 0) return false;
-    float sum[3] = {}, vals[kMaxVotes];
-    for (uint8_t i = 0; i < n; ++i) { for (int q = 0; q < 3; ++q) sum[q] += a.col[idx[i]][q]; vals[i] = a.val[idx[i]]; }
-    const float sl = luminance(sum);
-    if (sl <= 1e-6f) return false;
-    const float at3 = median(vals, n) / 9.f;
-    for (int q = 0; q < 3; ++q) out[q] = sum[q] / sl * at3;
-    return true;
-  }
-  bool hasSelfRay(const float* O) const { for (uint32_t k = 0; k < nSelf; ++k) if (lampDist(selfOrigins[k], O) < 0.3f) return true; return false; }
-
-  // A lamp from the game's own definitions (milestone 22), once per draw of its object: the
-  // light's exact world position, the LITE colour as the fallback until the rays give one.
+  // A lamp from the game's definitions, once per draw of its object: the light's exact world
+  // position; the definition's colour and intensity until the witnesses give the colour.
   void addModelLamp(uint32_t id, const float* anchor, const float* pos, const float* col, float intensity, uint8_t kind) {
     for (uint32_t k = 0; k < nLamps; ++k) {
       Lamp& L = lamps[k];
@@ -1796,147 +1688,68 @@ struct LampSolver {
     std::memset(&L, 0, sizeof L);
     for (int q = 0; q < 3; ++q) { L.anchor[q] = anchor[q]; L.pos[q] = pos[q]; L.col[q] = col[q] * intensity / 100.f; }
     L.base = luminance(col) * intensity / 100.f;
-    L.id = id; L.model = true; L.kind = kind; L.drawn = true; L.slot = freeSlot();
-    if (L.slot >= 1) slotUsed[L.slot] = true;
+    L.id = id; L.kind = kind; L.drawn = true;
     ++created;
   }
-  // Does ray r pass within `radius` of point P, 0.3 to 20 units along it? d receives the distance from the ray's object to P.
-  static bool passesPoint(const LampRay& r, const float* P, float radius, float& d) {
+
+  // Is the object at o a witness of L: within kWitness of its light in the ground plane, within
+  // 3 units in height, and not the lamp's own object?
+  static bool witness(const float* o, const Lamp& L) {
+    const float dx = o[0] - L.pos[0], dy = o[1] - L.pos[1], dz = o[2] - L.pos[2];
+    return std::fabs(dy) < 3.f && dx*dx + dz*dz < kWitness * kWitness && lampDist(o, L.anchor) > 0.3f;
+  }
+  // Does ray r pass within `radius` of point P, kMinT to kMaxT units along it?
+  static bool passesPoint(const LampRay& r, const float* P, float radius) {
     const float v[3] = { P[0] - r.pos[0], P[1] - r.pos[1], P[2] - r.pos[2] };
     const float t = dot3(v, r.dir);
     if (t < kMinT || t > kMaxT) return false;
     const float perp[3] = { v[0] - t * r.dir[0], v[1] - t * r.dir[1], v[2] - t * r.dir[2] };
-    if (len3(perp) > radius) return false;
-    d = len3(v);
-    return true;
+    return len3(perp) <= radius;
   }
-  int freeSlot() const { for (int s = 1; s <= kMaxSlots; ++s) if (!slotUsed[s]) return s; return -1; }
-  void record(uint8_t kind, const Lamp& L, uint32_t votes, uint32_t agree, bool spr, bool self) {
+  void record(uint8_t kind, const Lamp& L, uint32_t votes) {
     if (nEvents >= 16) return;
     Event& e = events[nEvents++];
     e.kind = kind; for (int q = 0; q < 3; ++q) { e.anchor[q] = L.anchor[q]; e.col[q] = L.col[q]; }
-    e.y = L.pos[1]; e.votes = votes; e.agreeing = agree; e.age = L.age; e.spread = spr; e.selfRay = self;
+    e.y = L.pos[1]; e.votes = votes; e.age = L.age;
   }
 
-  // Frame end: the rays vote for the lamps known (every frame) and, when `discover`, for the
-  // objects drawn; refine, create, age out. Returns the number of lamps.
-  uint32_t solve(bool discover = true) {
+  // Frame end: the witnesses decide each lamp's state; the lamps gone are handed to the device.
+  uint32_t solve() {
     nDropped = 0; nEvents = 0;
-    // the lamps known: support from the votes crossing at the lamp's height, height, colour;
-    // a model lamp's position is exact, so its votes are the rays passing its light (milestone 22)
     for (uint32_t k = 0; k < nLamps; ++k) {
       Lamp& L = lamps[k];
-      Acc a; clearAcc(a);
-      uint8_t idx[kMaxVotes]; uint8_t n = 0;
-      if (L.model) {
-        // any ray pointing at the light says lit (the game's own lights are not in their own
-        // object's rig -- run 136: none of 46 lit lamps had one -- so the neighbours are the witnesses)
-        for (uint32_t i = 0; i < nRays; ++i) { float d; if (passesPoint(rays[i], L.pos, 0.45f, d)) vote(a, rays[i], L.pos, L.pos[1], d); }
-        for (uint8_t i = 0; i < a.n; ++i) idx[n++] = i;
-      } else {
-        for (uint32_t i = 0; i < nRays; ++i) { float y, d; if (passes(rays[i], L.anchor, y, d)) vote(a, rays[i], L.anchor, y, d); }
-        for (uint8_t i = 0; i < a.n; ++i) if (std::fabs(a.y[i] - L.pos[1]) < kKeepHeight) idx[n++] = i;
-      }
-      L.support = n;
-      if (n == 0) {
-        // A model lamp without a ray pointing at it is off only when witnesses say so: objects
-        // drawn near its light whose rays go elsewhere. With none drawn (the camera looking
-        // away) the last state holds (milestone 22b: run 134 lost lit lamps to camera moves).
-        if (L.model) {
-          // off only on the word of a near witness: an object drawn within kWitness of the light
-          // (not the lamp's own) whose rig does not point at it; far objects prove nothing, their
-          // rigs are full of stronger lights. Without a witness the last state holds.
-          L.witnesses = 0;
-          for (uint32_t o = 0; o < nOrigins; ++o) {
-            const float dx = origins[o][0] - L.pos[0], dy = origins[o][1] - L.pos[1], dz = origins[o][2] - L.pos[2];
-            if (std::fabs(dy) < 3.f && dx*dx + dz*dz < kWitness * kWitness && lampDist(origins[o], L.anchor) > 0.3f) ++L.witnesses;
-          }
-          if (L.witnesses == 0) { ++L.held; continue; }
-          L.missing += 2;   // off within a second and a half
-          continue;
-        }
-        ++L.missing; continue;
-      }
-      L.missing = 0;
-      if (L.age < 100000u) ++L.age;
-      if (!L.model) { float ys[kMaxVotes]; for (uint8_t i = 0; i < n; ++i) ys[i] = a.y[idx[i]]; const float y = median(ys, n); const float s = L.age <= 1 ? 1.f : 0.1f; L.pos[1] += s * (y - L.pos[1]); }
-      float c[3];
-      if (colourOf(a, idx, n, c)) {
-        if (L.model) {   // the rig gives the hue (the player's colour choice); the brightness is the game's own for this lamp
-          const float cl = luminance(c);
-          if (cl > 1e-6f) for (int q = 0; q < 3; ++q) c[q] = c[q] / cl * L.base;
-        }
-        const float sc = L.age <= 1 ? 1.f : 0.2f; for (int q = 0; q < 3; ++q) L.col[q] += sc * (c[q] - L.col[q]);
-      }
-      if (L.model && L.age == kConfirmFrames && !L.confirmedOnce) { L.confirmedOnce = true; record(1, L, a.votes, n, true, false); }
-    }
-    // the objects drawn: new lamps where the rays cross at one height (only without the game's own table)
-    if (discover && liteTable().n == 0) {
-      for (uint32_t o = 0; o < nOrigins; ++o) clearAcc(acc[o]);
+      uint32_t witnesses = 0, pointing = 0; float sum[3] = {};
+      for (uint32_t o = 0; o < nOrigins; ++o) if (witness(origins[o], L)) ++witnesses;
       for (uint32_t i = 0; i < nRays; ++i)
-        for (uint32_t o = 0; o < nOrigins; ++o) { float y, d; if (passes(rays[i], origins[o], y, d)) { vote(acc[o], rays[i], origins[o], y, d); ++votesTotal; } }
-      for (uint32_t o = 0; o < nOrigins; ++o) {
-        Acc& a = acc[o];
-        if (a.votes < kMinVotes) continue;
-        uint8_t idx[kMaxVotes]; float yMed;
-        const uint8_t n = agreeing(a, yMed, idx);
-        if (n < kMinVotes) continue;
-        const bool spr = spread(a, idx, n);
-        if (!spr) continue;
-        ++objectsVoted;
-        if (nLamps >= (uint32_t) kMaxLamps) break;
-        bool known = false;
-        for (uint32_t k = 0; k < nLamps && !known; ++k) known = lampDist(lamps[k].anchor, origins[o]) < 0.5f;
-        if (known) continue;
-        Lamp& L = lamps[nLamps++];
-        std::memset(&L, 0, sizeof L);
-        for (int q = 0; q < 3; ++q) { L.anchor[q] = origins[o][q]; L.pos[q] = origins[o][q]; }
-        L.pos[1] = yMed;
-        colourOf(a, idx, n, L.col);
-        L.id = originId(origins[o]);
-        L.support = n; L.age = 1; L.slot = freeSlot();
-        if (L.slot >= 1) slotUsed[L.slot] = true;
-        ++created;
-        record(1, L, a.votes, n, spr, hasSelfRay(origins[o]));
+        if (witness(rays[i].pos, L) && passesPoint(rays[i], L.pos, kAim)) { ++pointing; for (int q = 0; q < 3; ++q) sum[q] += rays[i].col[q]; }
+      L.support = pointing;
+      if (pointing) {
+        L.missing = 0;
+        if (L.age < 100000u) ++L.age;
+        const float sl = luminance(sum);   // the witnesses' hue (the player's colour choice) at the game's brightness
+        if (sl > 1e-6f) { const float sc = L.age <= 1 ? 1.f : 0.2f; for (int q = 0; q < 3; ++q) L.col[q] += sc * (sum[q] / sl * L.base - L.col[q]); }
+        if (L.age == kConfirmFrames && !L.confirmedOnce) { L.confirmedOnce = true; record(1, L, pointing); }
+      } else if (witnesses) {
+        L.missing += 2;
+      } else {
+        ++L.held;
       }
+      L.unseen = L.drawn ? 0 : L.unseen + 1;
+      L.drawn = false;
     }
-    // age out: unlit with witnesses for three seconds, or (a model lamp) its object undrawn for ten
-    for (uint32_t k = 0; k < nLamps; ++k) { if (lamps[k].model) lamps[k].unseen = lamps[k].drawn ? 0 : lamps[k].unseen + 1; lamps[k].drawn = false; }
     for (uint32_t k = 0; k < nLamps; ) {
-      if (lamps[k].missing > kMissingLimit || (lamps[k].model && lamps[k].unseen > kUnseenLimit)) {
-        if (!lamps[k].model || lamps[k].confirmedOnce) record(2, lamps[k], lamps[k].witnesses, 0, false, false);
-        droppedApi[nDropped] = lamps[k].api; droppedSlot[nDropped] = lamps[k].slot; droppedSent[nDropped] = lamps[k].sent; ++nDropped;
-        if (lamps[k].slot >= 1) slotUsed[lamps[k].slot] = false;
-        lamps[k] = lamps[nLamps - 1]; --nLamps; ++dropped;
+      Lamp& L = lamps[k];
+      if (L.missing > kMissingLimit || L.unseen > kUnseenLimit) {
+        if (L.confirmedOnce) record(2, L, L.support);
+        droppedApi[nDropped++] = L.api;
+        L = lamps[nLamps - 1]; --nLamps; ++dropped;
       }
       else ++k;
     }
-    nRays = 0; nOrigins = 0; nSelf = 0;
+    nRays = 0; nOrigins = 0;
     return nLamps;
   }
 };
-
-inline void makeLampLight(const Lamp& L, D3DLIGHT9& l) {
-  std::memset(&l, 0, sizeof l);
-  l.Type = D3DLIGHT_POINT;
-  l.Diffuse.r = L.col[0] > 0.f ? L.col[0] : 0.f;
-  l.Diffuse.g = L.col[1] > 0.f ? L.col[1] : 0.f;
-  l.Diffuse.b = L.col[2] > 0.f ? L.col[2] : 0.f;
-  l.Diffuse.a = 1.f;
-  l.Specular = l.Diffuse;
-  l.Position.x = L.pos[0]; l.Position.y = L.pos[1]; l.Position.z = L.pos[2];
-  // The runtime solves brightness / (a0 + a1 d + a2 d^2) = end value for d, clamps it to
-  // Range, and squares it for the intensity (then rtx.lightConversionIntensityFactor and
-  // rtx.lightConversionMaxIntensity apply). A mild quadratic term and a room-sized range
-  // keep that distance bounded; the rig colour's magnitude scales it per lamp.
-  // Run 18: with 0.2 the lamps outshone the midday sun and blew the interiors out to white
-  // (the runtime's intensity grows with the square of the end distance). A steep quadratic
-  // term keeps that distance to a few units.
-  l.Range = 10.f;
-  l.Attenuation0 = 1.f;
-  l.Attenuation1 = 0.f;
-  l.Attenuation2 = 4.f;
-}
 
 inline uint64_t fnv1a64(const void* bytes, size_t len) {
   const unsigned char* p = static_cast<const unsigned char*>(bytes);

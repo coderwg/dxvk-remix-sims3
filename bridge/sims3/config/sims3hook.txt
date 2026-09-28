@@ -10,20 +10,17 @@
 terrain = 1
 ringTrace = 0
 markKey = 220
-# apiLights     1 = the sun and the lamps go to the runtime as Remix API lights with explicit radiance and size (needs exposeRemixApi);
-#               0 = fixed-function lights converted by the runtime (a 2-degree sun at intensity 1, 4-unit spheres for lamps)
-# apiLamps      0 = the lamps stay on the fixed-function path (4-unit spheres) while the sun goes through the API
+# The lights go to the runtime through the Remix API (exposeRemixApi = True in .trex\bridge.conf); the lamps are the
+# game's own, from sims3lights.txt next to the DLL (sims3/tools/lite_table.py --hook writes it).
 # sunAngle      the sun's angular diameter in thousandths of a degree
 # sunRadiance   the sun's radiance per unit of rig colour, thousandths
 # lampRadius    the lamps' sphere radius in thousandths of a unit
-# lampRadiance  the lamps' radiance per unit of rig colour, thousandths
+# lampRadiance  the lamps' radiance per unit of colour, thousandths
 skyFromSun = 1
 skyDayLevel = 900
 skyMinBrightness = 30
 dayEvMax = 500
 nightEvMax = 100
-apiLights = 1
-apiLamps = 1
 sunAngle = 2000
 sunRadiance = 1000
 lampRadius = 150

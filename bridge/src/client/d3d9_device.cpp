@@ -1827,17 +1827,17 @@ static void sims3LogStats(bool withTable) {
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   state: the game's put back %u times; masked writes emulated %u + %u + %u copied (skipped %u, copy failed %u)",
            h.restoreCount, h.maskEmuA, h.maskEmuB, h.maskEmuC, h.maskEmuSkipped, h.copyFailed);
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   lights: lamps %u (created %u, dropped %u, %u light calls; %u ray votes for objects, %u times an object qualified, %u self rays); sun updates %u, frames without shadow rows %u, frames without a sun candidate %u, sun luminance now %.3f",
-           h.lamps.nLamps, h.lamps.created, h.lamps.dropped, h.lampEvents, h.lamps.votesTotal, h.lamps.objectsVoted, h.lamps.selfRaysTotal, h.sunChanges, h.framesNoShadow, h.framesNoSunVote, sims3cam::luminance(h.sun.col));
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   lights: lamps %u (lit %u times, out %u times, %u light calls); sun updates %u, frames without shadow rows %u, frames without a sun candidate %u, sun luminance now %.3f",
+           h.lamps.nLamps, h.lamps.created, h.lamps.dropped, h.lampEvents, h.sunChanges, h.framesNoShadow, h.framesNoSunVote, sims3cam::luminance(h.sun.col));
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   night: sun level %.3f (day reference %.3f), sky brightness %.3f and exposure ceiling %.2f EV sent %u times%s",
            h.skyLevel, h.skyDayRef, h.skyBrightnessSent, h.evMaxSent, h.skySends, GlobalOptions::getExposeRemixApi() ? "" : " (Remix API off: nothing sent)");
   Logger::info(msg);
   uint32_t lampHandles = 0;
   for (uint32_t k = 0; k < h.lamps.nLamps; ++k) if (h.lamps.lamps[k].api) ++lampHandles;
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   api lights: %s; %u calls, sun %s, %u lamp handles; the game's light table: %u models read from sims3lights.txt (%u lines), %u meshes matched",
-           (sims3cam::apiLights() && GlobalOptions::getExposeRemixApi()) ? (sims3cam::apiLamps() ? "on" : "sun only (lamps fixed-function)") : "off (fixed-function lights)", h.apiLightCalls, h.sunApi ? "live" : "none", lampHandles,
-           sims3cam::liteTable().n, sims3cam::liteTable().lines, h.liteMatches);
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   api lights: %s; %u calls, sun %s, %u lamp handles; the game's light table: %s",
+           GlobalOptions::getExposeRemixApi() ? "on" : "off (no lights: exposeRemixApi is not set)", h.apiLightCalls, h.sunApi ? "live" : "none", lampHandles,
+           sims3cam::liteTable().n ? format_string("%u models read from sims3lights.txt, %u meshes matched", sims3cam::liteTable().n, h.liteMatches).c_str() : "no sims3lights.txt next to the DLL (no lamps; run sims3/tools/lite_table.py --hook)");
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   walls: %u draws, openings cut in %u (%u triangles cut, %u removed, %u hidden dropped; %u geometries built, %u evicted, %u build failures, %u skipped, %u masks decoded)",
            h.wallDraws, h.wallCutDraws, h.wallCutTriangles, h.wallRemovedTriangles, h.wallHiddenTriangles, h.wallBuilt, h.wallEvicted, h.wallBuildFailed, h.wallSkipped, h.wallMasksDecoded);
@@ -1944,54 +1944,44 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
     h.frameDraws = 0;
   }
 
-  // The Sims 3 camera hook: lamps from this frame's object rigs (milestone 21b: the rays vote for
-  // the objects they pass over) -> API sphere lights at the bulb, or fixed-function point lights
-  // 1..7 without the API.
+  // The Sims 3 camera hook: the lamps (milestone 23): the game's own lights, drawn as Remix API
+  // sphere lights while their witnesses say they are on.
   if (sims3cam::enabled()) {
     auto& h = g_sims3;
-    const bool apiLights = sims3cam::apiLights() && sims3cam::apiLamps() && GlobalOptions::getExposeRemixApi();   // milestones 20b, 20d
+    const bool api = GlobalOptions::getExposeRemixApi();
     const uint32_t raysThisFrame = h.lamps.nRays;
-    h.lamps.solve((h.frames & 3) == 0);   // the objects' votes every fourth frame; the known lamps' support every frame
-    for (uint32_t k = 0; k < h.lamps.nEvents && h.lampEventsLogged < 120; ++k) {   // every lamp's birth and death, while the budget lasts (milestone 21c)
+    h.lamps.solve();
+    for (uint32_t k = 0; k < h.lamps.nEvents && h.lampEventsLogged < 120; ++k) {   // every lamp's first light and its end, while the budget lasts
       const sims3cam::LampSolver::Event& e = h.lamps.events[k];
       ++h.lampEventsLogged; char msg[260];
       if (e.kind == 1)
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: lamp lit at frame %u on the object at (%.1f, %.1f, %.1f), light height %.1f: %u votes, %u counted, colour %.2f,%.2f,%.2f",
-                 h.frames, e.anchor[0], e.anchor[1], e.anchor[2], e.y, e.votes, e.agreeing, e.col[0], e.col[1], e.col[2]);
+        snprintf(msg, sizeof msg, "Sims 3 camera hook: lamp lit at frame %u on the object at (%.1f, %.1f, %.1f), light height %.1f: %u witness rays, colour %.2f,%.2f,%.2f",
+                 h.frames, e.anchor[0], e.anchor[1], e.anchor[2], e.y, e.votes, e.col[0], e.col[1], e.col[2]);
       else
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: lamp dropped at frame %u, the object at (%.1f, %.1f, %.1f), bulb height %.1f, after %u supported frames, %u near witnesses at the end", h.frames, e.anchor[0], e.anchor[1], e.anchor[2], e.y, e.age, e.votes);
+        snprintf(msg, sizeof msg, "Sims 3 camera hook: lamp out at frame %u, the object at (%.1f, %.1f, %.1f), light height %.1f, after %u lit frames", h.frames, e.anchor[0], e.anchor[1], e.anchor[2], e.y, e.age);
       Logger::info(msg);
     }
     for (uint32_t k = 0; k < h.lamps.nDropped; ++k) {   // the lamps gone this frame
-      if (h.lamps.droppedApi[k]) { remixapi::remixapi_DestroyLight((remixapi_LightHandle) h.lamps.droppedApi[k]); ++h.apiLightCalls; }
-      else if (h.lamps.droppedSlot[k] >= 1 && h.lamps.droppedSent[k]) LightEnable((DWORD) h.lamps.droppedSlot[k], FALSE);
-      ++h.lampEvents;
+      if (h.lamps.droppedApi[k]) { remixapi::remixapi_DestroyLight((remixapi_LightHandle) h.lamps.droppedApi[k]); ++h.apiLightCalls; ++h.lampEvents; }
     }
-    for (uint32_t k = 0; k < h.lamps.nLamps; ++k) {
+    for (uint32_t k = 0; k < h.lamps.nLamps && api; ++k) {
       sims3cam::Lamp& L = h.lamps.lamps[k];
       if (L.age < sims3cam::LampSolver::kConfirmFrames) continue;
-      const bool changed = !L.sent || sims3cam::lampDist(L.sentPos, L.pos) > 0.25f ||   // a real move, not the estimate's jitter
+      const bool changed = !L.sent || sims3cam::lampDist(L.sentPos, L.pos) > 0.25f ||
                            std::fabs(L.sentCol[0] - L.col[0]) > 0.1f || std::fabs(L.sentCol[1] - L.col[1]) > 0.1f || std::fabs(L.sentCol[2] - L.col[2]) > 0.1f;
       if (changed) {
-        if (apiLights) {
-          L.api = sims3ApiLamp(L.api, L); ++h.apiLightCalls;
-        } else if (L.slot >= 1) {
-          D3DLIGHT9 light;
-          sims3cam::makeLampLight(L, light);
-          SetLight((DWORD) L.slot, &light);
-          if (!L.sent) LightEnable((DWORD) L.slot, TRUE);
-        }
+        L.api = sims3ApiLamp(L.api, L); ++h.apiLightCalls;
         for (int q = 0; q < 3; ++q) { L.sentPos[q] = L.pos[q]; L.sentCol[q] = L.col[q]; }
         L.sent = true; ++h.lampEvents;
         if (!h.loggedLamp) {
           h.loggedLamp = true;
           char msg[260];
-          snprintf(msg, sizeof msg, "Sims 3 camera hook: first lamp forwarded (%s) at (%.1f, %.1f, %.1f), anchored to the object at (%.1f, %.1f, %.1f), colour %.2f,%.2f,%.2f, from %u votes; %u rig rays this frame",
-                   apiLights ? "API sphere light" : "fixed-function light", L.pos[0], L.pos[1], L.pos[2], L.anchor[0], L.anchor[1], L.anchor[2], L.col[0], L.col[1], L.col[2], L.support, raysThisFrame);
+          snprintf(msg, sizeof msg, "Sims 3 camera hook: first lamp forwarded as an API sphere light at (%.1f, %.1f, %.1f), the object at (%.1f, %.1f, %.1f), colour %.2f,%.2f,%.2f, %u witness rays; %u rig rays this frame",
+                   L.pos[0], L.pos[1], L.pos[2], L.anchor[0], L.anchor[1], L.anchor[2], L.col[0], L.col[1], L.col[2], L.support, raysThisFrame);
           Logger::info(msg);
         }
       }
-      if (L.api) remixapi::remixapi_DrawLightInstance((remixapi_LightHandle) L.api);   // every frame the lamp exists
+      if (L.api) remixapi::remixapi_DrawLightInstance((remixapi_LightHandle) L.api);   // every frame the lamp is on
     }
   }
 
@@ -2067,7 +2057,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
       }
     }
     if (send) {
-      if (sims3cam::apiLights() && GlobalOptions::getExposeRemixApi()) {   // milestone 20b
+      if (GlobalOptions::getExposeRemixApi()) {   // milestones 20b, 23: the API or nothing
         h.sunApi = sims3ApiSun(h.sunApi, next); ++h.apiLightCalls;
         if (!h.loggedApiLights) {
           h.loggedApiLights = true; char msg[240];
@@ -2075,12 +2065,9 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
                    sims3cam::sunAngle(), sims3cam::sunRadiance(), sims3cam::lampRadius(), sims3cam::lampRadiance());
           Logger::info(msg);
         }
-      } else {
-        if (sims3cam::apiLights() && !h.apiLightsWarned) { h.apiLightsWarned = true; Logger::warn("Sims 3 camera hook: apiLights = 1 but the Remix API is off (exposeRemixApi = True in .trex\\bridge.conf); fixed-function lights instead"); }
-        D3DLIGHT9 light;
-        sims3cam::makeSunLight(next, light);
-        SetLight(0, &light);
-        LightEnable(0, TRUE);
+      } else if (!h.apiLightsWarned) {
+        h.apiLightsWarned = true;
+        Logger::warn("Sims 3 camera hook: no lights: the Remix API is off (exposeRemixApi = True in .trex\\bridge.conf turns it on for the bridge server)");
       }
       h.sun = next; h.sunSet = true;
       ++h.sunChanges;
