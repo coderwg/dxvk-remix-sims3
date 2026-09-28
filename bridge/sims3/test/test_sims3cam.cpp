@@ -444,7 +444,7 @@ int main() {
         }
       };
       feed();
-      CHECK(ls.nRays == 9 && ls.nSelf == 1, "lamps: the sun is skipped, the lamp object's own vertical ray is a self ray, the fill and the lamp rays are kept (9 rays from 5 objects, %u self rays)", ls.nSelf);
+      CHECK(ls.nRays == 10 && ls.nSelf == 1, "lamps: the sun is skipped, the fill and the lamp rays are kept, the lamp object's own vertical ray among them and noted as a self ray (10 rays from 5 objects, %u self rays)", ls.nSelf);
       uint32_t n = ls.solve();
       CHECK(n == 1 && ls.lamps[0].slot == 1 && ls.lamps[0].age == 1, "lamps: four converging rays make one lamp in light slot 1 (not yet confirmed); the parallel fill makes none");
       feed(); ls.solve(); feed(); n = ls.solve();
