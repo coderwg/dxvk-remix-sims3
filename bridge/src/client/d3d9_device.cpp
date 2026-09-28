@@ -120,6 +120,9 @@ namespace {
     // lights through the Remix API (milestone 20b): the handles of the sun and of each lamp slot (remixapi_LightHandle, declared later in this file)
     void* sunApi = nullptr; uint32_t apiLightCalls = 0; bool loggedApiLights = false, apiLightsWarned = false;   // the lamps' handles live in the solver's lamps
     uint32_t lampEventsLogged = 0;       // lamp creations and drops written to the log (milestone 21c, bounded)
+    // the object meshes' buffers, each distinct index buffer once (milestone 21d, diagnostic): to match the
+    // game's model resources offline and read their light definitions
+    uint32_t ibSeen[256] = {}; uint32_t ibSeenCount = 0, ibLogged = 0;
     // untabled pixel shaders (milestone 7): the albedo chosen from the bytecode at draw time,
     // on a promoted variant of the game's vertex shader when its coordinate is not TEXCOORD0
     const sims3cam::PsAnalysis* psAuto = nullptr;   // bound pixel shader's sampler analysis when it has no table entry
@@ -4161,6 +4164,30 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
         Logger::info(msg);
       }
     } else {
+      // The Sims 3 camera hook (milestone 21d, diagnostic): the buffers of the objects' draws (the
+      // rig shaders), each distinct index buffer once -- size, content hash (FNV-1a 64), format,
+      // stride, the draw's range and the object's position -- to match against the mesh chunks of
+      // the game's model resources offline, whose light definitions (LITE) name each lamp's lights.
+      if (sims3cam::enabled() && g_sims3.psRig != nullptr && g_sims3.objWorldValid && *m_state.indices != nullptr && *m_state.streams[0] != nullptr && g_sims3.ibLogged < 200) {
+        auto* ib_ = bridge_cast<Direct3DIndexBuffer9_LSS*>(*m_state.indices);
+        auto* vb_ = bridge_cast<Direct3DVertexBuffer9_LSS*>(*m_state.streams[0]);
+        const uint32_t ibId_ = (uint32_t) ib_->getId();
+        bool seen_ = false;
+        for (uint32_t k = 0; k < g_sims3.ibSeenCount && !seen_; ++k) seen_ = g_sims3.ibSeen[k] == ibId_;
+        if (!seen_) {
+          if (g_sims3.ibSeenCount < 256) g_sims3.ibSeen[g_sims3.ibSeenCount++] = ibId_;
+          const D3DINDEXBUFFER_DESC id_ = ib_->getDesc(); const D3DVERTEXBUFFER_DESC vd_ = vb_->getDesc();
+          const uint8_t* idata_ = ib_->sims3Data(); const uint8_t* vdata_ = vb_->sims3Data();
+          const uint64_t ih_ = idata_ ? sims3cam::fnv1a64(idata_, id_.Size) : 0, vh_ = vdata_ ? sims3cam::fnv1a64(vdata_, vd_.Size) : 0;
+          ++g_sims3.ibLogged; char m_[400];
+          snprintf(m_, sizeof m_, "Sims 3 camera hook: object buffers at frame %u: IB [%u] %u bytes %s hash %016llx (written %u times), VB [%u] %u bytes stride %u hash %016llx (written %u times); draw base %d min %u verts %u start %u prims %u; object at (%.1f, %.1f, %.1f); VS %016llx PS %016llx",
+                   g_sims3.frames + 1, ibId_, (unsigned) id_.Size, id_.Format == D3DFMT_INDEX32 ? "32-bit" : "16-bit", (unsigned long long) ih_, ib_->sims3Version,
+                   (unsigned) vb_->getId(), (unsigned) vd_.Size, (unsigned) m_state.streamStrides[0], (unsigned long long) vh_, vb_->sims3Version,
+                   BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount, g_sims3.objWorld[0], g_sims3.objWorld[1], g_sims3.objWorld[2],
+                   (unsigned long long) g_sims3.vsHash, (unsigned long long) g_sims3.psHash);
+          Logger::info(m_);
+        }
+      }
       // The Sims 3 camera hook: a captured wall draw gets its window and door openings cut into
       // the geometry (milestone 13, sims3_walls.h). The pixel shader's mask test is evaluated on
       // the client from the buffers' shadow copies and the mask atlas, and the cut triangles are
