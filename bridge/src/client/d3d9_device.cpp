@@ -119,6 +119,7 @@ namespace {
     float skyLevel = -1.f, skyDayRef = 0.f, skyBrightnessSent = -1.f, evMaxSent = -99.f; uint32_t skySends = 0, skySendFrame = 0, skyBrightLogged = 0, skyNoCandFrames = 0; bool skyApiWarned = false;
     // lights through the Remix API (milestone 20b): the handles of the sun and of each lamp slot (remixapi_LightHandle, declared later in this file)
     void* sunApi = nullptr; uint32_t apiLightCalls = 0; bool loggedApiLights = false, apiLightsWarned = false;   // the lamps' handles live in the solver's lamps
+    uint32_t lampEventsLogged = 0;       // lamp creations and drops written to the log (milestone 21c, bounded)
     // untabled pixel shaders (milestone 7): the albedo chosen from the bytecode at draw time,
     // on a promoted variant of the game's vertex shader when its coordinate is not TEXCOORD0
     const sims3cam::PsAnalysis* psAuto = nullptr;   // bound pixel shader's sampler analysis when it has no table entry
@@ -1822,8 +1823,8 @@ static void sims3LogStats(bool withTable) {
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   state: the game's put back %u times; masked writes emulated %u + %u + %u copied (skipped %u, copy failed %u)",
            h.restoreCount, h.maskEmuA, h.maskEmuB, h.maskEmuC, h.maskEmuSkipped, h.copyFailed);
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   lights: lamps %u (created %u, dropped %u, %u light calls; %u ray votes for objects, %u times an object qualified); sun updates %u, frames without shadow rows %u, frames without a sun candidate %u, sun luminance now %.3f",
-           h.lamps.nLamps, h.lamps.created, h.lamps.dropped, h.lampEvents, h.lamps.votesTotal, h.lamps.objectsVoted, h.sunChanges, h.framesNoShadow, h.framesNoSunVote, sims3cam::luminance(h.sun.col));
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   lights: lamps %u (created %u, dropped %u, %u light calls; %u ray votes for objects, %u times an object qualified, %u self rays); sun updates %u, frames without shadow rows %u, frames without a sun candidate %u, sun luminance now %.3f",
+           h.lamps.nLamps, h.lamps.created, h.lamps.dropped, h.lampEvents, h.lamps.votesTotal, h.lamps.objectsVoted, h.lamps.selfRaysTotal, h.sunChanges, h.framesNoShadow, h.framesNoSunVote, sims3cam::luminance(h.sun.col));
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   night: sun level %.3f (day reference %.3f), sky brightness %.3f and exposure ceiling %.2f EV sent %u times%s",
            h.skyLevel, h.skyDayRef, h.skyBrightnessSent, h.evMaxSent, h.skySends, GlobalOptions::getExposeRemixApi() ? "" : " (Remix API off: nothing sent)");
@@ -1946,6 +1947,16 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
     const bool apiLights = sims3cam::apiLights() && sims3cam::apiLamps() && GlobalOptions::getExposeRemixApi();   // milestones 20b, 20d
     const uint32_t raysThisFrame = h.lamps.nRays;
     h.lamps.solve((h.frames & 3) == 0);   // the objects' votes every fourth frame; the known lamps' support every frame
+    for (uint32_t k = 0; k < h.lamps.nEvents && h.lampEventsLogged < 120; ++k) {   // every lamp's birth and death, while the budget lasts (milestone 21c)
+      const sims3cam::LampSolver::Event& e = h.lamps.events[k];
+      ++h.lampEventsLogged; char msg[260];
+      if (e.kind == 1)
+        snprintf(msg, sizeof msg, "Sims 3 camera hook: lamp created at frame %u on the object at (%.1f, %.1f, %.1f), bulb height %.1f: %u votes, %u at that height, %s, self ray %s, colour %.2f,%.2f,%.2f",
+                 h.frames, e.anchor[0], e.anchor[1], e.anchor[2], e.y, e.votes, e.agreeing, e.spread ? "spread" : "one-sided", e.selfRay ? "yes" : "no", e.col[0], e.col[1], e.col[2]);
+      else
+        snprintf(msg, sizeof msg, "Sims 3 camera hook: lamp dropped at frame %u, the object at (%.1f, %.1f, %.1f), bulb height %.1f, after %u supported frames", h.frames, e.anchor[0], e.anchor[1], e.anchor[2], e.y, e.age);
+      Logger::info(msg);
+    }
     for (uint32_t k = 0; k < h.lamps.nDropped; ++k) {   // the lamps gone this frame
       if (h.lamps.droppedApi[k]) { remixapi::remixapi_DestroyLight((remixapi_LightHandle) h.lamps.droppedApi[k]); ++h.apiLightCalls; }
       else if (h.lamps.droppedSlot[k] >= 1 && h.lamps.droppedSent[k]) LightEnable((DWORD) h.lamps.droppedSlot[k], FALSE);

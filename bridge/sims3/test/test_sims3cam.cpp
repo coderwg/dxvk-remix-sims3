@@ -444,7 +444,7 @@ int main() {
         }
       };
       feed();
-      CHECK(ls.nRays == 10, "lamps: the sun is skipped, the fill and the lamp rays are kept (10 rays from 5 objects)");
+      CHECK(ls.nRays == 9 && ls.nSelf == 1, "lamps: the sun is skipped, the lamp object's own vertical ray is a self ray, the fill and the lamp rays are kept (9 rays from 5 objects, %u self rays)", ls.nSelf);
       uint32_t n = ls.solve();
       CHECK(n == 1 && ls.lamps[0].slot == 1 && ls.lamps[0].age == 1, "lamps: four converging rays make one lamp in light slot 1 (not yet confirmed); the parallel fill makes none");
       feed(); ls.solve(); feed(); n = ls.solve();
@@ -470,6 +470,24 @@ int main() {
         }
         const uint32_t nl = lone.solve();
         CHECK(nl == 0 && lone.objectsVoted == 0, "lamps: rays converging where no object is drawn make no lamp (%u stray votes, no object qualified)", lone.votesTotal);
+      }
+      {
+        // a bystander: an object at (10, 45.9, 26) on the line from two objects to a lamp at (10, 47.5, 20) and
+        // from two others to a ceiling lamp at (10, 50.5, 34) -- four rays cross its axis, at four different heights
+        LampSolver by;
+        const float bystander[3] = { 10.f, 45.9f, 26.f };
+        const float lampA[3] = { 10.f, 47.5f, 20.f }, lampB[3] = { 10.f, 50.5f, 34.f };
+        const float src[4][3] = { { 10.f, 45.9f, 30.f }, { 10.f, 45.9f, 29.f }, { 10.f, 45.9f, 22.f }, { 10.f, 45.9f, 23.f } };
+        for (int o = 0; o < 4; ++o) {
+          const float* L = o < 2 ? lampA : lampB;
+          float dirs[16] = {}, cols[16] = {};
+          const float d[3] = { L[0]-src[o][0], L[1]-src[o][1], L[2]-src[o][2] }; const float len = len3(d);
+          dirs[0] = d[0]/len; dirs[1] = d[1]/len; dirs[2] = d[2]/len; cols[0] = 0.9f/len; cols[1] = 0.8f/len; cols[2] = 0.6f/len;
+          by.add(src[o], dirs, cols, nullptr);
+        }
+        { float dirs[16] = {}, cols[16] = {}; by.add(bystander, dirs, cols, nullptr); }   // the bystander drawn, unlit
+        const uint32_t nb = by.solve();
+        CHECK(nb == 0, "lamps: rays crossing an object's axis at different heights (on their way to two lamps) make no lamp there (%u)", nb);
       }
       CHECK(findWorldReg(0x0ba6ddb9aa01913cull) == 12 && findWorldReg(0x7d1bc3ce6acbd715ull) == 16 && findWorldReg(0x1234ull) == -1, "lamps: World rows per object shader (c12 / c16); unknown -> none");
     }
