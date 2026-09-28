@@ -445,7 +445,7 @@ int main() {
         ls.add(obj, dirs, cols, sun);
       };
       auto frame = [&](bool nearDrawn, bool nearToLamp, bool farDrawn, bool farToLamp) {
-        ls.addModelLamp(LampSolver::originId(base) ^ 0x9E3779B9u, base, lampPos, liteCol, 100.f, 5);
+        ls.addModelLamp(LampSolver::originId(base) ^ 0x9E3779B9u, 0, base, lampPos, liteCol, 100.f, 5);
         if (nearDrawn) { rig(nearObj[0], nearToLamp); rig(nearObj[1], nearToLamp); }
         if (farDrawn) rig(farObj, farToLamp);
         return ls.solve();

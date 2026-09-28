@@ -1593,6 +1593,7 @@ struct Lamp {
   float anchor[3];     // the object's origin
   uint32_t id;         // the object's origin quantised, with the light's index: the lamp's identity across frames (the API light's hash)
   uint8_t kind;        // the light type (3 point, 4 spot, 5 lamp shade, 6 tube)
+  uint8_t light;       // which of the model's lights (milestone 24: a lamp is found again by its object's position and this, not by an exact id)
   float base;          // the game's brightness for it: intensity / 100 x the definition's colour luminance
   uint32_t support;    // witness rays pointing at the light this frame
   uint32_t missing;    // grows by two per frame of witnesses saying off
@@ -1632,11 +1633,12 @@ struct LampSolver {
   static const uint32_t kMissingLimit = 180;   // off after a second and a half of witnesses saying so (missing grows by two per frame)
   static const uint32_t kUnseenLimit = 600;    // released after ten seconds undrawn
   static const uint32_t kConfirmFrames = 3;    // supported frames before a lamp is forwarded
-  static constexpr float kWitness = 2.f;       // a witness stands this close to the light in the ground plane (and within 3 units in height)
-  static constexpr float kAim = 0.45f;         // a witness ray points at the light when it passes this close to it
-  static constexpr float kMinT = 0.3f, kMaxT = 20.f;
+  static constexpr float kWitness = 2.f;       // a witness stands this close to the light in the ground plane, from 5 units below it to 3 above (a ceiling light hangs high)
+  static constexpr float kClose = 1.f;         // this close, an object lists the lamp among its lights whenever it is on: its silence says off
+  static constexpr float kAimCos = 0.85f;      // a witness ray points at the light when it aims within ~32 degrees of it (the rig is evaluated at the
+                                               // object's centre, the ray traced from its origin: half a unit apart on a near object, milestone 24)
   LampRay rays[kMaxRays]; uint32_t nRays = 0;             // this frame's rig rays
-  float origins[kMaxOrigins][3]; uint32_t nOrigins = 0;   // this frame's object origins (every object-shader draw)
+  float origins[kMaxOrigins][3]; uint8_t originSlots[kMaxOrigins]; uint32_t nOrigins = 0;   // this frame's object origins (every object-shader draw) and how many of the rig's four slots their rig used
   Lamp lamps[kMaxLamps]; uint32_t nLamps = 0;
   uint32_t created = 0, dropped = 0;                      // statistics
   void* droppedApi[kMaxLamps]; uint32_t nDropped = 0;     // the API lights of the lamps dropped this frame, for the device to destroy
@@ -1656,7 +1658,9 @@ struct LampSolver {
   void add(const float* pos, const float* dirs, const float* cols, const float* sunDir) {
     bool known = false;   // the same object's further draws
     for (uint32_t k = nOrigins > 8 ? nOrigins - 8 : 0; k < nOrigins && !known; ++k) known = lampDist(origins[k], pos) < 1e-3f;
-    if (!known && nOrigins < (uint32_t) kMaxOrigins) { for (int j = 0; j < 3; ++j) origins[nOrigins][j] = pos[j]; ++nOrigins; }
+    uint8_t used = 0;
+    for (int i = 0; i < 4; ++i) { const float* d = dirs + i*4; const float len = len3(d); if (len >= 0.9f && len <= 1.1f && luminance(cols + i*4) >= 0.02f) ++used; }
+    if (!known && nOrigins < (uint32_t) kMaxOrigins) { for (int j = 0; j < 3; ++j) origins[nOrigins][j] = pos[j]; originSlots[nOrigins] = used; ++nOrigins; }
     for (int i = 0; i < 4; ++i) {
       const float* d = dirs + i*4; const float* c = cols + i*4;
       const float len = len3(d);
@@ -1675,11 +1679,11 @@ struct LampSolver {
 
   // A lamp from the game's definitions, once per draw of its object: the light's exact world
   // position; the definition's colour and intensity until the witnesses give the colour.
-  void addModelLamp(uint32_t id, const float* anchor, const float* pos, const float* col, float intensity, uint8_t kind) {
+  void addModelLamp(uint32_t id, uint8_t light, const float* anchor, const float* pos, const float* col, float intensity, uint8_t kind) {
     for (uint32_t k = 0; k < nLamps; ++k) {
       Lamp& L = lamps[k];
-      if (L.id != id) continue;
-      for (int q = 0; q < 3; ++q) { L.anchor[q] = anchor[q]; L.pos[q] = pos[q]; }   // the object may have moved
+      if (L.light != light || lampDist(L.anchor, anchor) > 0.5f) continue;   // the same object (its position may jitter across the id's quantisation)
+      for (int q = 0; q < 3; ++q) { L.anchor[q] = anchor[q]; L.pos[q] = pos[q]; }
       L.drawn = true;
       return;
     }
@@ -1688,23 +1692,27 @@ struct LampSolver {
     std::memset(&L, 0, sizeof L);
     for (int q = 0; q < 3; ++q) { L.anchor[q] = anchor[q]; L.pos[q] = pos[q]; L.col[q] = col[q] * intensity / 100.f; }
     L.base = luminance(col) * intensity / 100.f;
-    L.id = id; L.kind = kind; L.drawn = true;
+    L.id = id; L.light = light; L.kind = kind; L.drawn = true;
     ++created;
   }
 
-  // Is the object at o a witness of L: within kWitness of its light in the ground plane, within
-  // 3 units in height, and not the lamp's own object?
+  // Is the object at o a witness of L: within kWitness of its light in the ground plane, from
+  // 5 units below it to 3 above, and not the lamp's own object?
   static bool witness(const float* o, const Lamp& L) {
     const float dx = o[0] - L.pos[0], dy = o[1] - L.pos[1], dz = o[2] - L.pos[2];
-    return std::fabs(dy) < 3.f && dx*dx + dz*dz < kWitness * kWitness && lampDist(o, L.anchor) > 0.3f;
+    return dy > -5.f && dy < 3.f && dx*dx + dz*dz < kWitness * kWitness && lampDist(o, L.anchor) > 0.3f;
   }
-  // Does ray r pass within `radius` of point P, kMinT to kMaxT units along it?
-  static bool passesPoint(const LampRay& r, const float* P, float radius) {
+  // Can the witness at o testify that L is off? Only if the lamp would surely be among its four
+  // listed lights when on: it stands within kClose of the light, or its rig has a free slot.
+  static bool canTestify(const float* o, uint8_t slots, const Lamp& L) {
+    const float dx = o[0] - L.pos[0], dz = o[2] - L.pos[2];
+    return slots < 4 || dx*dx + dz*dz < kClose * kClose;
+  }
+  // Does ray r aim at point P: within ~32 degrees of the direction to it?
+  static bool pointsAt(const LampRay& r, const float* P) {
     const float v[3] = { P[0] - r.pos[0], P[1] - r.pos[1], P[2] - r.pos[2] };
-    const float t = dot3(v, r.dir);
-    if (t < kMinT || t > kMaxT) return false;
-    const float perp[3] = { v[0] - t * r.dir[0], v[1] - t * r.dir[1], v[2] - t * r.dir[2] };
-    return len3(perp) <= radius;
+    const float n = len3(v);
+    return n > 0.2f && dot3(v, r.dir) / n > kAimCos;
   }
   void record(uint8_t kind, const Lamp& L, uint32_t votes) {
     if (nEvents >= 16) return;
@@ -1719,9 +1727,9 @@ struct LampSolver {
     for (uint32_t k = 0; k < nLamps; ++k) {
       Lamp& L = lamps[k];
       uint32_t witnesses = 0, pointing = 0; float sum[3] = {};
-      for (uint32_t o = 0; o < nOrigins; ++o) if (witness(origins[o], L)) ++witnesses;
+      for (uint32_t o = 0; o < nOrigins; ++o) if (witness(origins[o], L) && canTestify(origins[o], originSlots[o], L)) ++witnesses;
       for (uint32_t i = 0; i < nRays; ++i)
-        if (witness(rays[i].pos, L) && passesPoint(rays[i], L.pos, kAim)) { ++pointing; for (int q = 0; q < 3; ++q) sum[q] += rays[i].col[q]; }
+        if (witness(rays[i].pos, L) && pointsAt(rays[i], L.pos)) { ++pointing; for (int q = 0; q < 3; ++q) sum[q] += rays[i].col[q]; }
       L.support = pointing;
       if (pointing) {
         L.missing = 0;

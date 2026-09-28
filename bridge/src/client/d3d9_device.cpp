@@ -112,6 +112,8 @@ namespace {
     float objWorldRows[12] = {};         // ...and its three World rows (milestone 22: the game's lights carried to the world)
     bool objWorldValid = false;          // ...and whether it has been uploaded since the shader was bound
     float rig[32] = {};                  // c0..c7 of the bound rig pixel shader (directions, colours)
+    float psConst[64] = {}; uint16_t psConstMask = 0;   // c0..c15 of the bound rig pixel shader as uploaded, and which registers were (milestone 24 diagnostic)
+    uint32_t markDump = 0, markDumpLogged = 0;          // frames left to log the lamp objects' constants after the mark key
     bool rigValid = false;
     sims3cam::LampSolver lamps;          // lamps voted by the rigs' rays, forwarded as API sphere lights (or fixed-function lights 1..7)
     uint32_t lampEvents = 0;             // SetLight/LightEnable calls made for lamps
@@ -1095,7 +1097,7 @@ namespace {
     h.vsBound = nullptr; h.vsTabled = false; h.vsNormal = nullptr; h.pendingPromote = 0; h.vsHash = 0;
     h.patch = nullptr; h.vsNeverCapture = 0; h.vsCapturedUv = false; h.vsWorldReg = -1; h.vsShadowReg = -1; h.objWorldValid = false;
     h.lotCopies.clear();
-    h.psAuto = nullptr; h.psRig = nullptr; h.psAlbedoStage = -1; h.psTintReg = -1; h.psHash = 0; h.rigValid = false;
+    h.psAuto = nullptr; h.psRig = nullptr; h.psAlbedoStage = -1; h.psTintReg = -1; h.psHash = 0; h.rigValid = false; h.psConstMask = 0;
     h.declIs3D = false; h.drawCaptured = false; h.autoCapturedUv = false;
     for (int i = 0; i < 16; ++i) { h.boundTex[i] = nullptr; h.boundColor2D[i] = false; h.boundKind[i] = 0; h.boundFmt[i] = 0; h.boundW[i] = h.boundH[i] = 0; }
     for (uint32_t i = 0; i < h.scratchCount; ++i) { if (h.scratch[i].surf) h.scratch[i].surf->Release(); if (h.scratch[i].tex) h.scratch[i].tex->Release(); h.scratch[i] = Sims3Hook::Scratch(); }
@@ -1938,7 +1940,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
       sims3RingPush(h, t);
       h.fCaptured = h.fUncaptured = h.fDropped = h.fHeld = h.fReplayed = h.fTerrainWorld = h.fTerrainLot = h.fCamAdopt = h.fCamAlt = h.fCamMirror = 0;
       const bool f9 = ((GetAsyncKeyState(VK_F9) | GetAsyncKeyState(sims3cam::markKey()) | GetAsyncKeyState(VK_OEM_3)) & 0x8000) != 0;   // F9, the configured key (sims3hook.txt markKey) or backtick
-      if (f9 && !h.f9Down) sims3RingDump(h, "F9 pressed");
+      if (f9 && !h.f9Down) { sims3RingDump(h, "F9 pressed"); h.markDump = 2; }   // and the lamp objects' constants for the next two frames (milestone 24)
+      else if (h.markDump) --h.markDump;
       h.f9Down = f9;
     }
     h.frameDraws = 0;
@@ -4185,7 +4188,22 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
             const sims3cam::LiteLight& L_ = m_.lights[li];
             float wp_[3]; sims3cam::worldPoint(g_sims3.objWorldRows, L_.pos, wp_);
             const uint32_t id_ = sims3cam::LampSolver::originId(g_sims3.objWorld) ^ (0x9E3779B9u * (uint32_t) (li + 1));
-            g_sims3.lamps.addModelLamp(id_, g_sims3.objWorld, wp_, L_.col, L_.intensity, L_.type);
+            g_sims3.lamps.addModelLamp(id_, li, g_sims3.objWorld, wp_, L_.col, L_.intensity, L_.type);
+          }
+          // At the mark key: what the game uploads for this lamp object -- its pixel constants
+          // c8..c15 (the rig is c0..c7) and its textures -- to find where its on/off state shows.
+          if (g_sims3.markDump && g_sims3.markDumpLogged < 60) {
+            ++g_sims3.markDumpLogged;
+            char msg_[900]; size_t n_ = (size_t) snprintf(msg_, sizeof msg_, "Sims 3 camera hook: lamp object at the mark, frame %u, object at (%.1f, %.1f, %.1f) model %016llx PS %016llx: rig lum %.2f/%.2f/%.2f/%.2f;",
+                                                         g_sims3.frames + 1, g_sims3.objWorld[0], g_sims3.objWorld[1], g_sims3.objWorld[2], (unsigned long long) m_.inst, (unsigned long long) g_sims3.psHash,
+                                                         sims3cam::luminance(g_sims3.rig + 16), sims3cam::luminance(g_sims3.rig + 20), sims3cam::luminance(g_sims3.rig + 24), sims3cam::luminance(g_sims3.rig + 28));
+            for (int r_ = 8; r_ < 16 && n_ < sizeof msg_ - 80; ++r_)
+              if (g_sims3.psConstMask & (1u << r_)) n_ += (size_t) snprintf(msg_ + n_, sizeof msg_ - n_, " c%d(%.3g %.3g %.3g %.3g)", r_, g_sims3.psConst[r_*4], g_sims3.psConst[r_*4+1], g_sims3.psConst[r_*4+2], g_sims3.psConst[r_*4+3]);
+            for (int s_ = 0; s_ < 6 && n_ < sizeof msg_ - 40; ++s_) {
+              auto* t_ = (g_sims3.boundTex[s_] && (g_sims3.boundKind[s_] & 0x7F) == 1) ? bridge_cast<Direct3DTexture9_LSS*>(g_sims3.boundTex[s_]) : nullptr;
+              if (t_) n_ += (size_t) snprintf(msg_ + n_, sizeof msg_ - n_, " s%d %016llx", s_, (unsigned long long) t_->sims3Level0Hash());
+            }
+            Logger::info(msg_);
           }
         }
       }
@@ -5173,6 +5191,10 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetPixelShaderConstantF(UINT StartReg
     g_sims3.voter.add(pConstantData, pConstantData + 16);
     memcpy(g_sims3.rig, pConstantData, sizeof g_sims3.rig);   // kept for the lamp solver at draw time
     g_sims3.rigValid = true;
+  }
+  if (sims3cam::enabled() && g_sims3.psRig != nullptr && StartRegister < 16) {   // c0..c15 as uploaded (milestone 24 diagnostic)
+    const UINT last = StartRegister + Vector4fCount < 16 ? StartRegister + Vector4fCount : 16;
+    for (UINT r = StartRegister; r < last; ++r) { memcpy(g_sims3.psConst + r * 4, pConstantData + (r - StartRegister) * 4, 16); g_sims3.psConstMask |= (uint16_t) (1u << r); }
   }
   // ...and the Create-A-Style tint constant of the bound pixel shader.
   if (sims3cam::enabled() && g_sims3.psTintReg >= 0 && (UINT) g_sims3.psTintReg >= StartRegister && (UINT) g_sims3.psTintReg < StartRegister + Vector4fCount) {
