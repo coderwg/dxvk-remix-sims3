@@ -12,8 +12,7 @@ ringTrace = 0
 markKey = 220
 # apiLights     1 = the sun and the lamps go to the runtime as Remix API lights with explicit radiance and size (needs exposeRemixApi);
 #               0 = fixed-function lights converted by the runtime (a 2-degree sun at intensity 1, 4-unit spheres for lamps)
-# apiLamps      0 = the lamps stay on the fixed-function path while the sun goes through the API (interim: the solver's
-#               lamp estimates wander, and the runtime's 4-unit spheres hide that better than small API spheres)
+# apiLamps      0 = the lamps stay on the fixed-function path (4-unit spheres) while the sun goes through the API
 # sunAngle      the sun's angular diameter in thousandths of a degree
 # sunRadiance   the sun's radiance per unit of rig colour, thousandths
 # lampRadius    the lamps' sphere radius in thousandths of a unit
@@ -24,8 +23,8 @@ skyMinBrightness = 30
 dayEvMax = 500
 nightEvMax = 100
 apiLights = 1
-apiLamps = 0
+apiLamps = 1
 sunAngle = 2000
 sunRadiance = 1000
-lampRadius = 300
+lampRadius = 150
 lampRadiance = 40000

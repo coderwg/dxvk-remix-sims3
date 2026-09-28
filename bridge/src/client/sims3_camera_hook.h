@@ -752,7 +752,7 @@ struct AlbedoStage { uint64_t hash; const char* name; uint8_t stage; bool rig; b
 inline constexpr uint8_t kTintRegister = 8;
 
 inline const AlbedoStage kAlbedoStages[] = {
-  // objects: s2 emissive, s3 diffuse (TEXCOORD2), s4 specular mask; light rig and tint
+  // objects: s2 the lot's light map (sampled with a world-space projection, rows c15/c16 of the VS; scaled by c12.y), s3 diffuse (TEXCOORD2), s4 specular mask; light rig and tint
   { 0x0c19795eb80e2e96ull, "object PS 0x10a68900", 3, true, true },
   { 0x8282d3a0d611b62eull, "object PS 0x10a69440", 3, true, true },
   { 0x54bea85dc05c7c35ull, "object PS 0x10a694e0", 3, true, true },
@@ -993,7 +993,7 @@ inline int apiLights() { static int s = -1; if (s < 0) s = hookOption("apiLights
 inline int apiLamps() { static int s = -1; if (s < 0) s = hookOption("apiLamps", 1) != 0; return s; }
 inline float sunAngle() { static float s = -1.f; if (s < 0.f) { int v = hookOption("sunAngle", 2000); if (v < 100) v = 100; if (v > 90000) v = 90000; s = (float) v / 1000.f; } return s; }
 inline float sunRadiance() { static float s = -1.f; if (s < 0.f) { int v = hookOption("sunRadiance", 1000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
-inline float lampRadius() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampRadius", 300); if (v < 20) v = 20; s = (float) v / 1000.f; } return s; }
+inline float lampRadius() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampRadius", 150); if (v < 20) v = 20; s = (float) v / 1000.f; } return s; }
 inline float lampRadiance() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampRadiance", 40000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
 
 // layerPass: every draw is a layer pass. lotFamily: a lot's ground and its paint composite --
@@ -1521,19 +1521,25 @@ inline void makeSunLight(const SunVote& v, D3DLIGHT9& l) {
   l.Direction.x = -v.dir[0]; l.Direction.y = -v.dir[1]; l.Direction.z = -v.dir[2];   // D3D: the direction the light travels
 }
 
-// ---- lamps, from the per-object light rig (milestone 3a) ----------------------------------
+// ---- lamps, from the per-object light rig (milestones 3a, 21) ----------------------------
 // The rig is computed by the game at each object's position, so a rig direction toward a
 // lamp is a ray from that object (its World translation, c12..c14 for the object shaders)
-// to the lamp, and the rays of the objects around one lamp converge on it. The sun and the
-// sky fills are the same direction for every object (parallel rays never meet), so only
-// local lights survive. Present pairs the rays, clusters the meeting points, fits each lamp
-// by least squares, forwards it as a fixed-function point light in slots 1..7 (0 is the
-// sun), and drops a lamp no object mentions any more -- which is what a Sim switching it
-// off looks like from here.
+// to the game's light position -- which the game keeps at the bulb -- and the rays of the
+// objects around one lamp converge there. The sun and the sky fills are the same direction
+// for every object (parallel rays never meet), so only local lights survive. The game keeps
+// no bulb geometry and no emissive map (the object shaders' s2 is the lot's light map, seen
+// in run 130: switching every lamp changed no draw of the main pass), so the rays are the
+// one pointer at the bulb. Free triangulation wandered (run 129: 114 lamps made and 107
+// dropped in 18 minutes); since milestone 21 a meeting point counts only when it lies over
+// an object the game drew this frame: the lamp is anchored to that object's origin in the
+// ground plane, its height comes from the rays, its identity is the object, and it lives
+// while rays support it -- a Sim switching the lamp off ends the rays.
 struct LampRay { float pos[3]; float dir[3]; float col[3]; };
 
 struct Lamp {
   float pos[3]; float col[3];
+  float anchor[3];     // the origin of the object the lamp is anchored to: pos.xz = anchor.xz (milestone 21)
+  uint32_t id;         // the anchor quantised, the lamp's identity across frames (the API light's hash)
   uint32_t support;    // rays assigned this frame
   uint32_t missing;    // consecutive frames without support
   uint32_t age;        // supported frames so far (forwarded once >= kConfirmFrames)
@@ -1576,16 +1582,30 @@ struct LampSolver {
   static const int kMaxRays = 768;
   static const int kMaxLamps = 7;
   static const int kMaxCand = 64;
-  static const uint32_t kMissingLimit = 90;    // frames without support before a lamp is dropped
+  static const int kMaxOrigins = 512;
+  static const uint32_t kMissingLimit = 180;   // frames without support before a lamp is dropped (three seconds)
   static const uint32_t kConfirmFrames = 3;    // supported frames before a lamp is forwarded
+  static constexpr float kSnap = 0.6f;         // a meeting point counts when an object origin lies this close in the ground plane
   LampRay rays[kMaxRays]; uint32_t nRays = 0;
+  float origins[kMaxOrigins][3]; uint32_t nOrigins = 0;   // the object origins drawn this frame (milestone 21)
   Lamp lamps[kMaxLamps]; uint32_t nLamps = 0;
   bool slotUsed[kMaxLamps + 1] = {};           // index = slot; slot 0 (the sun) never used here
-  uint32_t created = 0, dropped = 0;           // statistics
+  uint32_t created = 0, dropped = 0, snapped = 0, unsnapped = 0;   // statistics
+
+  // The anchor quantised to a quarter unit, hashed: the same object gives the same id.
+  static uint32_t originId(const float* p) {
+    const int32_t q[3] = { (int32_t) std::floor(p[0] * 4.f + 0.5f), (int32_t) std::floor(p[1] * 4.f + 0.5f), (int32_t) std::floor(p[2] * 4.f + 0.5f) };
+    uint32_t h = 2166136261u;
+    for (int i = 0; i < 3; ++i) for (int b = 0; b < 4; ++b) { h ^= (uint32_t) ((q[i] >> (8 * b)) & 0xFF); h *= 16777619u; }
+    return h ? h : 1u;
+  }
 
   // One captured draw of a rig shader: the object's world position and its rig (c0..c3
   // directions toward the lights, c4..c7 colours). sunDir (unit, may be null) is skipped.
   void add(const float* pos, const float* dirs, const float* cols, const float* sunDir) {
+    bool known = false;   // the same object's further draws
+    for (uint32_t k = nOrigins > 8 ? nOrigins - 8 : 0; k < nOrigins && !known; ++k) known = lampDist(origins[k], pos) < 1e-3f;
+    if (!known && nOrigins < (uint32_t) kMaxOrigins) { for (int j = 0; j < 3; ++j) origins[nOrigins][j] = pos[j]; ++nOrigins; }
     for (int i = 0; i < 4; ++i) {
       const float* d = dirs + i*4; const float* c = cols + i*4;
       const float len = len3(d);
@@ -1627,6 +1647,17 @@ struct LampSolver {
     return true;
   }
 
+  // The object origin nearest to p in the ground plane; dxz receives that distance.
+  int nearestOrigin(const float* p, float& dxz) const {
+    int best = -1; dxz = 1e9f;
+    for (uint32_t k = 0; k < nOrigins; ++k) {
+      const float dx = origins[k][0] - p[0], dz = origins[k][2] - p[2];
+      const float d = std::sqrt(dx*dx + dz*dz);
+      if (d < dxz) { dxz = d; best = (int) k; }
+    }
+    return best;
+  }
+
   // Least-squares point closest to the given rays: sum (I - d d^T) p = sum (I - d d^T) pos.
   bool fit(const int* idx, int n, float* out) const {
     float M[3][3] = {}, rhs[3] = {};
@@ -1662,8 +1693,8 @@ struct LampSolver {
     return true;
   }
 
-  // Frame end: assign rays, discover new lamps (the quadratic pairing, when `discover`), refine,
-  // age out. Returns the number of lamps.
+  // Frame end: assign rays, discover new lamps (the quadratic pairing, when `discover`,
+  // snapped to the objects drawn), refine, age out. Returns the number of lamps.
   uint32_t solve(bool discover = true) {
     static const float kAssign = 1.25f;
     int assign[kMaxRays];
@@ -1677,8 +1708,8 @@ struct LampSolver {
       }
       if (best >= 0) { assign[i] = best; ++lamps[best].support; }
     }
-    // new lamps from the rays nothing claimed
-    float candPos[kMaxCand][3]; uint32_t candN[kMaxCand]; int nCand = 0;
+    // new lamps from the rays nothing claimed: meeting points over an object drawn this frame
+    int candOrigin[kMaxCand]; float candY[kMaxCand]; uint32_t candN[kMaxCand]; int nCand = 0;
     if (discover) {
     for (uint32_t i = 0; i < nRays; ++i) {
       if (assign[i] >= 0) continue;
@@ -1686,21 +1717,27 @@ struct LampSolver {
         if (assign[j] >= 0) continue;
         float p[3];
         if (!meet(rays[i], rays[j], p)) continue;
+        float dxz; const int o = nearestOrigin(p, dxz);
+        if (o < 0 || dxz > kSnap) { ++unsnapped; continue; }
+        ++snapped;
         int c = -1;
-        for (int k = 0; k < nCand && c < 0; ++k) if (lampDist(candPos[k], p) < 1.5f) c = k;
-        if (c >= 0) { for (int q = 0; q < 3; ++q) candPos[c][q] = (candPos[c][q]*candN[c] + p[q]) / (candN[c] + 1); ++candN[c]; }
-        else if (nCand < kMaxCand) { for (int q = 0; q < 3; ++q) candPos[nCand][q] = p[q]; candN[nCand] = 1; ++nCand; }
+        for (int k = 0; k < nCand && c < 0; ++k) if (candOrigin[k] == o) c = k;
+        if (c >= 0) { candY[c] = (candY[c] * candN[c] + p[1]) / (candN[c] + 1); ++candN[c]; }
+        else if (nCand < kMaxCand) { candOrigin[nCand] = o; candY[nCand] = p[1]; candN[nCand] = 1; ++nCand; }
       }
     }
     for (int c = 0; c < nCand; ++c) {
       if (candN[c] < 3 || nLamps >= (uint32_t) kMaxLamps) continue;
+      const float* org = origins[candOrigin[c]];
       bool nearExisting = false;   // a known lamp's stray rays must not seed a duplicate
-      for (uint32_t k = 0; k < nLamps && !nearExisting; ++k) nearExisting = lampDist(lamps[k].pos, candPos[c]) < 3.f;
+      for (uint32_t k = 0; k < nLamps && !nearExisting; ++k) nearExisting = lampDist(lamps[k].anchor, org) < 1.f;
       if (nearExisting) continue;
       const int slot = freeSlot();
       if (slot < 0) break;
       Lamp& L = lamps[nLamps++];
-      for (int q = 0; q < 3; ++q) { L.pos[q] = candPos[c][q]; L.col[q] = 0.f; }
+      for (int q = 0; q < 3; ++q) { L.anchor[q] = org[q]; L.pos[q] = org[q]; L.col[q] = 0.f; }
+      L.pos[1] = candY[c];
+      L.id = originId(org);
       L.support = 0; L.missing = 0; L.age = 0; L.slot = slot; slotUsed[slot] = true; ++created;
       for (uint32_t i = 0; i < nRays; ++i) {
         if (assign[i] >= 0) continue;
@@ -1709,7 +1746,7 @@ struct LampSolver {
       }
     }
     }
-    // refine positions and colours from this frame's rays
+    // refine heights and colours from this frame's rays; the ground-plane position is the anchor's
     for (uint32_t k = 0; k < nLamps; ++k) {
       Lamp& L = lamps[k];
       if (L.support == 0) { ++L.missing; continue; }
@@ -1719,8 +1756,8 @@ struct LampSolver {
       for (uint32_t i = 0; i < nRays; ++i) if (assign[i] == (int) k) idx[n++] = (int) i;
       float p[3];
       if (n >= 2 && fit(idx, n, p) && lampDist(p, L.pos) < 2.f) {
-        const float a = L.age <= 1 ? 1.f : 0.3f;   // settle at once, then smooth
-        for (int q = 0; q < 3; ++q) L.pos[q] += a * (p[q] - L.pos[q]);
+        const float a = L.age <= 1 ? 1.f : 0.1f;   // settle at once, then smooth
+        L.pos[1] += a * (p[1] - L.pos[1]);
       }
       float c[3];
       if (estimateColour(idx, n, L.pos, c)) {
@@ -1733,7 +1770,7 @@ struct LampSolver {
       if (lamps[k].missing > kMissingLimit) { slotUsed[lamps[k].slot] = false; lamps[k] = lamps[nLamps - 1]; --nLamps; ++dropped; }
       else ++k;
     }
-    nRays = 0;
+    nRays = 0; nOrigins = 0;
     return nLamps;
   }
 };

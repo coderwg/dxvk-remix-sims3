@@ -426,13 +426,15 @@ int main() {
       } else SKIP("auto: ps_0c19795eb80e2e96 not found");
     }
     {
-      // lamps: four objects around a lamp at (10, 47.5, 20); every rig also carries the sun and a horizontal fill
+      // lamps: four objects around a lamp at (10, 47.5, 20), and the lamp object itself, drawn at its base
+      // (10, 45.9, 20) with the bulb straight above it (milestone 21: a lamp is anchored to an object drawn
+      // under the rays' meeting point); every rig also carries the sun and a horizontal fill
       LampSolver ls;
       const float lampPos[3] = { 10.f, 47.5f, 20.f };
       const float sun[3] = { -0.652f, 0.717f, 0.245f };
-      const float objs[4][3] = { { 7.f, 45.9f, 20.f }, { 13.f, 45.9f, 20.f }, { 10.f, 45.9f, 17.f }, { 10.f, 45.9f, 23.5f } };
+      const float objs[5][3] = { { 7.f, 45.9f, 20.f }, { 13.f, 45.9f, 20.f }, { 10.f, 45.9f, 17.f }, { 10.f, 45.9f, 23.5f }, { 10.f, 45.9f, 20.f } };
       auto feed = [&]() {
-        for (int o = 0; o < 4; ++o) {
+        for (int o = 0; o < 5; ++o) {
           float dirs[16] = {}, cols[16] = {};
           const float d[3] = { lampPos[0]-objs[o][0], lampPos[1]-objs[o][1], lampPos[2]-objs[o][2] }; const float len = len3(d);
           dirs[0] = d[0]/len; dirs[1] = d[1]/len; dirs[2] = d[2]/len;   cols[0] = 0.9f/len; cols[1] = 0.8f/len; cols[2] = 0.6f/len;
@@ -442,17 +444,33 @@ int main() {
         }
       };
       feed();
-      CHECK(ls.nRays == 8, "lamps: the sun is skipped, the fill and the lamp rays are kept (8 rays from 4 objects)");
+      CHECK(ls.nRays == 10, "lamps: the sun is skipped, the fill and the lamp rays are kept (10 rays from 5 objects)");
       uint32_t n = ls.solve();
       CHECK(n == 1 && ls.lamps[0].slot == 1 && ls.lamps[0].age == 1, "lamps: four converging rays make one lamp in light slot 1 (not yet confirmed); the parallel fill makes none");
       feed(); ls.solve(); feed(); n = ls.solve();
       CHECK(n == 1 && ls.lamps[0].age >= LampSolver::kConfirmFrames && ls.created == 1, "lamps: the same rays three frames running confirm it without seeding a duplicate");
-      CHECK(n == 1 && lampDist(ls.lamps[0].pos, lampPos) < 0.1f, "lamps: its position is the rays' meeting point");
+      CHECK(n == 1 && lampDist(ls.lamps[0].pos, lampPos) < 0.1f, "lamps: its position is the rays' meeting point, over the lamp object");
+      CHECK(n == 1 && ls.lamps[0].anchor[0] == 10.f && ls.lamps[0].anchor[2] == 20.f && ls.lamps[0].id == LampSolver::originId(objs[4]) && ls.lamps[0].id != 0, "lamps: anchored to the lamp object's origin, with that object's id");
+      CHECK(ls.snapped > ls.unsnapped, "lamps: most meeting points lay over the lamp object, the stray pairs (a fill against the lamp's own ray) over nothing (%u snapped, %u not)", ls.snapped, ls.unsnapped);
       CHECK(n == 1 && ls.lamps[0].col[0] > 0.25f && ls.lamps[0].col[0] < 0.45f && ls.lamps[0].col[0] > ls.lamps[0].col[2], "lamps: its colour keeps the rig's hue at an inverse-square intensity read from all its rays");
       D3DLIGHT9 pl; makeLampLight(ls.lamps[0], pl);
       CHECK(pl.Type == D3DLIGHT_POINT && std::fabs(pl.Position.y - 47.5f) < 0.1f && pl.Attenuation0 == 1.f && pl.Attenuation2 > 0.f, "lamps: forwarded as a point light at the lamp");
       for (uint32_t f = 0; f <= LampSolver::kMissingLimit; ++f) ls.solve();
-      CHECK(ls.nLamps == 0 && !ls.slotUsed[1] && ls.dropped == 1, "lamps: a lamp no object mentions for a second and a half is dropped and its slot freed");
+      CHECK(ls.nLamps == 0 && !ls.slotUsed[1] && ls.dropped == 1, "lamps: a lamp no object mentions for three seconds is dropped and its slot freed");
+      {
+        // a meeting point over nothing (no object drawn there) makes no lamp
+        LampSolver lone;
+        const float far_[3] = { 30.f, 47.5f, 30.f };
+        for (int o = 0; o < 4; ++o) {
+          float dirs[16] = {}, cols[16] = {};
+          const float src[3] = { far_[0] + (o < 2 ? -3.f : 3.f), 45.9f, far_[2] + (o & 1 ? -3.f : 3.f) };
+          const float d[3] = { far_[0]-src[0], far_[1]-src[1], far_[2]-src[2] }; const float len = len3(d);
+          dirs[0] = d[0]/len; dirs[1] = d[1]/len; dirs[2] = d[2]/len; cols[0] = 0.9f/len; cols[1] = 0.8f/len; cols[2] = 0.6f/len;
+          lone.add(src, dirs, cols, nullptr);
+        }
+        const uint32_t nl = lone.solve();
+        CHECK(nl == 0 && lone.unsnapped > 0 && lone.snapped == 0, "lamps: rays converging where no object is drawn make no lamp (%u meeting points over nothing)", lone.unsnapped);
+      }
       CHECK(findWorldReg(0x0ba6ddb9aa01913cull) == 12 && findWorldReg(0x7d1bc3ce6acbd715ull) == 16 && findWorldReg(0x1234ull) == -1, "lamps: World rows per object shader (c12 / c16); unknown -> none");
     }
     const AlbedoStage* tc = findTintConst(0x0c19795eb80e2e96ull);

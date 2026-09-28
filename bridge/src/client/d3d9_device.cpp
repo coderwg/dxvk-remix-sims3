@@ -1824,8 +1824,8 @@ static void sims3LogStats(bool withTable) {
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   state: the game's put back %u times; masked writes emulated %u + %u + %u copied (skipped %u, copy failed %u)",
            h.restoreCount, h.maskEmuA, h.maskEmuB, h.maskEmuC, h.maskEmuSkipped, h.copyFailed);
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   lights: lamps %u (created %u, dropped %u, %u light calls); sun updates %u, frames without shadow rows %u, frames without a sun candidate %u, sun luminance now %.3f",
-           h.lamps.nLamps, h.lamps.created, h.lamps.dropped, h.lampEvents, h.sunChanges, h.framesNoShadow, h.framesNoSunVote, sims3cam::luminance(h.sun.col));
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   lights: lamps %u (created %u, dropped %u, %u light calls; ray meeting points over an object %u, over nothing %u); sun updates %u, frames without shadow rows %u, frames without a sun candidate %u, sun luminance now %.3f",
+           h.lamps.nLamps, h.lamps.created, h.lamps.dropped, h.lampEvents, h.lamps.snapped, h.lamps.unsnapped, h.sunChanges, h.framesNoShadow, h.framesNoSunVote, sims3cam::luminance(h.sun.col));
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   night: sun level %.3f (day reference %.3f), sky brightness %.3f and exposure ceiling %.2f EV sent %u times%s",
            h.skyLevel, h.skyDayRef, h.skyBrightnessSent, h.evMaxSent, h.skySends, GlobalOptions::getExposeRemixApi() ? "" : " (Remix API off: nothing sent)");
@@ -1952,11 +1952,11 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
       if (L.slot < 1 || L.slot > sims3cam::LampSolver::kMaxLamps || L.age < sims3cam::LampSolver::kConfirmFrames) continue;
       live[L.slot] = true;
       Sims3Hook::LampSent& s = h.lampSent[L.slot];
-      const bool changed = !s.on || sims3cam::lampDist(s.pos, L.pos) > 0.15f ||
-                           std::fabs(s.col[0] - L.col[0]) > 0.05f || std::fabs(s.col[1] - L.col[1]) > 0.05f || std::fabs(s.col[2] - L.col[2]) > 0.05f;
+      const bool changed = !s.on || sims3cam::lampDist(s.pos, L.pos) > 0.25f ||   // milestone 21: a real move, not the estimate's jitter
+                           std::fabs(s.col[0] - L.col[0]) > 0.1f || std::fabs(s.col[1] - L.col[1]) > 0.1f || std::fabs(s.col[2] - L.col[2]) > 0.1f;
       if (!changed) continue;
       if (apiLights) {
-        h.lampApi[L.slot] = sims3ApiLamp(h.lampApi[L.slot], L.slot, L); ++h.apiLightCalls;
+        h.lampApi[L.slot] = sims3ApiLamp(h.lampApi[L.slot], L); ++h.apiLightCalls;
       } else {
         D3DLIGHT9 light;
         sims3cam::makeLampLight(L, light);
@@ -1968,8 +1968,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
       if (!h.loggedLamp) {
         h.loggedLamp = true;
         char msg[240];
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: first lamp forwarded as light %d at (%.1f, %.1f, %.1f), colour %.2f,%.2f,%.2f, from %u rays; %u rig rays this frame",
-                 L.slot, L.pos[0], L.pos[1], L.pos[2], L.col[0], L.col[1], L.col[2], L.support, raysThisFrame);
+        snprintf(msg, sizeof msg, "Sims 3 camera hook: first lamp forwarded as light %d at (%.1f, %.1f, %.1f), anchored to the object at (%.1f, %.1f, %.1f), colour %.2f,%.2f,%.2f, from %u rays; %u rig rays this frame",
+                 L.slot, L.pos[0], L.pos[1], L.pos[2], L.anchor[0], L.anchor[1], L.anchor[2], L.col[0], L.col[1], L.col[2], L.support, raysThisFrame);
         Logger::info(msg);
       }
     }
@@ -2212,7 +2212,7 @@ static void* sims3ApiSun(void* old, const sims3cam::SunVote& s) {
   info.radiance.x = s.col[0] > 0.f ? s.col[0] * k : 0.f; info.radiance.y = s.col[1] > 0.f ? s.col[1] * k : 0.f; info.radiance.z = s.col[2] > 0.f ? s.col[2] * k : 0.f;
   return sims3ApiLightReplace(old, info);
 }
-static void* sims3ApiLamp(void* old, int slot, const sims3cam::Lamp& L) {
+static void* sims3ApiLamp(void* old, const sims3cam::Lamp& L) {
   remixapi_LightInfoSphereEXT sp = {};
   sp.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_SPHERE_EXT;
   sp.position.x = L.pos[0]; sp.position.y = L.pos[1]; sp.position.z = L.pos[2];
@@ -2220,7 +2220,7 @@ static void* sims3ApiLamp(void* old, int slot, const sims3cam::Lamp& L) {
   sp.shaping_hasvalue = 0;
   sp.volumetricRadianceScale = 1.f;
   remixapi_LightInfo info = {};
-  info.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO; info.pNext = &sp; info.hash = kSims3LampHash + (uint64_t) slot;
+  info.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO; info.pNext = &sp; info.hash = kSims3LampHash ^ (uint64_t) L.id;   // the object the lamp is anchored to (milestone 21)
   const float k = sims3cam::lampRadiance();
   info.radiance.x = L.col[0] > 0.f ? L.col[0] * k : 0.f; info.radiance.y = L.col[1] > 0.f ? L.col[1] * k : 0.f; info.radiance.z = L.col[2] > 0.f ? L.col[2] * k : 0.f;
   return sims3ApiLightReplace(old, info);
