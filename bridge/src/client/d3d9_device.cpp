@@ -1956,10 +1956,10 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
       const sims3cam::LampSolver::Event& e = h.lamps.events[k];
       ++h.lampEventsLogged; char msg[260];
       if (e.kind == 1)
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: lamp lit at frame %u on the object at (%.1f, %.1f, %.1f), light height %.1f: %u votes, %u counted, %s, own ray %s, colour %.2f,%.2f,%.2f",
-                 h.frames, e.anchor[0], e.anchor[1], e.anchor[2], e.y, e.votes, e.agreeing, e.spread ? "spread" : "one-sided", e.selfRay ? "yes" : "no", e.col[0], e.col[1], e.col[2]);
+        snprintf(msg, sizeof msg, "Sims 3 camera hook: lamp lit at frame %u on the object at (%.1f, %.1f, %.1f), light height %.1f: %u votes, %u counted, colour %.2f,%.2f,%.2f",
+                 h.frames, e.anchor[0], e.anchor[1], e.anchor[2], e.y, e.votes, e.agreeing, e.col[0], e.col[1], e.col[2]);
       else
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: lamp dropped at frame %u, the object at (%.1f, %.1f, %.1f), bulb height %.1f, after %u supported frames, own ray %s", h.frames, e.anchor[0], e.anchor[1], e.anchor[2], e.y, e.age, e.selfRay ? "seen" : "never");
+        snprintf(msg, sizeof msg, "Sims 3 camera hook: lamp dropped at frame %u, the object at (%.1f, %.1f, %.1f), bulb height %.1f, after %u supported frames, %u near witnesses at the end", h.frames, e.anchor[0], e.anchor[1], e.anchor[2], e.y, e.age, e.votes);
       Logger::info(msg);
     }
     for (uint32_t k = 0; k < h.lamps.nDropped; ++k) {   // the lamps gone this frame
