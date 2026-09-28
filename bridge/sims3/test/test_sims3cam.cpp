@@ -449,9 +449,9 @@ int main() {
       CHECK(n == 1 && ls.lamps[0].slot == 1 && ls.lamps[0].age == 1, "lamps: four converging rays make one lamp in light slot 1 (not yet confirmed); the parallel fill makes none");
       feed(); ls.solve(); feed(); n = ls.solve();
       CHECK(n == 1 && ls.lamps[0].age >= LampSolver::kConfirmFrames && ls.created == 1, "lamps: the same rays three frames running confirm it without seeding a duplicate");
-      CHECK(n == 1 && lampDist(ls.lamps[0].pos, lampPos) < 0.1f, "lamps: its position is the rays' meeting point, over the lamp object");
+      CHECK(n == 1 && lampDist(ls.lamps[0].pos, lampPos) < 0.1f, "lamps: its position is where the rays cross the lamp object's axis");
       CHECK(n == 1 && ls.lamps[0].anchor[0] == 10.f && ls.lamps[0].anchor[2] == 20.f && ls.lamps[0].id == LampSolver::originId(objs[4]) && ls.lamps[0].id != 0, "lamps: anchored to the lamp object's origin, with that object's id");
-      CHECK(ls.snapped > ls.unsnapped, "lamps: most meeting points lay over the lamp object, the stray pairs (a fill against the lamp's own ray) over nothing (%u snapped, %u not)", ls.snapped, ls.unsnapped);
+      CHECK(ls.votesTotal >= 4 && ls.objectsVoted >= 1, "lamps: the four objects' rays voted for the lamp object (%u votes, %u objects qualified)", ls.votesTotal, ls.objectsVoted);
       CHECK(n == 1 && ls.lamps[0].col[0] > 0.25f && ls.lamps[0].col[0] < 0.45f && ls.lamps[0].col[0] > ls.lamps[0].col[2], "lamps: its colour keeps the rig's hue at an inverse-square intensity read from all its rays");
       D3DLIGHT9 pl; makeLampLight(ls.lamps[0], pl);
       CHECK(pl.Type == D3DLIGHT_POINT && std::fabs(pl.Position.y - 47.5f) < 0.1f && pl.Attenuation0 == 1.f && pl.Attenuation2 > 0.f, "lamps: forwarded as a point light at the lamp");
@@ -469,7 +469,7 @@ int main() {
           lone.add(src, dirs, cols, nullptr);
         }
         const uint32_t nl = lone.solve();
-        CHECK(nl == 0 && lone.unsnapped > 0 && lone.snapped == 0, "lamps: rays converging where no object is drawn make no lamp (%u meeting points over nothing)", lone.unsnapped);
+        CHECK(nl == 0 && lone.objectsVoted == 0, "lamps: rays converging where no object is drawn make no lamp (%u stray votes, no object qualified)", lone.votesTotal);
       }
       CHECK(findWorldReg(0x0ba6ddb9aa01913cull) == 12 && findWorldReg(0x7d1bc3ce6acbd715ull) == 16 && findWorldReg(0x1234ull) == -1, "lamps: World rows per object shader (c12 / c16); unknown -> none");
     }
