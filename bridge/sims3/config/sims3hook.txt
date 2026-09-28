@@ -9,6 +9,17 @@
 terrain = 1
 ringTrace = 0
 markKey = 220
+# apiLights     1 = the sun and the lamps go to the runtime as Remix API lights with explicit radiance and size (needs exposeRemixApi);
+#               0 = fixed-function lights converted by the runtime (a 2-degree sun at intensity 1, 4-unit spheres for lamps)
+# sunAngle      the sun's angular diameter in thousandths of a degree
+# sunRadiance   the sun's radiance per unit of rig colour, thousandths
+# lampRadius    the lamps' sphere radius in thousandths of a unit
+# lampRadiance  the lamps' radiance per unit of rig colour, thousandths
 skyFromRig = 1
 skyDayLevel = 250
 skyMinBrightness = 30
+apiLights = 1
+sunAngle = 2000
+sunRadiance = 1000
+lampRadius = 300
+lampRadiance = 40000

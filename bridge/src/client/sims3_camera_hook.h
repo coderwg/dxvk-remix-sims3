@@ -975,6 +975,18 @@ inline int ringTrace() { static int s = -1; if (s < 0) s = hookOption("ringTrace
 inline int skyFromRig() { static int s = -1; if (s < 0) s = hookOption("skyFromRig", 1) != 0; return s; }
 inline float skyDayLevel() { static float s = -1.f; if (s < 0.f) { int v = hookOption("skyDayLevel", 250); if (v < 10) v = 10; s = (float) v / 1000.f; } return s; }
 inline float skyMinBrightness() { static float s = -1.f; if (s < 0.f) { int v = hookOption("skyMinBrightness", 30); if (v < 0) v = 0; if (v > 1000) v = 1000; s = (float) v / 1000.f; } return s; }
+// Lights through the Remix API (milestone 20b): apiLights = 1 forwards the sun as a distant
+// light and the lamps as sphere lights through the Remix API, with explicit radiance and size,
+// instead of fixed-function lights converted by the runtime (needs exposeRemixApi = True;
+// otherwise the fixed-function path stays). sunAngle = the sun's angular diameter, thousandths
+// of a degree (the runtime's conversion used 2 degrees); sunRadiance = radiance per unit of rig
+// colour, thousandths (the conversion used 1); lampRadius = the lamps' sphere radius in
+// thousandths of a unit; lampRadiance = radiance per unit of rig colour, thousandths.
+inline int apiLights() { static int s = -1; if (s < 0) s = hookOption("apiLights", 1) != 0; return s; }
+inline float sunAngle() { static float s = -1.f; if (s < 0.f) { int v = hookOption("sunAngle", 2000); if (v < 100) v = 100; if (v > 90000) v = 90000; s = (float) v / 1000.f; } return s; }
+inline float sunRadiance() { static float s = -1.f; if (s < 0.f) { int v = hookOption("sunRadiance", 1000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
+inline float lampRadius() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampRadius", 300); if (v < 20) v = 20; s = (float) v / 1000.f; } return s; }
+inline float lampRadiance() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampRadiance", 40000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
 
 // layerPass: every draw is a layer pass. lotFamily: a lot's ground and its paint composite --
 // drawn in place, the first copy visible and every re-submission (further chunk copies, the

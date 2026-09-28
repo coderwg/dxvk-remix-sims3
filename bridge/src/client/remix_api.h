@@ -34,5 +34,8 @@ extern PFN_remixapi_BridgeCallback g_presentCallback;
 // (defined in remix_api.cpp; they send the command to the server, which needs
 // exposeRemixApi = True in .trex\bridge.conf to have the runtime's API loaded).
 remixapi_ErrorCode REMIXAPI_CALL remixapi_SetConfigVariable(const char* var, const char* value);
+remixapi_ErrorCode REMIXAPI_CALL remixapi_CreateLight(const remixapi_LightInfo* info, remixapi_LightHandle* out_handle);
+remixapi_ErrorCode REMIXAPI_CALL remixapi_DestroyLight(remixapi_LightHandle handle);
+remixapi_ErrorCode REMIXAPI_CALL remixapi_DrawLightInstance(remixapi_LightHandle handle);
 
 }
