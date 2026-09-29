@@ -509,17 +509,22 @@ int main() {
           const float front[3] = { 0.f, 0.f, -1.f }, zero[3] = {}; float wd[3];
           CHECK(worldDir(rowsY90, front, wd) && nearf(wd[0], -1.f) && nearf(wd[1], 0.f) && nearf(wd[2], 0.f), "lamps: a direction through the World rows is rotated, not translated, and of unit length (%.2f %.2f %.2f)", wd[0], wd[1], wd[2]);
           CHECK(!worldDir(rowsY90, zero, wd) && wd[0] == 0.f, "lamps: a point light's zero vector gives no direction");
-          // milestone 33: a lamp's own part of the light at its base
-          CHECK(lampOwnStep(0.f, 80.f, 0.f, true, true, 15.f) == 80.f && lampOwnStep(0.f, 133.f, 0.f, true, false, 15.f) == 0.f && lampOwnStep(60.f, 133.f, 0.f, true, false, 15.f) == 60.f,
-                "lamps: a first reading is taken outright by night; by day it is not (the daylight), and what the lamp had stands");
+          // milestones 33, 34: a lamp's own part of the light at its base
+          CHECK(lampLitByNight(64, 7) && lampLitByNight(203, 0) && !lampLitByNight(32, 11) && !lampLitByNight(60, 45) && !lampLitByNight(0, 0),
+                "lamps: by night a lit lamp's base is bright and at least twice the darkest point near it");
           float own = 0.f;
-          for (int v = 0; v < 84; ++v) own = lampOwnStep(own, 3.f * (float) v, 3.f, false, false, 15.f);   // dawn: 84 versions, each a little brighter around the lamp's base
+          for (int v = 0; v < 84; ++v) own = lampOwnDay(own, 3.f * (float) (v + 1), 3.f, 3.f, 15.f);   // dawn: 84 versions, each a little brighter at the base and around it
           CHECK(own == 0.f, "lamps: the daylight's drift over many versions moves no lamp (%.0f)", own);
-          own = lampOwnStep(own, 250.f, 52.f, false, false, 15.f);
+          own = lampOwnDay(own, 412.f > 255.f ? 255.f : 412.f, 160.f, 8.f, 15.f);
           const float lit = own;
-          own = lampOwnStep(own, 240.f, -2.f, false, false, 15.f); own = lampOwnStep(own, 200.f, -50.f, false, false, 15.f);
-          CHECK(lit == 52.f && own == 2.f, "lamps: a switch is an abrupt change centred on the lamp, by day too: on at 52, off again at %.0f", own);
-          CHECK(lampOwnStep(10.f, 0.f, -40.f, false, true, 15.f) == 0.f && lampOwnStep(240.f, 0.f, 40.f, false, true, 15.f) == 255.f, "lamps: the own part stays within the map's range");
+          own = lampOwnDay(own, 250.f, -3.f, -3.f, 15.f); own = lampOwnDay(own, 95.f, -158.f, -6.f, 15.f);
+          CHECK(lit == 152.f && own == 0.f, "lamps: a switch by day is an abrupt change of the lamp's own base: on with 152 of its own, off again at %.0f", own);
+          CHECK(lampOwnDay(0.f, 14.f, 2.f, -31.f, 15.f) == 0.f && lampOwnDay(0.f, 0.f, 0.f, -72.f, 15.f) == 0.f,
+                "lamps: neighbours going dark around a lamp whose own base did not move light nothing (run 147's false lights)");
+          CHECK(lampOwnDay(0.f, 60.f, 40.f, 35.f, 15.f) == 0.f && lampOwnDay(0.f, 60.f, 40.f, 5.f, 15.f) == 35.f,
+                "lamps: a rise its surroundings share is not the lamp's; a rise of its own is");
+          CHECK(lampOwnDay(171.f, 0.f, -149.f, -1.f, 15.f) == 0.f && lampOwnDay(36.f, 20.f, 0.f, 0.f, 15.f) == 20.f,
+                "lamps: a lamp's own part is never more than the light at its base");
         }
       }
             CHECK(findWorldReg(0x0ba6ddb9aa01913cull) == 12 && findWorldReg(0x7d1bc3ce6acbd715ull) == 16 && findWorldReg(0x1234ull) == -1, "lamps: World rows per object shader (c12 / c16); unknown -> none");

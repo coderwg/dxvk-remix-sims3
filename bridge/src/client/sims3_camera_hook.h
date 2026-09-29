@@ -1005,16 +1005,22 @@ inline float lampJump() { static float s = -1.f; if (s < 0.f) { int v = hookOpti
 inline float lampOwnOn() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampOwnOn", 25); if (v < 1) v = 1; s = (float) v; } return s; }
 inline float lampRing() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampRing", 2500); if (v < 300) v = 300; s = (float) v / 1000.f; } return s; }
 inline float lampNightLevel() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampNightLevel", 300); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
-// One step of a lamp's own part in one map. excess = its base above the ring around it, in the
-// map as it is now; local = the part of the change since the previous version that is centred on
-// the lamp (the base's change less the ring's). first = there is no previous version to compare
-// with (the lamp's first reading, or the map unseen for a while): the outright reading then, by
-// night only -- by day the map holds the daylight through the windows and only a change tells.
-inline float lampOwnStep(float own, float excess, float local, bool first, bool night, float jump) {
+// By night a map holds the lamps' light alone, and the reading of runs 143 to 145 stands: a lamp is
+// lit when its base is bright (>= 40) and at least twice the darkest of four points around it.
+inline bool lampLitByNight(int base, int darkest) { return base >= 40 && base >= 2 * darkest; }
+// By day the map also holds the daylight, and only a change tells (milestone 34): one step of a
+// lamp's own part from one version of a map to the next. dBase = the change at its base, dRing = the
+// median change of the ring around it. The lamp's own is a change of ITS BASE: a rise of the base
+// less whatever the surroundings rose with it, or a fall less whatever they fell with it. A change
+// of the surroundings alone is another lamp's (run 147: neighbours switching off darkened the
+// rings of lamps whose own bases read 0, and the difference lit them). And a lamp's own part is
+// never more than the light at its base.
+inline float lampOwnDay(float own, float base, float dBase, float dRing, float jump) {
   float v = own;
-  if (first) { if (night) v = excess; }
-  else if (std::fabs(local) >= jump) v = own + local;
-  return v < 0.f ? 0.f : (v > 255.f ? 255.f : v);
+  if (dBase >= jump) { const float rise = dBase - (dRing > 0.f ? dRing : 0.f); if (rise >= jump) v += rise; }
+  else if (dBase <= -jump) { const float fall = dBase - (dRing < 0.f ? dRing : 0.f); if (fall <= -jump) v += fall; }
+  if (v > base) v = base;
+  return v < 0.f ? 0.f : v;
 }
 inline float lampShadeGlow() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampShadeGlow", 1000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
 
@@ -1671,6 +1677,12 @@ inline bool worldDir(const float* rows, const float* v, float* out) {
 // the lamp's own is what changes ABRUPTLY and CENTRED on it: a switch changes the map in one
 // version, around the lamp; daylight drifts over many versions, evenly. So each lamp keeps its
 // own part per map, moved only by such changes (lampOwnStep), read outright only by night.
+// Milestone 34 (run 147): two flaws of that. The change "centred on the lamp" was the base's change
+// less the ring's, so a ring that went dark with the base unchanged counted as the lamp's rise: 9
+// of 44 switch-ons had a base under 30, several a base of 0. And the first reading was taken
+// "by night" at a load by day, the sun not yet known (level 0). Now: by night -- the sun level
+// under the night level for ten seconds with the maps live -- the proven reading of the map as it
+// is; by day a change of the lamp's own base only, and never more own light than the base holds.
 struct LampRay { float pos[3]; float dir[3]; float col[3]; };
 
 struct Lamp {
