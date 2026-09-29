@@ -111,10 +111,13 @@ namespace {
     float objWorld[3] = {};              // World translation of the bound object shader...
     float objWorldRows[12] = {};         // ...and its three World rows (milestone 22: the game's lights carried to the world)
     float objRowsAfter[8] = {}; bool objRowsAfterValid = false;   // the two rows after World (c15, c16 on the main object shader: the light map projection, milestone 26)
-    // the lot's light map as the lamps' switch (milestone 27): the texture the object shaders sample at s2, decoded
-    // on the client at each new version, the projection rows from the last lamp draw that carried them
+    // the lot's light map as the lamps' switch (milestones 27, 28): the A8R8G8B8 texture most object-shader draws of a
+    // frame carry at s2 (tallied per frame), decoded on the client at each new version, with the projection rows those
+    // draws upload after World
     IDirect3DBaseTexture9* lightMapTex = nullptr; uint32_t lightMapVersion = 0xFFFFFFFFu, lightMapW = 0, lightMapH = 0, lightMapDecodes = 0, lightMapVerdicts = 0, lightMapFails = 0;
-    std::vector<uint8_t> lightMap; float lightMapRows[8] = {}; bool lightMapValid = false; uint32_t lightMapJudged = 0xFFFFFFFFu;
+    std::vector<uint8_t> lightMap; float lightMapRows[8] = {}; bool lightMapValid = false;
+    struct LightMapTally { IDirect3DBaseTexture9* tex; uint32_t draws; float rows[8]; bool rowsValid; };
+    LightMapTally lightMapTally[4] = {}; uint32_t lightMapTallyN = 0, lightMapRivalFrames = 0, lightMapSwitches = 0, lightMapSwitchesLogged = 0, lightMapOutside = 0;
     bool objWorldValid = false;          // ...and whether it has been uploaded since the shader was bound
     float rig[32] = {};                  // c0..c7 of the bound rig pixel shader (directions, colours)
     float psConst[64] = {}; uint16_t psConstMask = 0;   // c0..c15 of the bound rig pixel shader as uploaded, and which registers were (milestone 24 diagnostic)
@@ -289,6 +292,24 @@ namespace {
     struct AltCam { float fovY, nearZ, farZ, aspect, p33, p43, pos[3], fwdY; uint64_t vs; uint32_t count; bool first; };
     AltCam frameAlts[4] = {}; uint32_t frameAltCount = 0;
   } g_sims3;
+
+  // The Sims 3 camera hook (milestone 28): an object-shader draw tallies the A8R8G8B8 texture it carries at s2, with
+  // its projection rows (y-free), for the light map to settle at the frame's end (sims3LightMapSettle, with the map below).
+  static void sims3LightMapTally(Sims3Hook& h) {
+    IDirect3DBaseTexture9* tex = h.boundTex[2];
+    if (!tex || (h.boundKind[2] & 0x7F) != 1 || h.boundFmt[2] != (uint32_t) D3DFMT_A8R8G8B8) return;
+    const float* r = h.objRowsAfter;
+    const bool rowsOk = h.objRowsAfterValid && r[1] == 0.f && r[5] == 0.f && (r[0] != 0.f || r[2] != 0.f) && (r[4] != 0.f || r[6] != 0.f);
+    for (uint32_t k = 0; k < h.lightMapTallyN; ++k) {
+      Sims3Hook::LightMapTally& t = h.lightMapTally[k];
+      if (t.tex != tex) continue;
+      ++t.draws; if (rowsOk) { memcpy(t.rows, r, sizeof t.rows); t.rowsValid = true; }
+      return;
+    }
+    if (h.lightMapTallyN >= 4) return;
+    Sims3Hook::LightMapTally& t = h.lightMapTally[h.lightMapTallyN++];
+    t.tex = tex; t.draws = 1; t.rowsValid = rowsOk; if (rowsOk) memcpy(t.rows, r, sizeof t.rows);
+  }
 
   template<typename Dev> void sims3TerrainBlockEnd(Sims3Hook& h, Dev* dev);   // defined with the terrain path (milestone 18g)
 
@@ -1222,7 +1243,7 @@ namespace {
       dev->SetTextureStageState(0, D3DTSS_TEXCOORDINDEX, h.uvIndexHidden ? 7u : h.gameTss0[3]);
       if (h.uvIndexHidden && !h.loggedCapturedUv) { h.loggedCapturedUv = true; Logger::info("Sims 3 camera hook: first draw sampling with the shader's captured texture coordinates (stage 0 texcoord index 7 hides the raw input set)"); }
     }
-    if (h.psRig && h.rigValid && h.objWorldValid) h.lamps.add(h.objWorld, h.rig, h.rig + 16, h.sunSet ? h.sun.dir : nullptr);
+    if (h.psRig && h.rigValid && h.objWorldValid) { h.lamps.add(h.objWorld, h.rig, h.rig + 16, h.sunSet ? h.sun.dir : nullptr); sims3LightMapTally(h); }
     // Create-A-Style tint: albedo x TEXTUREFACTOR (white when the shader has no tint); each of the
     // three stage-0 states the game has written since is set again
     for (int i = 0; i < 3; ++i) if (!(h.tssOurs & (1u << i))) { h.tssOurs |= (uint8_t) (1u << i); dev->SetTextureStageState(0, kSims3Tss[i], kSims3TssOurs[i]); }
@@ -1842,7 +1863,10 @@ static void sims3LogStats(bool withTable) {
   Logger::info(msg);
   uint32_t lampHandles = 0;
   for (uint32_t k = 0; k < h.lamps.nLamps; ++k) if (h.lamps.lamps[k].api) ++lampHandles;
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   light map: %s, %ux%u, %u versions decoded, %u verdicts, %u decode failures", h.lightMapValid ? "read" : "not read", h.lightMapW, h.lightMapH, h.lightMapDecodes, h.lightMapVerdicts, h.lightMapFails);
+  uint32_t unjudged = 0;
+  for (uint32_t k = 0; k < h.lamps.nLamps; ++k) if (h.lamps.lamps[k].state < 0) ++unjudged;
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   light map: %s, %ux%u, %u versions decoded, %u judgements, %u decode failures; switched texture %u times, a rival texture at s2 in %u frames; %u of %u lamps beyond it (%u fell beyond it)",
+           h.lightMapValid ? "read" : "not read", h.lightMapW, h.lightMapH, h.lightMapDecodes, h.lightMapVerdicts, h.lightMapFails, h.lightMapSwitches, h.lightMapRivalFrames, unjudged, h.lamps.nLamps, h.lightMapOutside);
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   api lights: %s; %u calls, sun %s, %u lamp handles; the game's light table: %s",
            GlobalOptions::getExposeRemixApi() ? "on" : "off (no lights: exposeRemixApi is not set)", h.apiLightCalls, h.sunApi ? "live" : "none", lampHandles,
@@ -1960,13 +1984,16 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
     auto& h = g_sims3;
     const bool api = GlobalOptions::getExposeRemixApi();
     const uint32_t raysThisFrame = h.lamps.nRays;
-    // A new version of the light map judges every known lamp, drawn this frame or not (milestone 27).
-    if (h.lightMapValid && h.lightMapJudged != h.lightMapVersion) {
-      h.lightMapJudged = h.lightMapVersion;
+    // The light map settles for the frame (milestone 28); when it changed, every known lamp is judged
+    // by it, drawn this frame or not, and a lamp it has not judged yet is judged as soon as it can be.
+    const bool mapChanged = sims3LightMapSettle(h);
+    if (h.lightMapValid) {
       for (uint32_t k = 0; k < h.lamps.nLamps; ++k) {
         sims3cam::Lamp& L = h.lamps.lamps[k];
+        if (!mapChanged && L.state >= 0) continue;
         const int8_t v = sims3LightMapVerdict(h, L.anchor);
-        if (v >= 0) { L.state = v; L.mapped = true; ++h.lightMapVerdicts; }
+        if (v >= 0) { L.state = v; ++h.lightMapVerdicts; }
+        else if (L.state >= 0) { L.state = -1; ++h.lightMapOutside; }   // beyond the map now (another lot's): back to its witnesses, released when undrawn
       }
     }
     h.lamps.solve();
@@ -2205,17 +2232,39 @@ void Direct3DDevice9Ex_LSS<EnableSync>::GetGammaRamp(UINT iSwapChain, D3DGAMMARA
   }
 }
 
-// The Sims 3 camera hook (milestone 27): the lot's light map, decoded on the client whenever the
-// game uploads a new version, and read at a world position through the projection rows the object
-// shaders carry (u = P . row0, v = P . row1, wrapping). Returns the red value 0..255, or -1.
-static bool sims3LightMapUpdate(Sims3Hook& h, IDirect3DBaseTexture9* tex, const float* rows) {
-  auto* t = (tex && (h.boundKind[2] & 0x7F) == 1) ? bridge_cast<Direct3DTexture9_LSS*>(tex) : nullptr;
-  if (!t) return false;
-  memcpy(h.lightMapRows, rows, sizeof h.lightMapRows);
+// The Sims 3 camera hook (milestones 27, 28): the lot's light map. Every object-shader draw of a
+// frame tallies the A8R8G8B8 texture it carries at s2, with the two rows it uploads after World
+// (the map's projection: a top-down one, so their y terms are zero); at the frame's end the
+// texture most draws carried is the map -- a lone draw with something else at s2 (a selected
+// lamp's own texture, another lot's map) cannot displace it. The map is decoded on the client
+// whenever its version changes and read at a world position (u = P . row0, v = P . row1); beyond
+// it (u or v outside 0..1) nothing is read. Returns the red value 0..255, or -1.
+// Frame end: the map is the tallied texture with the most draws, taken up once a draw has carried
+// its rows, decoded anew when it or its version changed. True when the map changed this frame.
+static bool sims3LightMapSettle(Sims3Hook& h) {
+  const Sims3Hook::LightMapTally* best = nullptr;
+  for (uint32_t k = 0; k < h.lightMapTallyN; ++k) if (!best || h.lightMapTally[k].draws > best->draws) best = &h.lightMapTally[k];
+  if (h.lightMapTallyN > 1) ++h.lightMapRivalFrames;
+  const uint32_t tallied = h.lightMapTallyN; h.lightMapTallyN = 0;
+  if (!best) return false;
+  const bool switched = best->tex != h.lightMapTex;
+  if (switched && !best->rowsValid) return false;   // a new map is taken up only with its rows; the old one stands meanwhile
+  if (best->rowsValid) memcpy(h.lightMapRows, best->rows, sizeof h.lightMapRows);
+  auto* t = bridge_cast<Direct3DTexture9_LSS*>(best->tex);
   const uint32_t ver = t->sims3Level0Version();
-  if (tex == h.lightMapTex && ver == h.lightMapVersion && h.lightMapValid) return true;
+  if (!switched && ver == h.lightMapVersion && h.lightMapValid) return false;
   const D3DSURFACE_DESC d = t->getLevelDesc(0);
-  h.lightMapTex = tex; h.lightMapVersion = ver; h.lightMapW = d.Width; h.lightMapH = d.Height;
+  if (switched) {
+    ++h.lightMapSwitches;
+    if (h.lightMapSwitchesLogged < 40) {
+      ++h.lightMapSwitchesLogged; char msg[300];
+      snprintf(msg, sizeof msg, "Sims 3 camera hook: light map at frame %u is now texture %p (%ux%u, version %u, hash %016llx) with %u draws of %u textures tallied, rows (%.4g %.4g %.4g %.4g) (%.4g %.4g %.4g %.4g); before it %p",
+               h.frames + 1, (void*) best->tex, d.Width, d.Height, ver, (unsigned long long) t->sims3Level0Hash(), best->draws, tallied,
+               best->rows[0], best->rows[1], best->rows[2], best->rows[3], best->rows[4], best->rows[5], best->rows[6], best->rows[7], (void*) h.lightMapTex);
+      Logger::info(msg);
+    }
+  }
+  h.lightMapTex = best->tex; h.lightMapVersion = ver; h.lightMapW = d.Width; h.lightMapH = d.Height;
   h.lightMapValid = sims3cam::decodeMaskRed((uint32_t) d.Format, t->sims3Level0Data(), sims3cam::maskBytes((uint32_t) d.Format, d.Width, d.Height), d.Width, d.Height, h.lightMap);
   if (h.lightMapValid) ++h.lightMapDecodes; else ++h.lightMapFails;
   return h.lightMapValid;
@@ -2224,13 +2273,13 @@ static int sims3LightMapAt(const Sims3Hook& h, const float* P) {
   if (!h.lightMapValid || h.lightMapW == 0 || h.lightMapH == 0) return -1;
   const float* r = h.lightMapRows;
   const float u = P[0]*r[0] + P[1]*r[1] + P[2]*r[2] + r[3], v = P[0]*r[4] + P[1]*r[5] + P[2]*r[6] + r[7];
-  const float fu = u - std::floor(u), fv = v - std::floor(v);
-  const uint32_t x = (uint32_t) (fu * h.lightMapW) % h.lightMapW, y = (uint32_t) (fv * h.lightMapH) % h.lightMapH;
+  if (!(u >= 0.f && u < 1.f && v >= 0.f && v < 1.f)) return -1;   // beyond the map (milestone 28: no wrapping -- a street lamp is not judged by the lot's map)
+  const uint32_t x = (uint32_t) (u * h.lightMapW) % h.lightMapW, y = (uint32_t) (v * h.lightMapH) % h.lightMapH;
   return h.lightMap[y * h.lightMapW + x];
 }
 // The map's verdict on a lamp at base B: on when its value is bright (>= 40) and at least twice
 // the darkest of four points 1.5 units around it (run 140: 64 and 101 on, 7 and 15 off, the
-// surroundings 7-14). -1 when the map cannot be read there.
+// surroundings 7-14; run 141: 0-32 off, 64 on). -1 when the map cannot be read there.
 static int8_t sims3LightMapVerdict(const Sims3Hook& h, const float* B) {
   const int at = sims3LightMapAt(h, B);
   if (at < 0) return -1;
@@ -4235,19 +4284,13 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
         }
         if (model_ >= 0) {
           const sims3cam::LiteModel& m_ = sims3cam::liteTable().models[model_];
-          // The lamp's state from the lot's light map (milestone 27), when this draw carries the map
-          // and the projection rows; else -1 and the witnesses decide.
-          int8_t state_ = -1;
-          if (g_sims3.objRowsAfterValid && sims3LightMapUpdate(g_sims3, g_sims3.boundTex[2], g_sims3.objRowsAfter)) {
-            state_ = sims3LightMapVerdict(g_sims3, g_sims3.objWorld);
-            if (state_ >= 0) ++g_sims3.lightMapVerdicts;
-          }
+          // The draw registers the lamp (or finds it again); its state comes from the light map at the
+          // frame's end (milestone 28), never from this draw's own texels.
           for (uint8_t li = 0; li < m_.n; ++li) {
             const sims3cam::LiteLight& L_ = m_.lights[li];
             float wp_[3]; sims3cam::worldPoint(g_sims3.objWorldRows, L_.pos, wp_);
             const uint32_t id_ = sims3cam::LampSolver::originId(g_sims3.objWorld) ^ (0x9E3779B9u * (uint32_t) (li + 1));
-            g_sims3.lamps.addModelLamp(id_, li, g_sims3.objWorld, wp_, L_.col, L_.intensity, L_.type, state_);
-            if (state_ >= 0) for (uint32_t k_ = 0; k_ < g_sims3.lamps.nLamps; ++k_) { sims3cam::Lamp& Lk_ = g_sims3.lamps.lamps[k_]; if (Lk_.light == li && sims3cam::lampDist(Lk_.anchor, g_sims3.objWorld) < 0.5f) Lk_.mapped = true; }
+            g_sims3.lamps.addModelLamp(id_, li, g_sims3.objWorld, wp_, L_.col, L_.intensity, L_.type, (int8_t) -1);
           }
           // At the mark key (milestone 26): the lot's light map as this lamp object samples it -- the
           // texture at s2, the projection rows after World, and the map's brightness at the lamp's
@@ -4259,7 +4302,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
             auto* t_ = (g_sims3.boundTex[2] && (g_sims3.boundKind[2] & 0x7F) == 1) ? bridge_cast<Direct3DTexture9_LSS*>(g_sims3.boundTex[2]) : nullptr;
             if (t_) {
               const D3DSURFACE_DESC d_ = t_->getLevelDesc(0);
-              n_ += (size_t) snprintf(msg_ + n_, sizeof msg_ - n_, " s2 %ux%u format %u pool %u written %u times hash %016llx;", d_.Width, d_.Height, (unsigned) d_.Format, (unsigned) d_.Pool, t_->sims3Level0Version(), (unsigned long long) t_->sims3Level0Hash());
+              n_ += (size_t) snprintf(msg_ + n_, sizeof msg_ - n_, " s2 %p %ux%u format %u pool %u written %u times hash %016llx (the frame's map %p);", (void*) g_sims3.boundTex[2], d_.Width, d_.Height, (unsigned) d_.Format, (unsigned) d_.Pool, t_->sims3Level0Version(), (unsigned long long) t_->sims3Level0Hash(), (void*) g_sims3.lightMapTex);
               if (g_sims3.objRowsAfterValid) {
                 const float* r_ = g_sims3.objRowsAfter;
                 n_ += (size_t) snprintf(msg_ + n_, sizeof msg_ - n_, " rows after World (%.4g %.4g %.4g %.4g) (%.4g %.4g %.4g %.4g);", r_[0], r_[1], r_[2], r_[3], r_[4], r_[5], r_[6], r_[7]);

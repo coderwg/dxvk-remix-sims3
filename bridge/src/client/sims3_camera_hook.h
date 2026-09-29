@@ -1595,6 +1595,12 @@ inline void worldPoint(const float* rows, const float* p, float* out) {
 // surroundings unchanged. So the map's value at a lamp's base, bright and clearly above the
 // points around it, says on; it is read for every known lamp whenever the map changes, drawn
 // or not, and it overrides the witnesses, who remain the fallback without a readable map.
+// Milestone 28 (run 141): the map's word STANDS per lamp until the map says otherwise -- the
+// witnesses may no longer overrule it on the frames a lamp is not drawn (off screen, lamps lit
+// up and went out by the rays alone) -- and the map is the texture most object draws of the
+// frame carry at s2, not whatever the last lamp draw carried (a second texture displaced it
+// 63 times in run 141 while the map itself changed 17 times, each time re-judging every lamp
+// against the wrong texels). A lamp beyond the map's extent is not judged by it.
 struct LampRay { float pos[3]; float dir[3]; float col[3]; };
 
 struct Lamp {
@@ -1611,8 +1617,7 @@ struct Lamp {
   uint32_t unseen;     // consecutive frames its object was not drawn
   uint32_t held;       // frames held for want of witnesses (statistics)
   bool drawn;          // the object was drawn this frame
-  int8_t state;        // what was read for it this frame: 1 on, 0 off, -1 nothing (milestones 25, 27: the light map)
-  bool mapped;         // the light map has judged it at least once (milestone 27): off screen it stays until the map says off
+  int8_t state;        // the light map's standing word for it (milestone 28): 1 on, 0 off, -1 not judged (beyond the map, or none read yet); it stands until the map says otherwise
   bool confirmedOnce;  // forwarded at least once (the event log)
   void* api;           // the Remix API light handle (the device destroys it on drop)
   float sentPos[3], sentCol[3]; bool sent;   // what the runtime holds
@@ -1734,8 +1739,9 @@ struct LampSolver {
     e.y = L.pos[1]; e.votes = votes; e.age = L.age;
   }
 
-  // Frame end: each lamp's own draw decides its state when drawn (the witnesses' rays give the
-  // colour); undrawn, the state holds. The lamps gone are handed to the device.
+  // Frame end: the light map's standing word decides each judged lamp (the witnesses' rays give
+  // the colour); a lamp the map has not judged goes by its witnesses. The lamps gone are handed
+  // to the device.
   uint32_t solve() {
     nDropped = 0; nEvents = 0;
     for (uint32_t k = 0; k < nLamps; ++k) {
@@ -1746,7 +1752,7 @@ struct LampSolver {
       L.support = pointing;
       uint32_t witnesses = 0;
       for (uint32_t o = 0; o < nOrigins; ++o) if (witness(origins[o], L) && canTestify(origins[o], originSlots[o], L)) ++witnesses;
-      // the verdict: the draw's own state when it read one; else the witnesses -- one pointing
+      // the verdict: the map's standing word when it has one; else the witnesses -- one pointing
       // at the light says on, one able to testify and not pointing says off, none holds
       const int8_t verdict = L.state >= 0 ? L.state : (pointing ? (int8_t) 1 : (witnesses ? (int8_t) 0 : (int8_t) -1));
       if (verdict == 1) {
@@ -1761,11 +1767,11 @@ struct LampSolver {
         ++L.held;         // nothing says either way: the last state holds
       }
       L.unseen = L.drawn ? 0 : L.unseen + 1;
-      L.drawn = false; L.state = -1;
+      L.drawn = false;   // the map's word stands (milestone 28): undrawn, a judged lamp is not handed to the witnesses
     }
     for (uint32_t k = 0; k < nLamps; ) {
       Lamp& L = lamps[k];
-      if (L.missing > kMissingLimit || (L.unseen > kUnseenLimit && !L.mapped)) {
+      if (L.missing > kMissingLimit || (L.unseen > kUnseenLimit && L.state < 0)) {
         if (L.confirmedOnce) record(2, L, L.missing > kMissingLimit ? 1u : 0u);
         droppedApi[nDropped++] = L.api;
         L = lamps[nLamps - 1]; --nLamps; ++dropped;
