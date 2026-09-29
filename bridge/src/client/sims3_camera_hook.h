@@ -989,6 +989,14 @@ inline float sunAngle() { static float s = -1.f; if (s < 0.f) { int v = hookOpti
 inline float sunRadiance() { static float s = -1.f; if (s < 0.f) { int v = hookOption("sunRadiance", 1000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
 inline float lampRadius() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampRadius", 150); if (v < 20) v = 20; s = (float) v / 1000.f; } return s; }
 inline float lampRadiance() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampRadiance", 40000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
+// The lamps' shapes from the game's definitions (milestone 32): cones for spots and lamp shades, a
+// shade's glow, a cylinder for a tube. lampShapes 0 = plain spheres as before; lampConeScale scales
+// every cone angle (thousandths; the definitions' angles are taken as half angles); lampConeSoftness
+// the cone edge's softness (thousandths, 0..1000); lampShadeGlow scales the light through the shade.
+inline bool lampShapes() { static int s = -1; if (s < 0) s = hookOption("lampShapes", 1) != 0 ? 1 : 0; return s == 1; }
+inline float lampConeScale() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampConeScale", 1000); if (v < 100) v = 100; s = (float) v / 1000.f; } return s; }
+inline float lampConeSoftness() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampConeSoftness", 300); if (v < 0) v = 0; if (v > 1000) v = 1000; s = (float) v / 1000.f; } return s; }
+inline float lampShadeGlow() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampShadeGlow", 1000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
 
 // layerPass: every draw is a layer pass. lotFamily: a lot's ground and its paint composite --
 // drawn in place, the first copy visible and every re-submission (further chunk copies, the
@@ -1522,11 +1530,16 @@ inline void makeSunLight(const SunVote& v, D3DLIGHT9& l) {
 // model's index data as the game uploads it (run 133: the Direct3D index buffers match the
 // package chunks byte for byte, differences decoded). At a draw of an object shader the index
 // buffer's hash names the model, and the object's World rows carry each light to the world.
-struct LiteLight { uint8_t type; float pos[3]; float col[3]; float intensity; };   // type 3 point, 4 spot, 5 lamp shade, 6 tube
+// The shape (milestone 32, table format 2): at = the definition's direction, which points from the
+// lit side BACK to the light (a picture light's points away from its wall, a street lamp's and a
+// skylight's up, a fountain's underwater light's down): the light travels along -at. d by type:
+// spot = cone angle, blur; lamp shade = cone angle (around -at), shade multiplier, bottom angle
+// (the cone around +at), shade r g b (the light through the shade); tube = length, blur.
+struct LiteLight { uint8_t type; float pos[3]; float col[3]; float intensity; float at[3]; float d[6]; };   // type 3 point, 4 spot, 5 lamp shade, 6 tube
 struct LiteModel { uint64_t ibHash; uint64_t inst; uint8_t n; LiteLight lights[4]; };
 struct LiteTable {
   static const int kMax = 1024;
-  LiteModel models[kMax]; uint32_t n = 0; bool loaded = false; uint32_t lines = 0;
+  LiteModel models[kMax]; uint32_t n = 0; bool loaded = false; uint32_t lines = 0; int format = 1;
 };
 inline LiteTable& liteTable() {
   static LiteTable t;
@@ -1544,6 +1557,7 @@ inline LiteTable& liteTable() {
   while (fgets(line, sizeof line, f) && t.n < (uint32_t) LiteTable::kMax) {
     ++t.lines;
     if (line[0] == '#' || line[0] == '\r' || line[0] == '\n' || !line[0]) continue;
+    if (!strncmp(line, "format", 6)) { t.format = (int) strtol(line + 6, nullptr, 10); continue; }   // format 2: each light with its shape
     char* e = line;
     LiteModel m = {};
     m.ibHash = strtoull(e, &e, 16); m.inst = strtoull(e, &e, 16);
@@ -1552,9 +1566,12 @@ inline LiteTable& liteTable() {
     for (long i = 0; i < cnt && m.n < 4; ++i) {
       LiteLight& L = m.lights[m.n];
       const long typ = strtol(e, &e, 10);
-      float v[7]; for (int k = 0; k < 7; ++k) v[k] = (float) strtod(e, &e);
+      float v[16] = {}; const int nv = t.format >= 2 ? 16 : 7;
+      for (int k = 0; k < nv; ++k) v[k] = (float) strtod(e, &e);
       if (typ < 3 || typ > 6) continue;
       L.type = (uint8_t) typ; L.pos[0] = v[0]; L.pos[1] = v[1]; L.pos[2] = v[2]; L.col[0] = v[3]; L.col[1] = v[4]; L.col[2] = v[5]; L.intensity = v[6];
+      for (int k = 0; k < 3; ++k) L.at[k] = v[7 + k];
+      for (int k = 0; k < 6; ++k) L.d[k] = v[10 + k];
       ++m.n;
     }
     if (m.n) t.models[t.n++] = m;
@@ -1571,6 +1588,15 @@ inline const LiteModel* findLiteModel(uint64_t ibHash) {
 // row . (x, y, z, 1), the translation in .w).
 inline void worldPoint(const float* rows, const float* p, float* out) {
   for (int i = 0; i < 3; ++i) out[i] = rows[4*i] * p[0] + rows[4*i + 1] * p[1] + rows[4*i + 2] * p[2] + rows[4*i + 3];
+}
+// A model-space direction through the same rows (milestone 32): rotated, not translated, unit
+// length. False (and zeros) for a zero vector, which is what a point light carries.
+inline bool worldDir(const float* rows, const float* v, float* out) {
+  for (int i = 0; i < 3; ++i) out[i] = rows[4*i] * v[0] + rows[4*i + 1] * v[1] + rows[4*i + 2] * v[2];
+  const float n = std::sqrt(out[0]*out[0] + out[1]*out[1] + out[2]*out[2]);
+  if (n < 1e-6f) { out[0] = out[1] = out[2] = 0.f; return false; }
+  for (int i = 0; i < 3; ++i) out[i] /= n;
+  return true;
 }
 
 // ---- lamps (milestones 3a, 21, 22, 23) ----------------------------------------------------
@@ -1617,6 +1643,9 @@ inline void worldPoint(const float* rows, const float* p, float* out) {
 // switched on lit its base to 126 in the 128x128 map and to 2 in the 256x128 one its own
 // draw carries -- so a lamp is on when ANY live map lights its base and off when every map
 // covering it is dark; the map its draws carry is kept only as a diagnostic.
+// Milestone 32: the lamps' shapes. A spot is a sphere light shaped to its cone; a lamp shade is
+// two cones -- the definition's angle around the way its light travels, its bottom angle the
+// other way -- and an unshaped light for what comes through the shade; a tube is a cylinder.
 struct LampRay { float pos[3]; float dir[3]; float col[3]; };
 
 struct Lamp {
@@ -1639,7 +1668,15 @@ struct Lamp {
   uint8_t mapCandN;
   bool confirmedOnce;  // (unused since milestone 30: every lighting and putting out is an event)
   void* api;           // the Remix API light handle (the device destroys it on drop)
-  float sentPos[3], sentCol[3]; bool sent;   // what the runtime holds
+  // the shape (milestone 32), from the game's definition through the object's World rows
+  float dir[3];        // the way the main cone's light travels (unit; zeros = no direction, a point light)
+  float angle;         // the main cone's angle from its axis in degrees (0 = none)
+  float bottom;        // the opposite cone's angle (a lamp shade's bottom opening; 0 = none)
+  float shade[3];      // the light through a lamp shade, as a factor of the lamp's colour (zeros = none)
+  float tube;          // a tube light's length along dir (0 = none)
+  void* api2;          // the opposite cone's API light
+  void* api3;          // the shade glow's API light
+  float sentPos[3], sentCol[3], sentDir[3]; bool sent;   // what the runtime holds
 };
 
 // World register of the vertex shaders whose draws may contribute rays (the rig is only
@@ -1677,7 +1714,11 @@ struct LampSolver {
   float origins[kMaxOrigins][3]; uint8_t originSlots[kMaxOrigins]; uint32_t nOrigins = 0;   // this frame's object origins (every object-shader draw) and how many of the rig's four slots their rig used
   Lamp lamps[kMaxLamps]; uint32_t nLamps = 0;
   uint32_t created = 0, dropped = 0, lit = 0, out = 0;    // statistics: registrations, releases, lights lit and put out
-  void* droppedApi[kMaxLamps]; uint32_t nDropped = 0;     // the API lights of the lamps dropped or put out this frame, for the device to destroy
+  void* droppedApi[3 * kMaxLamps]; uint32_t nDropped = 0; // the API lights of the lamps dropped or put out this frame, for the device to destroy
+  void releaseLights(Lamp& L) {
+    void** hs[3] = { &L.api, &L.api2, &L.api3 };
+    for (int q = 0; q < 3; ++q) if (*hs[q]) { if (nDropped < (uint32_t) (3 * kMaxLamps)) droppedApi[nDropped++] = *hs[q]; *hs[q] = nullptr; }
+  }
   struct Event { uint8_t kind; float anchor[3]; float y; float col[3]; uint32_t votes, age; };   // 1 lit (first forwarded), 2 dropped
   Event events[16]; uint32_t nEvents = 0;
 
@@ -1732,6 +1773,18 @@ struct LampSolver {
       }
       if (L.mapCand != map) { L.mapCand = map; L.mapCandN = 1; }
       return false;
+    }
+    return false;
+  }
+  // The lamp's shape from its definition (milestone 32), set at its object's draw: dir = the way the
+  // main cone's light travels, in the world. False when the lamp is not registered.
+  bool shapeLamp(uint8_t light, const float* anchor, const float* dir, float angle, float bottom, const float* shade, float tube) {
+    for (uint32_t k = 0; k < nLamps; ++k) {
+      Lamp& L = lamps[k];
+      if (L.light != light || lampDist(L.anchor, anchor) > 0.5f) continue;
+      for (int q = 0; q < 3; ++q) { L.dir[q] = dir[q]; L.shade[q] = shade[q]; }
+      L.angle = angle; L.bottom = bottom; L.tube = tube;
+      return true;
     }
     return false;
   }
@@ -1808,8 +1861,8 @@ struct LampSolver {
           L.missing += L.state == 0 ? 6u : 2u;   // the map's word: out within half a second; the witnesses': a second and a half
           if (L.missing > kMissingLimit) {       // put out: the light goes, the lamp stays registered (milestone 30)
             if (L.age >= kConfirmFrames) { ++out; record(2, L, 1u); }
-            if (L.api && nDropped < (uint32_t) kMaxLamps) droppedApi[nDropped++] = L.api;
-            L.api = nullptr; L.sent = false; L.age = 0; L.missing = 0;
+            releaseLights(L);
+            L.sent = false; L.age = 0; L.missing = 0;
           }
         }
       } else {
@@ -1822,7 +1875,7 @@ struct LampSolver {
       Lamp& L = lamps[k];
       if (L.unseen > kUnseenLimit && (L.state < 0 || L.age == 0)) {
         if (L.age >= kConfirmFrames) { ++out; record(2, L, 0u); }
-        if (L.api && nDropped < (uint32_t) kMaxLamps) droppedApi[nDropped++] = L.api;
+        releaseLights(L);
         L = lamps[nLamps - 1]; --nLamps; ++dropped;
       }
       else ++k;

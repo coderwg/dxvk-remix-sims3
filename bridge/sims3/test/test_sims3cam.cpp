@@ -492,6 +492,24 @@ int main() {
         const uint8_t px[4] = { 200, 30, 10, 255 }; std::vector<uint8_t> mx, rdp;
         CHECK(decodeMaskMax((uint32_t) D3DFMT_A8R8G8B8, px, 4, 1, 1, mx) && mx[0] == 200 && decodeMaskRed((uint32_t) D3DFMT_A8R8G8B8, px, 4, 1, 1, rdp) && rdp[0] == 10,
               "light map: the brightest channel of a blue texel reads 200 where the red plane reads 10");
+        {
+          // milestone 32: the light's shape from its definition
+          LampSolver sh; const float travel[3] = { 0.f, -1.f, 0.f }, shade[3] = { 0.2f, 0.2f, 0.2f };
+          sh.addModelLamp(1u, 0, base, lampPos, liteCol, 100.f, 5, (int8_t) 1);
+          const bool s1 = sh.shapeLamp(0, base, travel, 30.f, 50.f, shade, 0.f);
+          CHECK(s1 && sh.lamps[0].angle == 30.f && sh.lamps[0].bottom == 50.f && sh.lamps[0].dir[1] == -1.f && sh.lamps[0].shade[0] == 0.2f && !sh.shapeLamp(1, base, travel, 30.f, 50.f, shade, 0.f),
+                "lamps: the shape from the definition is kept with the lamp (cone, opposite cone, shade); an unregistered lamp takes none");
+          int h1 = 1, h2 = 2, h3 = 3; sh.lamps[0].api = &h1; sh.lamps[0].api2 = &h2; sh.lamps[0].api3 = &h3;
+          for (int f = 0; f < 3; ++f) sh.solve();
+          uint32_t fr = 0;
+          while (sh.lamps[0].age > 0 && fr < 400) { sh.addModelLamp(1u, 0, base, lampPos, liteCol, 100.f, 5, (int8_t) 0); sh.solve(); ++fr; }
+          CHECK(sh.nDropped == 3 && sh.droppedApi[0] == &h1 && sh.droppedApi[1] == &h2 && sh.droppedApi[2] == &h3 && sh.lamps[0].api == nullptr && sh.lamps[0].api2 == nullptr && sh.lamps[0].api3 == nullptr,
+                "lamps: putting a lamp out hands all three of its lights to the device (%u handed)", sh.nDropped);
+          const float rowsY90[12] = { 0.f, 0.f, 2.f, 10.f,  0.f, 2.f, 0.f, 20.f,  -2.f, 0.f, 0.f, 30.f };   // a quarter turn about y, scaled by two, translated
+          const float front[3] = { 0.f, 0.f, -1.f }, zero[3] = {}; float wd[3];
+          CHECK(worldDir(rowsY90, front, wd) && nearf(wd[0], -1.f) && nearf(wd[1], 0.f) && nearf(wd[2], 0.f), "lamps: a direction through the World rows is rotated, not translated, and of unit length (%.2f %.2f %.2f)", wd[0], wd[1], wd[2]);
+          CHECK(!worldDir(rowsY90, zero, wd) && wd[0] == 0.f, "lamps: a point light's zero vector gives no direction");
+        }
       }
             CHECK(findWorldReg(0x0ba6ddb9aa01913cull) == 12 && findWorldReg(0x7d1bc3ce6acbd715ull) == 16 && findWorldReg(0x1234ull) == -1, "lamps: World rows per object shader (c12 / c16); unknown -> none");
     }

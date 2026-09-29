@@ -87,7 +87,7 @@ def lite_lights(b):
     for k in range(n):
         typ = struct.unpack_from('<I', b, p)[0]
         f = struct.unpack_from('<' + 'f' * 31, b, p + 4)
-        out.append((LIGHT_TYPES.get(typ, str(typ)), f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[10], f[11]))
+        out.append((LIGHT_TYPES.get(typ, str(typ)),) + tuple(f[:16]))   # position, colour, intensity, then the shape: a direction and six numbers by type
         p += 4 + 4 * 31
     return out
 
@@ -112,6 +112,18 @@ class Store:
     def get(self, t, inst):
         all_ = self.get_all(t, inst)
         return all_[-1] if all_ else None
+    def get_best(self, t, inst):
+        """The copy the game itself uses (milestone 32, for the light definitions): a package of the
+        Mods folder before the game's, a DeltaBuild or ContentPatch before a FullBuild."""
+        best = None; rank = -1
+        for (fi, g, off, sz, comp) in self.res.get((t, inst), []):
+            path = self.files[fi].name.replace('\\', '/').lower(); name = path.rsplit('/', 1)[-1]
+            r = 3 if '/mods/' in path else (2 if name.startswith('deltabuild') or name.startswith('contentpatch') else 1)
+            if r >= rank: rank = r; best = (fi, off, sz, comp)
+        if not best: return None
+        fi, off, sz, comp = best
+        f = self.files[fi]; f.seek(off); raw = f.read(sz)
+        return refpack(raw) if comp == 0xFFFF else raw
 
 def keys_in(b, store):
     found = []
@@ -202,9 +214,8 @@ def main():
             withLite += 1
             lights = []
             for li in lites:
-                for lb in store.get_all(T_LITE, li):
-                    for L in lite_lights(lb):
-                        if L not in lights: lights.append(L)
+                for L in lite_lights(store.get_best(T_LITE, li) or b''):
+                    if L not in lights: lights.append(L)
             if not lights: continue
             modls = [i for (tt, i) in ks if tt == T_MODL] or [inst]
             meshes = []
@@ -218,7 +229,7 @@ def main():
                 if lampLights and (ihd, inst) not in hookSeen:
                     hookSeen.add((ihd, inst))
                     kinds = {'Point': 3, 'Spot': 4, 'LampShade': 5, 'TubeLight': 6}
-                    hookRows.append('%016x %016x %d %s' % (ihd, inst, len(lampLights), ' '.join('%d %.4f %.4f %.4f %.4f %.4f %.4f %.2f' % ((kinds[L[0]],) + L[1:8]) for L in lampLights)))
+                    hookRows.append('%016x %016x %d %s' % (ihd, inst, len(lampLights), ' '.join(('%d' + ' %.4f' * 16) % ((kinds[L[0]],) + L[1:17]) for L in lampLights)))
     print('%d visual proxies, %d with lights, %d of those with mesh chunks found; %d mesh rows written to %s in %.1f s' % (len(vpxys), withLite, withMesh, rows, outPath, time.time() - t0))
     if hookPath:
         # a mesh several models share (a generic quad, a small common part) names none of them (milestone 30)
@@ -227,7 +238,9 @@ def main():
         unique = [r for r in hookRows if len(owners[r.split()[0]]) == 1]
         with open(hookPath, 'w') as hk:
             hk.write('# The Sims 3 camera hook: the game\'s own lamp lights per mesh (milestone 22), written by sims3/tools/lite_table.py.\n')
-            hk.write('# <decoded index hash> <model instance> <count> [<type> x y z r g b intensity]...  type 3 point, 4 spot, 5 lamp shade, 6 tube\n')
+            hk.write('# <decoded index hash> <model instance> <count> [<type> x y z r g b intensity ax ay az d0 d1 d2 d3 d4 d5]...  type 3 point, 4 spot, 5 lamp shade, 6 tube\n')
+            hk.write('# a = the definition\'s direction (from the lit side back to the light); d by type: spot = cone angle, blur; lamp shade = cone angle, shade multiplier, bottom angle, shade r g b; tube = length, blur\n')
+            hk.write('format 2\n')
             for r in unique: hk.write(r + '\n')
         print('%d mesh lines for the hook written to %s (%d shared meshes left out)' % (len(unique), hookPath, len(hookRows) - len(unique)))
 

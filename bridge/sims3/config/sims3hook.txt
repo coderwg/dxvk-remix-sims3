@@ -25,3 +25,12 @@ sunAngle = 2000
 sunRadiance = 1000
 lampRadius = 150
 lampRadiance = 40000
+# The lamps' shapes come from the game's light definitions (sims3lights.txt, format 2).
+# lampShapes        1 = spots as cones, lamp shades as two cones plus the light through the shade, tubes as cylinders; 0 = plain spheres
+# lampConeScale     every cone angle times this, in thousandths (1000 = the definitions' angles taken as the angle from the axis; 500 = half as wide)
+# lampConeSoftness  the softness of a cone's edge, in thousandths (0 = hard, 1000 = soft across the whole cone)
+# lampShadeGlow     the light through a lamp shade times this, in thousandths (0 = none)
+lampShapes = 1
+lampConeScale = 1000
+lampConeSoftness = 300
+lampShadeGlow = 1000

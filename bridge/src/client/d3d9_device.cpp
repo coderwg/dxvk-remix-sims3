@@ -118,6 +118,7 @@ namespace {
     LightMapEntry lightMaps[4] = {};
     uint32_t lightMapDecodes = 0, lightMapVerdicts = 0, lightMapFails = 0, lightMapSwitches = 0, lightMapSwitchesLogged = 0, lightMapOutside = 0;
     uint64_t ibHash[512] = {};   // the hash per cached index buffer (milestone 29: the mark dump names meshes the light table does not know)
+    uint32_t loggedShapes = 0;   // light types whose first shaped lamp has been logged (milestone 32)
     bool objWorldValid = false;          // ...and whether it has been uploaded since the shader was bound
     float rig[32] = {};                  // c0..c7 of the bound rig pixel shader (directions, colours)
     float psConst[64] = {}; uint16_t psConstMask = 0;   // c0..c15 of the bound rig pixel shader as uploaded, and which registers were (milestone 24 diagnostic)
@@ -1872,7 +1873,7 @@ static void sims3LogStats(bool withTable) {
            h.skyLevel, h.skyDayRef, h.skyBrightnessSent, h.evMaxSent, h.skySends, GlobalOptions::getExposeRemixApi() ? "" : " (Remix API off: nothing sent)");
   Logger::info(msg);
   uint32_t lampHandles = 0;
-  for (uint32_t k = 0; k < h.lamps.nLamps; ++k) if (h.lamps.lamps[k].api) ++lampHandles;
+  for (uint32_t k = 0; k < h.lamps.nLamps; ++k) { const sims3cam::Lamp& Lh = h.lamps.lamps[k]; lampHandles += (Lh.api ? 1u : 0u) + (Lh.api2 ? 1u : 0u) + (Lh.api3 ? 1u : 0u); }
   uint32_t unmapped = 0, unjudged = 0; char maps[220]; size_t mn = 0; maps[0] = 0;
   for (uint32_t k = 0; k < h.lamps.nLamps; ++k) { const sims3cam::Lamp& L = h.lamps.lamps[k]; if (!L.map) ++unmapped; else if (L.state < 0) ++unjudged; }
   for (int k = 0; k < 4 && mn < sizeof maps - 60; ++k) {
@@ -2046,11 +2047,20 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
       sims3cam::Lamp& L = h.lamps.lamps[k];
       if (L.age < sims3cam::LampSolver::kConfirmFrames) continue;
       const bool changed = !L.sent || sims3cam::lampDist(L.sentPos, L.pos) > 0.25f ||
-                           std::fabs(L.sentCol[0] - L.col[0]) > 0.1f || std::fabs(L.sentCol[1] - L.col[1]) > 0.1f || std::fabs(L.sentCol[2] - L.col[2]) > 0.1f;
+                           std::fabs(L.sentCol[0] - L.col[0]) > 0.1f || std::fabs(L.sentCol[1] - L.col[1]) > 0.1f || std::fabs(L.sentCol[2] - L.col[2]) > 0.1f ||
+                           sims3cam::dot3(L.sentDir, L.dir) < 0.999f * sims3cam::dot3(L.dir, L.dir);   // the object turned
       if (changed) {
-        L.api = sims3ApiLamp(L.api, L); ++h.apiLightCalls;
-        for (int q = 0; q < 3; ++q) { L.sentPos[q] = L.pos[q]; L.sentCol[q] = L.col[q]; }
+        h.apiLightCalls += sims3ApiLamp(L);
+        for (int q = 0; q < 3; ++q) { L.sentPos[q] = L.pos[q]; L.sentCol[q] = L.col[q]; L.sentDir[q] = L.dir[q]; }
         L.sent = true; ++h.lampEvents;
+        if (L.kind < 32 && !(h.loggedShapes & (1u << L.kind))) {   // the first lamp of each type, with its shape (milestone 32)
+          h.loggedShapes |= 1u << L.kind;
+          char msg[360];
+          snprintf(msg, sizeof msg, "Sims 3 camera hook: first lamp of type %u (3 point, 4 spot, 5 lamp shade, 6 tube) forwarded at (%.1f, %.1f, %.1f): its light travels (%.2f, %.2f, %.2f), cone %.0f degrees from the axis, opposite cone %.0f, shade light %.2f,%.2f,%.2f, tube %.2f; shapes %s, cone scale %.2f; API lights: main %s, opposite %s, shade %s",
+                   (unsigned) L.kind, L.pos[0], L.pos[1], L.pos[2], L.dir[0], L.dir[1], L.dir[2], L.angle, L.bottom, L.shade[0], L.shade[1], L.shade[2], L.tube,
+                   sims3cam::lampShapes() ? "on" : "off", sims3cam::lampConeScale(), L.api ? "yes" : "no", L.api2 ? "yes" : "no", L.api3 ? "yes" : "no");
+          Logger::info(msg);
+        }
         if (!h.loggedLamp) {
           h.loggedLamp = true;
           char msg[260];
@@ -2060,6 +2070,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
         }
       }
       if (L.api) remixapi::remixapi_DrawLightInstance((remixapi_LightHandle) L.api);   // every frame the lamp is on
+      if (L.api2) remixapi::remixapi_DrawLightInstance((remixapi_LightHandle) L.api2);
+      if (L.api3) remixapi::remixapi_DrawLightInstance((remixapi_LightHandle) L.api3);
     }
   }
 
@@ -2328,18 +2340,63 @@ static void* sims3ApiSun(void* old, const sims3cam::SunVote& s) {
   info.radiance.x = s.col[0] > 0.f ? s.col[0] * k : 0.f; info.radiance.y = s.col[1] > 0.f ? s.col[1] * k : 0.f; info.radiance.z = s.col[2] > 0.f ? s.col[2] * k : 0.f;
   return sims3ApiLightReplace(old, info);
 }
-static void* sims3ApiLamp(void* old, const sims3cam::Lamp& L) {
+// A sphere light, shaped to a cone when a direction and an angle from the axis are given (milestone 32).
+static void* sims3ApiSphere(uint64_t hash, const float* pos, const float* col, const float* dir, float halfAngle) {
   remixapi_LightInfoSphereEXT sp = {};
   sp.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_SPHERE_EXT;
-  sp.position.x = L.pos[0]; sp.position.y = L.pos[1]; sp.position.z = L.pos[2];
+  sp.position.x = pos[0]; sp.position.y = pos[1]; sp.position.z = pos[2];
   sp.radius = sims3cam::lampRadius();
-  sp.shaping_hasvalue = 0;
+  sp.shaping_hasvalue = (dir != nullptr && halfAngle > 0.f && halfAngle < 179.5f) ? 1 : 0;
+  if (sp.shaping_hasvalue) {
+    sp.shaping_value.direction.x = dir[0]; sp.shaping_value.direction.y = dir[1]; sp.shaping_value.direction.z = dir[2];
+    sp.shaping_value.coneAngleDegrees = halfAngle < 1.f ? 1.f : halfAngle;
+    sp.shaping_value.coneSoftness = sims3cam::lampConeSoftness();
+    sp.shaping_value.focusExponent = 0.f;
+  }
   sp.volumetricRadianceScale = 1.f;
   remixapi_LightInfo info = {};
-  info.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO; info.pNext = &sp; info.hash = kSims3LampHash ^ (uint64_t) L.id;   // the object the lamp is anchored to (milestone 21)
+  info.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO; info.pNext = &sp; info.hash = hash;
   const float k = sims3cam::lampRadiance();
-  info.radiance.x = L.col[0] > 0.f ? L.col[0] * k : 0.f; info.radiance.y = L.col[1] > 0.f ? L.col[1] * k : 0.f; info.radiance.z = L.col[2] > 0.f ? L.col[2] * k : 0.f;
-  return sims3ApiLightReplace(old, info);
+  info.radiance.x = col[0] > 0.f ? col[0] * k : 0.f; info.radiance.y = col[1] > 0.f ? col[1] * k : 0.f; info.radiance.z = col[2] > 0.f ? col[2] * k : 0.f;
+  return sims3ApiLightReplace(nullptr, info);
+}
+// A tube: a cylinder light of the given length from the light's position along its axis.
+static void* sims3ApiCylinder(uint64_t hash, const float* pos, const float* axis, float length, const float* col) {
+  remixapi_LightInfoCylinderEXT cy = {};
+  cy.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_CYLINDER_EXT;
+  cy.position.x = pos[0] + axis[0] * length * 0.5f; cy.position.y = pos[1] + axis[1] * length * 0.5f; cy.position.z = pos[2] + axis[2] * length * 0.5f;
+  cy.radius = sims3cam::lampRadius() * 0.3f;
+  cy.axis.x = axis[0]; cy.axis.y = axis[1]; cy.axis.z = axis[2];
+  cy.axisLength = length;
+  cy.volumetricRadianceScale = 1.f;
+  remixapi_LightInfo info = {};
+  info.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO; info.pNext = &cy; info.hash = hash;
+  const float k = sims3cam::lampRadiance();
+  info.radiance.x = col[0] > 0.f ? col[0] * k : 0.f; info.radiance.y = col[1] > 0.f ? col[1] * k : 0.f; info.radiance.z = col[2] > 0.f ? col[2] * k : 0.f;
+  return sims3ApiLightReplace(nullptr, info);
+}
+// A lamp's API lights, by its type (milestone 32): a point is a sphere; a spot a sphere shaped to its
+// cone; a lamp shade its two cones and the light through the shade; a tube a cylinder. The lights it
+// had are destroyed first. Returns the number of API calls made.
+static uint32_t sims3ApiLamp(sims3cam::Lamp& L) {
+  uint32_t calls = 0;
+  void** hs[3] = { &L.api, &L.api2, &L.api3 };
+  for (int q = 0; q < 3; ++q) if (*hs[q]) { remixapi::remixapi_DestroyLight((remixapi_LightHandle) *hs[q]); *hs[q] = nullptr; ++calls; }
+  const uint64_t hash = kSims3LampHash ^ (uint64_t) L.id;   // the object the lamp is anchored to (milestone 21)
+  const bool aimed = sims3cam::lampShapes() && sims3cam::len3(L.dir) > 0.5f;
+  const float scale = sims3cam::lampConeScale();
+  if (aimed && L.kind == 4 && L.angle > 0.f) { L.api = sims3ApiSphere(hash, L.pos, L.col, L.dir, L.angle * scale); ++calls; }
+  else if (aimed && L.kind == 5) {
+    const float back[3] = { -L.dir[0], -L.dir[1], -L.dir[2] };
+    if (L.angle > 0.f) { L.api = sims3ApiSphere(hash, L.pos, L.col, L.dir, L.angle * scale); ++calls; }
+    if (L.bottom > 0.f) { L.api2 = sims3ApiSphere(hash ^ (1ull << 36), L.pos, L.col, back, L.bottom * scale); ++calls; }
+    const float g = sims3cam::lampShadeGlow();
+    const float glow[3] = { L.col[0] * L.shade[0] * g, L.col[1] * L.shade[1] * g, L.col[2] * L.shade[2] * g };
+    if (sims3cam::luminance(glow) > 1e-3f) { L.api3 = sims3ApiSphere(hash ^ (2ull << 36), L.pos, glow, nullptr, 0.f); ++calls; }
+  }
+  else if (aimed && L.kind == 6 && L.tube > 0.f) { L.api = sims3ApiCylinder(hash, L.pos, L.dir, L.tube, L.col); ++calls; }
+  if (!L.api && !L.api2 && !L.api3) { L.api = sims3ApiSphere(hash, L.pos, L.col, nullptr, 0.f); ++calls; }
+  return calls;
 }
 
 template<bool EnableSync>
@@ -4327,6 +4384,13 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
             float wp_[3]; sims3cam::worldPoint(g_sims3.objWorldRows, L_.pos, wp_);
             const uint32_t id_ = sims3cam::LampSolver::originId(g_sims3.objWorld) ^ (0x9E3779B9u * (uint32_t) (li + 1));
             g_sims3.lamps.addModelLamp(id_, li, g_sims3.objWorld, wp_, L_.col, L_.intensity, L_.type, (int8_t) -1);
+            {
+              // the shape (milestone 32): the definition's direction points from the lit side back to the
+              // light, so the light travels the other way; carried to the world by the object's rotation
+              float wa_[3]; sims3cam::worldDir(g_sims3.objWorldRows, L_.at, wa_);
+              const float travel_[3] = { -wa_[0], -wa_[1], -wa_[2] }, none_[3] = {};
+              g_sims3.lamps.shapeLamp(li, g_sims3.objWorld, travel_, (L_.type == 4 || L_.type == 5) ? L_.d[0] : 0.f, L_.type == 5 ? L_.d[2] : 0.f, L_.type == 5 ? L_.d + 3 : none_, L_.type == 6 ? L_.d[0] : 0.f);
+            }
             void* from_ = nullptr;
             if (mapTex_ && g_sims3.lamps.mapLamp(li, g_sims3.objWorld, mapTex_, &from_) && from_ != nullptr) {
               ++g_sims3.lightMapSwitches;
