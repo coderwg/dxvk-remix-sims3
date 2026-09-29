@@ -996,56 +996,13 @@ inline float lampRadiance() { static float s = -1.f; if (s < 0.f) { int v = hook
 inline bool lampShapes() { static int s = -1; if (s < 0) s = hookOption("lampShapes", 1) != 0 ? 1 : 0; return s == 1; }
 inline float lampConeScale() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampConeScale", 1000); if (v < 100) v = 100; s = (float) v / 1000.f; } return s; }
 inline float lampConeSoftness() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampConeSoftness", 300); if (v < 0) v = 0; if (v > 1000) v = 1000; s = (float) v / 1000.f; } return s; }
-// The lamps' switch (milestone 33): a lamp's OWN part of the light at its base, kept per light map.
-// lampJump = the smallest change centred on the lamp, from one version of the map to the next, that
-// counts as the lamp's doing (map units 0..255); lampOwnOn = the own part from which the lamp is on;
-// lampRing = the radius of the ring of points around the base (thousandths of a unit); lampNightLevel
-// = the sun level (thousandths) below which a map's outright reading is trusted (no daylight in it).
-inline float lampJump() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampJump", 15); if (v < 1) v = 1; s = (float) v; } return s; }
-inline float lampOwnOn() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampOwnOn", 25); if (v < 1) v = 1; s = (float) v; } return s; }
-inline float lampRing() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampRing", 2500); if (v < 300) v = 300; s = (float) v / 1000.f; } return s; }
-inline float lampNightLevel() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampNightLevel", 300); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
-// By night a map holds the lamps' light alone, and the reading of runs 143 to 145 stands: a lamp is
-// lit when its base is bright (>= 40) and at least twice the darkest of four points around it.
-inline bool lampLitByNight(int base, int darkest) { return base >= 40 && base >= 2 * darkest; }
-// By day the map also holds the daylight, and only a change tells (milestone 34): one step of a
-// lamp's own part from one version of a map to the next. dBase = the change at its base, dRing = the
-// median change of the ring around it. The lamp's own is a change of ITS BASE: a rise of the base
-// less whatever the surroundings rose with it, or a fall less whatever they fell with it. A change
-// of the surroundings alone is another lamp's (run 147: neighbours switching off darkened the
-// rings of lamps whose own bases read 0, and the difference lit them). And a lamp's own part is
-// never more than the light at its base.
-// A fall that takes most of what the lamp had (kLampGone of it) puts it out altogether (milestone 35):
-// what it had is not known exactly -- a lit lamp's base reads 255, the map's limit, with the mods'
-// lamps, and by day the daylight sits on top -- so the remainder of a subtraction would be the
-// daylight, and the lamp would stand lit by it (run 148: 255 by night, 78 left in the morning).
-inline constexpr float kLampGone = 0.6f;
-inline float lampOwnDay(float own, float base, float dBase, float dRing, float jump) {
-  float v = own;
-  if (dBase >= jump) { const float rise = dBase - (dRing > 0.f ? dRing : 0.f); if (rise >= jump) v += rise; }
-  else if (dBase <= -jump) {
-    const float fall = dBase - (dRing < 0.f ? dRing : 0.f);
-    if (fall <= -jump) v = (-fall >= kLampGone * own) ? 0.f : v + fall;
-  }
-  if (v > base) v = base;
-  return v < 0.f ? 0.f : v;
-}
-// A map read again by day with no version to compare (unseen for a while): the lamp's own record of
-// its base tells. seen = its base at its last reading: fallen by most of what the lamp had, the
-// lamp is out; else what it had stands, within what its base holds.
-inline float lampOwnAfterGap(float own, float base, float seen) {
-  if (own > 0.f && seen - base >= kLampGone * own) return 0.f;
-  return own < base ? own : base;
-}
-
 // ---- the lamps' own word (milestone 36) --------------------------------------------------
-// The light map only lets a lamp's state be INFERRED. The game's scripts know it exactly, and
-// the lamp reporter (sims3/scriptmod: a script mod) hands it over: for every lamp near the
-// camera its position, whether it is on, its colour and its intensity, written a few times a
-// second into a block of memory the hook finds by its signature (the block's head carries the
-// block's own address, so nothing else in the process passes for it). Where the reporter
-// speaks, its word is the lamp's state; the maps decide only lamps it does not name.
-inline bool lampReporter() { static int s = -1; if (s < 0) s = hookOption("lampReporter", 1) != 0 ? 1 : 0; return s == 1; }
+// Whether a lamp is on, in which colour and at which level is nowhere in what the game draws.
+// The game's scripts know it exactly, and the lamp reporter (sims3/scriptmod: a script mod)
+// hands it over: for every lamp near the camera its position, whether it is on, its colour and
+// its intensity, written a few times a second into a block of memory the hook finds by its
+// signature (the block's head carries the block's own address, so nothing else in the process
+// passes for it). The reporter's word is the lamp's state; a lamp it does not name is dark.
 inline constexpr uint32_t kLampMagic0 = 0x58523353u, kLampMagic1 = 0x504D414Cu, kLampMagic2 = 0x31303076u;   // 'S3RX' 'LAMP' 'v001'
 inline constexpr uint32_t kLampHead = 64, kLampFloats = 12, kLampCapacity = 512;
 // The block's head, checked: the signature, the block's own address, the version, the record
@@ -1056,6 +1013,17 @@ inline bool lampReportHead(const uint8_t* head, uint32_t address, uint32_t& lamp
   if (h[4] != 1u || h[7] != kLampFloats || h[8] > kLampCapacity || h[6] > h[8]) return false;
   lamps = h[6]; sequence = h[5]; world = h[10] != 0;
   return true;
+}
+// The record nearest to `anchor` whatever the distance (the log names it when a lamp has none of its own).
+inline const float* lampReportNearest(const float* records, uint32_t lamps, const float* anchor, float& distance) {
+  const float* best = nullptr; distance = 0.f;
+  for (uint32_t k = 0; k < lamps; ++k) {
+    const float* r = records + (size_t) k * kLampFloats;
+    const float d[3] = { r[0] - anchor[0], r[1] - anchor[1], r[2] - anchor[2] };
+    const float l = std::sqrt(d[0]*d[0] + d[1]*d[1] + d[2]*d[2]);
+    if (!best || l < distance) { best = r; distance = l; }
+  }
+  return best;
 }
 // The record of the lamp whose object stands at `anchor`: the nearest within half a unit in the
 // ground plane and a unit and a half in height. records = the lamps' records (12 floats each).
@@ -1688,109 +1656,48 @@ inline bool worldDir(const float* rows, const float* v, float* out) {
   return true;
 }
 
-// ---- lamps (milestones 3a, 21, 22, 23) ----------------------------------------------------
-// A lamp is one of the game's own lights (the table above): its object's index buffer names the
-// model, the model's definition names the light, the object's World rows carry it to the
-// world. Whether it is ON comes from the per-object light rig the game uploads with every
-// object-shader draw: c0..c3 are unit directions toward the four strongest lights at that
-// object, c4..c7 their colours. An object right next to a lamp has that lamp among its
-// strongest lights whenever it is on, and not otherwise; a far object's rig is full of other
-// lights and proves nothing either way (runs 134-136). So only the objects drawn within two
-// units of a lamp's light are its witnesses: one of them pointing at the light says on, and
-// gives the colour the player set; one drawn and not pointing at it says off; none drawn
-// holds the last state. The game keeps a lamp's own light out of that lamp's rig (run 136),
-// so a lamp cannot vouch for itself.
+// ---- lamps ---------------------------------------------------------------------------------
+// A lamp is one of the game's own lights. WHERE it is and WHAT it is come from the game's light
+// definitions (the table above): an object's index buffer names its model, the model's
+// definition names its lights and their shapes, the object's World rows carry them to the
+// world. WHETHER it is on, in which colour and at which level is the game's own word, handed
+// over by the lamp reporter (above). A lamp the reporter does not name gives no light.
 //
-// Milestone 25 read a state flag into the lamp's own draw (its s2 texture, its rig); run 139
-// refuted it: s2 is the lot's LIGHT MAP, one texture for every object, whose content and hash
-// change whenever the lighting changes. Milestone 27 reads that map instead (run 140): the game
-// computes it on the CPU and uploads it (256x128 A8R8G8B8, a new version at every lighting
-// change), the object shaders project world positions into it with the two constant rows
-// after World, and at a lamp's base it reads 64-101 with the lamp on against 7-15 off, its
-// surroundings unchanged. So the map's value at a lamp's base, bright and clearly above the
-// points around it, says on; it is read for every known lamp whenever the map changes, drawn
-// or not, and it overrides the witnesses, who remain the fallback without a readable map.
-// Milestone 28 (run 141): the map's word STANDS per lamp until the map says otherwise -- the
-// witnesses may no longer overrule it on the frames a lamp is not drawn (off screen, lamps lit
-// up and went out by the rays alone) -- and the map is the texture most object draws of the
-// frame carry at s2, not whatever the last lamp draw carried (a second texture displaced it
-// 63 times in run 141 while the map itself changed 17 times, each time re-judging every lamp
-// against the wrong texels). A lamp beyond the map's extent is not judged by it.
-// Milestone 29 (run 142): the lot has MORE THAN ONE light map -- a 256x128 one and a 128x128
-// one over the western half at the same texel size, both re-uploaded at every lighting change,
-// each carried by its own objects -- so the frame's majority map was the wrong map for half the
-// lamps half the time. Now each lamp is judged by the map its own draws carry (a shared texture,
-// adopted at once or after three consecutive draws with it), every carried map is decoded and
-// judges its lamps when its content changes. And the map is coloured: a lamp set to blue lit
-// its base in blue and its red plane read dark, so the brightest channel is read, not red.
-// Milestone 30 (run 143): an OFF lamp stays registered -- putting it out only destroys its
-// light -- so that its map's next word can relight it whether or not its object is drawn with
-// a mesh the light table knows (the bedside lamp's near mesh is not; the lamp was dropped 30
-// frames after every far-mesh sighting and did not exist when it was switched on). A lamp is
-// released only after ten seconds undrawn while off or unjudged.
-// Milestone 31 (run 144): the lot's maps SPLIT the lights between them -- the bedside lamp
-// switched on lit its base to 126 in the 128x128 map and to 2 in the 256x128 one its own
-// draw carries -- so a lamp is on when ANY live map lights its base and off when every map
-// covering it is dark; the map its draws carry is kept only as a diagnostic.
-// Milestone 32: the lamps' shapes. A spot is a sphere light shaped to its cone; a lamp shade is
-// two cones -- the definition's angle around the way its light travels, its bottom angle the
-// other way -- and an unshaped light for what comes through the shade; a tube is a cylinder.
-// Milestone 33 (run 146): by day the maps hold the daylight through the windows -- 95 to 233 at
-// the lamps' bases with every lamp off -- so a bright base no longer means a lit lamp. What is
-// the lamp's own is what changes ABRUPTLY and CENTRED on it: a switch changes the map in one
-// version, around the lamp; daylight drifts over many versions, evenly. So each lamp keeps its
-// own part per map, moved only by such changes (lampOwnStep), read outright only by night.
-// Milestone 34 (run 147): two flaws of that. The change "centred on the lamp" was the base's change
-// less the ring's, so a ring that went dark with the base unchanged counted as the lamp's rise: 9
-// of 44 switch-ons had a base under 30, several a base of 0. And the first reading was taken
-// "by night" at a load by day, the sun not yet known (level 0). Now: by night -- the sun level
-// under the night level for ten seconds with the maps live -- the proven reading of the map as it
-// is; by day a change of the lamp's own base only, and never more own light than the base holds.
-// Milestone 35 (run 148): a whole day and night held; the next morning two lamps stood lit, their
-// own part exactly their base's daylight reading (78, 89) in one map and 0 in the other. A fall
-// that takes most of what a lamp had now puts it out; a map that sees a lamp go out puts it out
-// in every map; and a map unseen for a while compares the base with the lamp's record of it.
-struct LampRay { float pos[3]; float dir[3]; float col[3]; };
-
+// A spot is a sphere light shaped to its cone; a lamp shade is two cones -- the definition's
+// angle around the way its light travels, its bottom angle the other way -- and an unshaped
+// light for what comes through the shade; a tube is a cylinder; a point a sphere.
+//
+// (Milestones 21 to 35 inferred the state: from the light rigs' rays, then from the lot's light
+// maps. By night the maps read true; by day they hold the daylight through the windows and the
+// inference stayed fragile. It was removed with milestone 37; the run journal holds what was
+// learnt about the maps.)
 struct Lamp {
   float pos[3];        // the light, in the world (from the game's definition through the object's World rows)
   float col[3];        // colour x brightness as forwarded
   float anchor[3];     // the object's origin
-  uint32_t id;         // the object's origin quantised, with the light's index: the lamp's identity across frames (the API light's hash)
+  uint32_t id;         // the object's origin quantised, with the light's index: the API light's hash
   uint8_t kind;        // the light type (3 point, 4 spot, 5 lamp shade, 6 tube)
-  uint8_t light;       // which of the model's lights (milestone 24: a lamp is found again by its object's position and this, not by an exact id)
-  float base;          // the game's brightness for it: intensity / 100 x the definition's colour luminance
-  uint32_t support;    // witness rays pointing at the light this frame
-  uint32_t missing;    // grows by two per frame of witnesses saying off
-  uint32_t age;        // supported frames (forwarded once >= kConfirmFrames)
-  uint32_t unseen;     // consecutive frames its object was not drawn
-  uint32_t held;       // frames held for want of witnesses (statistics)
-  bool drawn;          // the object was drawn this frame
-  int8_t state;        // the light map's standing word for it (milestone 28): 1 on, 0 off, -1 not judged (beyond the map, or none read yet); it stands until the map says otherwise
-  float own[4];        // its own part of the light at its base, per light map slot (milestone 33; map units 0..255)
-  uint8_t ownInit;     // the slots that have read it once
-  float seen[4];       // its base at its last reading, per slot (milestone 35)
-  float def[3];        // the definition's colour and intensity (milestone 36: what the reporter's word scales)
+  uint8_t light;       // which of the model's lights
+  float def[3];        // the definition's colour and intensity: what the reporter's word scales
   float defIntensity;
-  bool reported;       // the lamp reporter names it: its state and colour are the game's own word
-  void* map;           // the light map texture its draws carry (milestone 29; a diagnostic since milestone 31)
-  void* mapCand;       // another map its draws have carried lately, adopted after kMapConfirm consecutive draws
-  uint8_t mapCandN;
-  bool confirmedOnce;  // (unused since milestone 30: every lighting and putting out is an event)
-  void* api;           // the Remix API light handle (the device destroys it on drop)
-  // the shape (milestone 32), from the game's definition through the object's World rows
+  bool drawn;          // its object was drawn this frame
+  uint32_t unseen;     // consecutive frames its object was not drawn
+  bool named;          // the reporter names it
+  bool on;             // the game's word: lit
+  bool strangerLogged; // the log has said once that the reporter does not name it
+  // the shape, from the game's definition through the object's World rows
   float dir[3];        // the way the main cone's light travels (unit; zeros = no direction, a point light)
   float angle;         // the main cone's angle from its axis in degrees (0 = none)
   float bottom;        // the opposite cone's angle (a lamp shade's bottom opening; 0 = none)
   float shade[3];      // the light through a lamp shade, as a factor of the lamp's colour (zeros = none)
   float tube;          // a tube light's length along dir (0 = none)
-  void* api2;          // the opposite cone's API light
-  void* api3;          // the shade glow's API light
+  void* api;           // the Remix API lights: the main one, the opposite cone's, the shade's
+  void* api2;
+  void* api3;
   float sentPos[3], sentCol[3], sentDir[3]; bool sent;   // what the runtime holds
 };
 
-// World register of the vertex shaders whose draws may contribute rays (the rig is only
-// meaningful with a known object position).
+// World register of the object vertex shaders (the object's position and rotation come from it).
 struct WorldReg { uint64_t hash; int reg; };
 inline const WorldReg kWorldRegs[] = {
   { 0x0ba6ddb9aa01913cull, 12 },   // objects 0x12d25080
@@ -1809,28 +1716,12 @@ inline float lampDist(const float* a, const float* b) {
   return len3(d);
 }
 
-struct LampSolver {
-  static const int kMaxRays = 768;
-  static const int kMaxLamps = 48;
-  static const int kMaxOrigins = 512;
-  static const uint32_t kMissingLimit = 180;   // off after a second and a half of witnesses saying so (missing grows by two per frame)
-  static const uint32_t kUnseenLimit = 600;    // released after ten seconds undrawn
-  static const uint32_t kConfirmFrames = 3;    // supported frames before a lamp is forwarded
-  static constexpr float kWitness = 2.f;       // a witness stands this close to the light in the ground plane, from 5 units below it to 3 above (a ceiling light hangs high)
-  static constexpr float kClose = 1.f;         // this close, an object lists the lamp among its lights whenever it is on: its silence says off
-  static constexpr float kAimCos = 0.85f;      // a witness ray points at the light when it aims within ~32 degrees of it (the rig is evaluated at the
-                                               // object's centre, the ray traced from its origin: half a unit apart on a near object, milestone 24)
-  LampRay rays[kMaxRays]; uint32_t nRays = 0;             // this frame's rig rays
-  float origins[kMaxOrigins][3]; uint8_t originSlots[kMaxOrigins]; uint32_t nOrigins = 0;   // this frame's object origins (every object-shader draw) and how many of the rig's four slots their rig used
-  Lamp lamps[kMaxLamps]; uint32_t nLamps = 0;
-  uint32_t created = 0, dropped = 0, lit = 0, out = 0;    // statistics: registrations, releases, lights lit and put out
-  void* droppedApi[3 * kMaxLamps]; uint32_t nDropped = 0; // the API lights of the lamps dropped or put out this frame, for the device to destroy
-  void releaseLights(Lamp& L) {
-    void** hs[3] = { &L.api, &L.api2, &L.api3 };
-    for (int q = 0; q < 3; ++q) if (*hs[q]) { if (nDropped < (uint32_t) (3 * kMaxLamps)) droppedApi[nDropped++] = *hs[q]; *hs[q] = nullptr; }
-  }
-  struct Event { uint8_t kind; float anchor[3]; float y; float col[3]; uint32_t votes, age; };   // 1 lit (first forwarded), 2 dropped
-  Event events[16]; uint32_t nEvents = 0;
+struct Lamps {
+  static const int kMax = 64;
+  static const uint32_t kUnseenLimit = 600;    // released after ten seconds undrawn, unless it is lit
+  Lamp lamps[kMax]; uint32_t n = 0;
+  uint32_t registered = 0, released = 0, lit = 0, out = 0;   // statistics
+  void* gone[3 * kMax]; uint32_t nGone = 0;    // the API lights of the lamps put out or released this frame, for the device to destroy
 
   // An origin quantised to a quarter unit, hashed: the same object gives the same id.
   static uint32_t originId(const float* p) {
@@ -1839,162 +1730,58 @@ struct LampSolver {
     for (int i = 0; i < 3; ++i) for (int b = 0; b < 4; ++b) { h ^= (uint32_t) ((q[i] >> (8 * b)) & 0xFF); h *= 16777619u; }
     return h ? h : 1u;
   }
-
-  // One captured draw of a rig shader: the object's world position and its rig (c0..c3
-  // directions toward the lights, c4..c7 colours). sunDir (unit, may be null) is skipped.
-  void add(const float* pos, const float* dirs, const float* cols, const float* sunDir) {
-    bool known = false;   // the same object's further draws
-    for (uint32_t k = nOrigins > 8 ? nOrigins - 8 : 0; k < nOrigins && !known; ++k) known = lampDist(origins[k], pos) < 1e-3f;
-    uint8_t used = 0;
-    for (int i = 0; i < 4; ++i) { const float* d = dirs + i*4; const float len = len3(d); if (len >= 0.9f && len <= 1.1f && luminance(cols + i*4) >= 0.02f) ++used; }
-    if (!known && nOrigins < (uint32_t) kMaxOrigins) { for (int j = 0; j < 3; ++j) origins[nOrigins][j] = pos[j]; originSlots[nOrigins] = used; ++nOrigins; }
-    for (int i = 0; i < 4; ++i) {
-      const float* d = dirs + i*4; const float* c = cols + i*4;
-      const float len = len3(d);
-      if (len < 0.9f || len > 1.1f || luminance(c) < 0.02f) continue;
-      const float nd[3] = { d[0]/len, d[1]/len, d[2]/len };
-      if (sunDir && dot3(sunDir, nd) > 0.999f) continue;
-      bool dup = false;   // the same object's earlier draws carry the same rig
-      for (uint32_t k = nRays > 4 ? nRays - 4 : 0; k < nRays && !dup; ++k)
-        dup = lampDist(rays[k].pos, pos) < 1e-3f && dot3(rays[k].dir, nd) > 0.9999f;
-      if (dup) continue;
-      if (nRays >= (uint32_t) kMaxRays) return;
-      LampRay& r = rays[nRays++];
-      for (int j = 0; j < 3; ++j) { r.pos[j] = pos[j]; r.dir[j] = nd[j]; r.col[j] = c[j]; }
-    }
-  }
-
-  // A lamp from the game's definitions, once per draw of its object: the light's exact world
-  // position; the definition's colour and intensity until the witnesses give the colour.
-  // ...`state` is what the object's own draw says (milestone 25): 1 on, 0 off, -1 nothing readable this draw.
-  static const uint8_t kMapConfirm = 3;   // consecutive draws with another map before a lamp changes map (a one-off texture cannot steal it)
-  // The light map a lamp's draws carry (milestone 29): adopted at once when it has none, else only
-  // after kMapConfirm consecutive draws with the same other map. True when the lamp's map changed
-  // (from = the map it had).
-  bool mapLamp(uint8_t light, const float* anchor, void* map, void** from) {
-    for (uint32_t k = 0; k < nLamps; ++k) {
-      Lamp& L = lamps[k];
-      if (L.light != light || lampDist(L.anchor, anchor) > 0.5f) continue;
-      if (L.map == map) { L.mapCand = nullptr; L.mapCandN = 0; return false; }
-      if (L.map == nullptr || (L.mapCand == map && ++L.mapCandN >= kMapConfirm)) {
-        if (from) *from = L.map;
-        L.map = map; L.state = -1; L.mapCand = nullptr; L.mapCandN = 0;
-        return true;
-      }
-      if (L.mapCand != map) { L.mapCand = map; L.mapCandN = 1; }
-      return false;
-    }
-    return false;
-  }
-  // The lamp's shape from its definition (milestone 32), set at its object's draw: dir = the way the
-  // main cone's light travels, in the world. False when the lamp is not registered.
-  bool shapeLamp(uint8_t light, const float* anchor, const float* dir, float angle, float bottom, const float* shade, float tube) {
-    for (uint32_t k = 0; k < nLamps; ++k) {
-      Lamp& L = lamps[k];
-      if (L.light != light || lampDist(L.anchor, anchor) > 0.5f) continue;
-      for (int q = 0; q < 3; ++q) { L.dir[q] = dir[q]; L.shade[q] = shade[q]; }
-      L.angle = angle; L.bottom = bottom; L.tube = tube;
-      return true;
-    }
-    return false;
-  }
-  const Lamp* find(uint8_t light, const float* anchor) const {
-    for (uint32_t k = 0; k < nLamps; ++k) if (lamps[k].light == light && lampDist(lamps[k].anchor, anchor) <= 0.5f) return &lamps[k];
+  Lamp* find(uint8_t light, const float* anchor) {
+    for (uint32_t k = 0; k < n; ++k) if (lamps[k].light == light && lampDist(lamps[k].anchor, anchor) <= 0.5f) return &lamps[k];
     return nullptr;
   }
-  void addModelLamp(uint32_t id, uint8_t light, const float* anchor, const float* pos, const float* col, float intensity, uint8_t kind, int8_t state) {
-    for (uint32_t k = 0; k < nLamps; ++k) {
-      Lamp& L = lamps[k];
-      if (L.light != light || lampDist(L.anchor, anchor) > 0.5f) continue;   // the same object (its position may jitter across the id's quantisation)
-      for (int q = 0; q < 3; ++q) { L.anchor[q] = anchor[q]; L.pos[q] = pos[q]; }
-      L.drawn = true; if (state >= 0) L.state = state;
-      return;
+  // A lamp from the game's definitions, at each draw of its object: registered, or found again
+  // by its object's position and the light's index. Null when the book is full.
+  Lamp* add(uint32_t id, uint8_t light, const float* anchor, const float* pos, const float* col, float intensity, uint8_t kind) {
+    Lamp* L = find(light, anchor);
+    if (L) {
+      for (int q = 0; q < 3; ++q) { L->anchor[q] = anchor[q]; L->pos[q] = pos[q]; }
+      L->drawn = true;
+      return L;
     }
-    if (nLamps >= (uint32_t) kMaxLamps) return;
-    Lamp& L = lamps[nLamps++];
-    std::memset(&L, 0, sizeof L);
-    for (int q = 0; q < 3; ++q) { L.anchor[q] = anchor[q]; L.pos[q] = pos[q]; L.col[q] = col[q] * intensity / 100.f; }
-    L.base = luminance(col) * intensity / 100.f;
-    for (int q = 0; q < 3; ++q) L.def[q] = col[q];
-    L.defIntensity = intensity;
-    L.id = id; L.light = light; L.kind = kind; L.drawn = true; L.state = state;
-    ++created;
+    if (n >= (uint32_t) kMax) return nullptr;
+    L = &lamps[n++];
+    std::memset(L, 0, sizeof *L);
+    for (int q = 0; q < 3; ++q) { L->anchor[q] = anchor[q]; L->pos[q] = pos[q]; L->def[q] = col[q]; L->col[q] = col[q] * intensity / 100.f; }
+    L->defIntensity = intensity;
+    L->id = id; L->light = light; L->kind = kind; L->drawn = true;
+    ++registered;
+    return L;
   }
-
-  // Is the object at o a witness of L: within kWitness of its light in the ground plane, from
-  // 5 units below it to 3 above, and not the lamp's own object?
-  static bool witness(const float* o, const Lamp& L) {
-    const float dx = o[0] - L.pos[0], dy = o[1] - L.pos[1], dz = o[2] - L.pos[2];
-    return dy > -5.f && dy < 3.f && dx*dx + dz*dz < kWitness * kWitness && lampDist(o, L.anchor) > 0.3f;
+  // Its API lights to the device, to destroy.
+  void handOver(Lamp& L) {
+    void** hs[3] = { &L.api, &L.api2, &L.api3 };
+    for (int q = 0; q < 3; ++q) if (*hs[q]) { if (nGone < (uint32_t) (3 * kMax)) gone[nGone++] = *hs[q]; *hs[q] = nullptr; }
+    L.sent = false;
   }
-  // Can the witness at o testify that L is off? Only if the lamp would surely be among its four
-  // listed lights when on: it stands within kClose of the light, or its rig has a free slot.
-  static bool canTestify(const float* o, uint8_t slots, const Lamp& L) {
-    const float dx = o[0] - L.pos[0], dz = o[2] - L.pos[2];
-    return slots < 4 || dx*dx + dz*dz < kClose * kClose;
+  // Frame start: nothing handed over yet.
+  void begin() { nGone = 0; }
+  // The game's word for a lamp this frame: named = the reporter has a record of it; on and col = the
+  // record's. True when the lamp was switched by it.
+  bool word(Lamp& L, bool named, bool on, const float* col) {
+    const bool now = named && on;
+    const bool switched = now != L.on;
+    L.named = named;
+    if (named && col) for (int q = 0; q < 3; ++q) L.col[q] = col[q];
+    if (now && !L.on) ++lit;
+    if (!now && L.on) { ++out; handOver(L); }
+    L.on = now;
+    return switched;
   }
-  // Does ray r aim at point P: within ~32 degrees of the direction to it?
-  static bool pointsAt(const LampRay& r, const float* P) {
-    const float v[3] = { P[0] - r.pos[0], P[1] - r.pos[1], P[2] - r.pos[2] };
-    const float n = len3(v);
-    return n > 0.2f && dot3(v, r.dir) / n > kAimCos;
-  }
-  void record(uint8_t kind, const Lamp& L, uint32_t votes) {
-    if (nEvents >= 16) return;
-    Event& e = events[nEvents++];
-    e.kind = kind; for (int q = 0; q < 3; ++q) { e.anchor[q] = L.anchor[q]; e.col[q] = L.col[q]; }
-    e.y = L.pos[1]; e.votes = votes; e.age = L.age;
-  }
-
-  // Frame end: the light map's standing word decides each judged lamp (the witnesses' rays give
-  // the colour); a lamp the map has not judged goes by its witnesses. The lamps gone are handed
-  // to the device.
-  uint32_t solve() {
-    nDropped = 0; nEvents = 0;
-    for (uint32_t k = 0; k < nLamps; ++k) {
+  // Frame end: a lamp whose object was not drawn for ten seconds is released, unless it is lit (a
+  // lit lamp off screen still lights what is in view).
+  uint32_t frame() {
+    for (uint32_t k = 0; k < n; ++k) { Lamp& L = lamps[k]; L.unseen = L.drawn ? 0 : L.unseen + 1; L.drawn = false; }
+    for (uint32_t k = 0; k < n; ) {
       Lamp& L = lamps[k];
-      uint32_t pointing = 0; float sum[3] = {};
-      for (uint32_t i = 0; i < nRays; ++i)
-        if (witness(rays[i].pos, L) && pointsAt(rays[i], L.pos)) { ++pointing; for (int q = 0; q < 3; ++q) sum[q] += rays[i].col[q]; }
-      L.support = pointing;
-      uint32_t witnesses = 0;
-      for (uint32_t o = 0; o < nOrigins; ++o) if (witness(origins[o], L) && canTestify(origins[o], originSlots[o], L)) ++witnesses;
-      // the verdict: the map's standing word when it has one; else the witnesses -- one pointing
-      // at the light says on, one able to testify and not pointing says off, none holds
-      const int8_t verdict = L.state >= 0 ? L.state : (pointing ? (int8_t) 1 : (witnesses ? (int8_t) 0 : (int8_t) -1));
-      if (verdict == 1) {
-        L.missing = 0;
-        if (L.age < 100000u) ++L.age;
-        // the hue: the witnesses' rays (the player's colour choice); the brightness the game's
-        // (a lamp the reporter names has its colour from the game's own word, milestone 36)
-        if (!L.reported && luminance(sum) > 1e-6f) { const float hl = luminance(sum); const float sc = L.age <= 1 ? 1.f : 0.2f; for (int q = 0; q < 3; ++q) L.col[q] += sc * (sum[q] / hl * L.base - L.col[q]); }
-        if (L.age == kConfirmFrames) { ++lit; record(1, L, pointing); }
-      } else if (verdict == 0) {
-        if (L.age > 0) {
-          L.missing += L.state == 0 ? 6u : 2u;   // the map's word: out within half a second; the witnesses': a second and a half
-          if (L.missing > kMissingLimit) {       // put out: the light goes, the lamp stays registered (milestone 30)
-            if (L.age >= kConfirmFrames) { ++out; record(2, L, 1u); }
-            releaseLights(L);
-            L.sent = false; L.age = 0; L.missing = 0;
-          }
-        }
-      } else {
-        ++L.held;         // nothing says either way: the last state holds
-      }
-      L.unseen = L.drawn ? 0 : L.unseen + 1;
-      L.drawn = false;   // the map's word stands (milestone 28): undrawn, a judged lamp is not handed to the witnesses
-    }
-    for (uint32_t k = 0; k < nLamps; ) {   // released: ten seconds undrawn while off or unjudged (a judged lamp shining off screen stays)
-      Lamp& L = lamps[k];
-      if (L.unseen > kUnseenLimit && (L.state < 0 || L.age == 0)) {
-        if (L.age >= kConfirmFrames) { ++out; record(2, L, 0u); }
-        releaseLights(L);
-        L = lamps[nLamps - 1]; --nLamps; ++dropped;
-      }
+      if (L.unseen > kUnseenLimit && !L.on) { handOver(L); L = lamps[n - 1]; --n; ++released; }
       else ++k;
     }
-    nRays = 0; nOrigins = 0;
-    return nLamps;
+    return n;
   }
 };
 
