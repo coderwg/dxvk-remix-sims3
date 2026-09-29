@@ -11,7 +11,7 @@ terrain = 1
 ringTrace = 0
 markKey = 220
 # The lights go to the runtime through the Remix API (exposeRemixApi = True in .trex\bridge.conf). The lamps are the
-# game's own: their place and shape from sims3lights.txt next to the DLL (sims3/tools/lite_table.py --hook writes it).
+# game's own: their lights and shapes from sims3lights.txt next to the DLL (sims3/tools/lite_table.py writes it).
 # sunAngle      the sun's angular diameter in thousandths of a degree
 # sunRadiance   the sun's radiance per unit of rig colour, thousandths
 # lampRadius    the lamps' sphere radius in thousandths of a unit
@@ -30,8 +30,12 @@ lampRadiance = 40000
 # lampConeScale     every cone angle times this, in thousandths (1000 = the definitions' angles taken as the angle from the axis; 500 = half as wide)
 # lampConeSoftness  the softness of a cone's edge, in thousandths (0 = hard, 1000 = soft across the whole cone)
 # lampShadeGlow     the light through a lamp shade times this, in thousandths (0 = none)
-# Whether a lamp is on, in which colour and at which level comes from the lamp reporter, a script mod
-# (Sims3RtxLamps.package in Mods\Packages; sims3/scriptmod). Without it no lamp gives light.
+# Which objects are lamps, where they stand, whether they are on, in which colour and at which level comes from the
+# lamp reporter, a script mod (Sims3RtxLamps.package in Mods\Packages; sims3/scriptmod). Without it no lamp gives light.
+# lampMax           the most lamps lit at once, the nearest to the camera's target first (1..96)
+# lampWorldLights   1 = the world lights too (a street lamp's); 0 = they stay dark
+lampMax = 48
+lampWorldLights = 1
 lampShapes = 1
 lampConeScale = 1000
 lampConeSoftness = 300

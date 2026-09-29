@@ -42,6 +42,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <unordered_map>
 #include <vector>
 #include <d3d9.h>
 
@@ -988,6 +989,10 @@ inline float nightEvMax() { static float s = -99.f; if (s < -98.f) { int v = hoo
 inline float sunAngle() { static float s = -1.f; if (s < 0.f) { int v = hookOption("sunAngle", 2000); if (v < 100) v = 100; if (v > 90000) v = 90000; s = (float) v / 1000.f; } return s; }
 inline float sunRadiance() { static float s = -1.f; if (s < 0.f) { int v = hookOption("sunRadiance", 1000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
 inline float lampRadius() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampRadius", 150); if (v < 20) v = 20; s = (float) v / 1000.f; } return s; }
+// lampMax = the most lamps lit at once (the nearest to the camera's target first); lampWorldLights =
+// 1 to light the world lights too (a street lamp's), 0 to leave them dark.
+inline uint32_t lampMax() { static int s = -1; if (s < 0) { s = hookOption("lampMax", 48); if (s < 1) s = 1; if (s > 96) s = 96; } return (uint32_t) s; }
+inline bool lampWorldLights() { static int s = -1; if (s < 0) s = hookOption("lampWorldLights", 1) != 0 ? 1 : 0; return s == 1; }
 inline float lampRadiance() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampRadiance", 40000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
 // The lamps' shapes from the game's definitions (milestone 32): cones for spots and lamp shades, a
 // shade's glow, a cylinder for a tube. lampShapes 0 = plain spheres as before; lampConeScale scales
@@ -996,59 +1001,41 @@ inline float lampRadiance() { static float s = -1.f; if (s < 0.f) { int v = hook
 inline bool lampShapes() { static int s = -1; if (s < 0) s = hookOption("lampShapes", 1) != 0 ? 1 : 0; return s == 1; }
 inline float lampConeScale() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampConeScale", 1000); if (v < 100) v = 100; s = (float) v / 1000.f; } return s; }
 inline float lampConeSoftness() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampConeSoftness", 300); if (v < 0) v = 0; if (v > 1000) v = 1000; s = (float) v / 1000.f; } return s; }
-// ---- the lamps' own word (milestone 36) --------------------------------------------------
-// Whether a lamp is on, in which colour and at which level is nowhere in what the game draws.
-// The game's scripts know it exactly, and the lamp reporter (sims3/scriptmod: a script mod)
-// hands it over: for every lamp near the camera its position, whether it is on, its colour and
-// its intensity, written a few times a second into a block of memory the hook finds by its
+// ---- the lamps' own word (milestones 36, 39) ---------------------------------------------
+// Nothing about a lamp is in what the game draws but its mesh. The game's scripts know it all,
+// and the lamp reporter (sims3/scriptmod: a script mod) hands it over: for every lamp near the
+// camera the keys of its object and of its model, its transform, whether it is on, its colour
+// and its level, written a few times a second into a block of memory the hook finds by its
 // signature (the block's head carries the block's own address, so nothing else in the process
-// passes for it). The reporter's word is the lamp's state; a lamp it does not name is dark.
-inline constexpr uint32_t kLampMagic0 = 0x58523353u, kLampMagic1 = 0x504D414Cu, kLampMagic2 = 0x31303076u;   // 'S3RX' 'LAMP' 'v001'
-inline constexpr uint32_t kLampHead = 64, kLampFloats = 12, kLampCapacity = 512;
+// passes for it). The reporter's word is the lamp; what it does not name gives no light.
+inline constexpr uint32_t kLampMagic0 = 0x58523353u, kLampMagic1 = 0x504D414Cu, kLampMagic2 = 0x32303076u;   // 'S3RX' 'LAMP' 'v002'
+inline constexpr uint32_t kLampHead = 64, kLampFloats = 24, kLampInts = 8, kLampCapacity = 512;
 // The block's head, checked: the signature, the block's own address, the version, the record
-// size, a lamp count within the capacity. head = its first 64 bytes as read.
-inline bool lampReportHead(const uint8_t* head, uint32_t address, uint32_t& lamps, uint32_t& sequence, bool& world) {
+// sizes, a lamp count within the capacity, the two areas where they can be. head = its first 64
+// bytes as read.
+struct LampHead { uint32_t lamps, sequence, floatsAt, intsAt; bool world; };
+inline bool lampReportHead(const uint8_t* head, uint32_t address, LampHead& out) {
   uint32_t h[16]; std::memcpy(h, head, sizeof h);
   if (h[0] != kLampMagic0 || h[1] != kLampMagic1 || h[2] != kLampMagic2 || h[3] != address) return false;
-  if (h[4] != 1u || h[7] != kLampFloats || h[8] > kLampCapacity || h[6] > h[8]) return false;
-  lamps = h[6]; sequence = h[5]; world = h[10] != 0;
+  if (h[4] != 2u || h[7] != kLampFloats || h[11] != kLampInts || h[8] > kLampCapacity || h[6] > h[8]) return false;
+  if (h[12] < kLampHead || h[12] > 4096u || h[13] < h[12] + (h[8] + 1u) * kLampFloats * 4u || h[13] > (1u << 20)) return false;
+  out.lamps = h[6]; out.sequence = h[5]; out.world = h[10] != 0; out.floatsAt = h[12]; out.intsAt = h[13];
   return true;
 }
-// The record nearest to `anchor` whatever the distance (the log names it when a lamp has none of its own).
-inline const float* lampReportNearest(const float* records, uint32_t lamps, const float* anchor, float& distance) {
-  const float* best = nullptr; distance = 0.f;
-  for (uint32_t k = 0; k < lamps; ++k) {
-    const float* r = records + (size_t) k * kLampFloats;
-    const float d[3] = { r[0] - anchor[0], r[1] - anchor[1], r[2] - anchor[2] };
-    const float l = std::sqrt(d[0]*d[0] + d[1]*d[1] + d[2]*d[2]);
-    if (!best || l < distance) { best = r; distance = l; }
-  }
-  return best;
-}
-// The record of the lamp whose object stands at `anchor`: the nearest within half a unit in the
-// ground plane and a unit and a half in height. records = the lamps' records (12 floats each).
-inline const float* lampReportFind(const float* records, uint32_t lamps, const float* anchor) {
-  const float* best = nullptr; float bestD = 0.5f * 0.5f;
-  for (uint32_t k = 0; k < lamps; ++k) {
-    const float* r = records + (size_t) k * kLampFloats;
-    const float dx = r[0] - anchor[0], dy = r[1] - anchor[1], dz = r[2] - anchor[2];
-    if (dy > 1.5f || dy < -1.5f) continue;
-    const float d = dx * dx + dz * dz;
-    if (d <= bestD) { bestD = d; best = r; }
-  }
-  return best;
-}
-// A record's word for a lamp: on or off, and the colour to send -- the player's colour (a preset's
-// or a custom one; the definition's own when the lamp is left at its default, preset 13) times the
-// definition's intensity times the level the player set, relative to the game's normal level.
+inline uint64_t lampId64(const int32_t* lowHigh) { return (uint64_t) (uint32_t) lowHigh[0] | ((uint64_t) (uint32_t) lowHigh[1] << 32); }
+// A record's word for one light of a lamp: on or off, and the colour to send -- the player's colour
+// (a preset's or a custom one; the definition's own when the lamp is left at its default, preset
+// 13) times the definition's intensity times the level, relative to the game's normal level. The
+// level is the engine's dimmer: switching a lamp on sets it to the lamp's intensity, off to 0.
 struct LampWord { bool on; float col[3]; float level; };
 inline LampWord lampWordFromRecord(const float* r, const float* defCol, float defIntensity, float normalLevel) {
   LampWord w;
-  w.on = r[8] > 0.5f;   // the game's IsLightOn(); the engine's dimmer and EmitsLight ride along in the record for the log
+  w.on = r[8] > 0.5f;
   float c[3] = { r[3], r[4], r[5] };
   if ((int) (r[9] + 0.5f) == 13) { c[0] = defCol[0]; c[1] = defCol[1]; c[2] = defCol[2]; }
   else if (c[0] > 1.5f || c[1] > 1.5f || c[2] > 1.5f) { c[0] /= 255.f; c[1] /= 255.f; c[2] /= 255.f; }
-  w.level = (normalLevel > 1e-4f && r[6] > 0.f) ? r[6] / normalLevel : 1.f;
+  const float applied = r[7] > 0.f ? r[7] : r[6];
+  w.level = (normalLevel > 1e-4f && applied > 0.f) ? applied / normalLevel : 1.f;
   if (w.level > 4.f) w.level = 4.f;
   for (int q = 0; q < 3; ++q) w.col[q] = c[q] * defIntensity / 100.f * w.level;
   return w;
@@ -1580,24 +1567,71 @@ inline void makeSunLight(const SunVote& v, D3DLIGHT9& l) {
   l.Direction.x = -v.dir[0]; l.Direction.y = -v.dir[1]; l.Direction.z = -v.dir[2];   // D3D: the direction the light travels
 }
 
-// ---- the game's own lamp lights (milestone 22) --------------------------------------------
+// ---- the game's own lamp lights --------------------------------------------------------
 // The game keeps every lamp model's lights in a LITE resource: type, position in the model's
-// own space, colour, intensity. sims3/tools/lite_table.py reads the package files and writes
-// sims3lights.txt next to this DLL: one line per mesh, keyed by the FNV-1a 64 hash of the
-// model's index data as the game uploads it (run 133: the Direct3D index buffers match the
-// package chunks byte for byte, differences decoded). At a draw of an object shader the index
-// buffer's hash names the model, and the object's World rows carry each light to the world.
-// The shape (milestone 32, table format 2): at = the definition's direction, which points from the
-// lit side BACK to the light (a picture light's points away from its wall, a street lamp's and a
-// skylight's up, a fountain's underwater light's down): the light travels along -at. d by type:
-// spot = cone angle, blur; lamp shade = cone angle (around -at), shade multiplier, bottom angle
-// (the cone around +at), shade r g b (the light through the shade); tube = length, blur.
-struct LiteLight { uint8_t type; float pos[3]; float col[3]; float intensity; float at[3]; float d[6]; };   // type 3 point, 4 spot, 5 lamp shade, 6 tube
-struct LiteModel { uint64_t ibHash; uint64_t inst; uint8_t n; LiteLight lights[4]; };
+// own space, colour, intensity, shape. sims3/tools/lite_table.py reads the package files and
+// writes sims3lights.txt next to this DLL (format 3): the lights per model, and which object
+// names which model. A lamp is looked up by the keys the lamp reporter gives for it; no mesh is
+// involved (milestones 22 to 38 named a lamp by the mesh it was drawn with).
+//
+// The shape: at = the definition's direction, which points from the lit side BACK to the light
+// (a picture light's points away from its wall, a street lamp's and a skylight's up, a
+// fountain's underwater light's down): the light travels along -at. d by type: spot = cone
+// angle, blur; lamp shade and world light = cone angle (around -at), shade multiplier, bottom
+// angle (the cone around +at), shade r g b (the light through the shade); tube = length, blur.
+struct LiteLight { uint8_t type; float pos[3]; float col[3]; float intensity; float at[3]; float d[6]; };   // type 3 point, 4 spot, 5 lamp shade, 6 tube, 11 world light
+struct LiteModel { uint64_t inst; uint8_t n; LiteLight lights[4]; };
 struct LiteTable {
-  static const int kMax = 1024;
-  LiteModel models[kMax]; uint32_t n = 0; bool loaded = false; uint32_t lines = 0; int format = 1;
+  std::vector<LiteModel> models;
+  std::unordered_map<uint64_t, uint32_t> byModel;   // a model's instance -> its place in models
+  std::unordered_map<uint64_t, uint64_t> objects;   // an object's instance -> its model's
+  bool loaded = false; uint32_t lines = 0; int format = 0;
+  const LiteModel* model(uint64_t inst) const {
+    const auto it = byModel.find(inst);
+    return it == byModel.end() ? nullptr : &models[it->second];
+  }
+  // A lamp's definition by the keys the reporter gives for it. how: 1 its catalog model key names
+  // the model; 2 its resource key names the object that names the model; 3 its catalog model
+  // key names that object; 0 none.
+  const LiteModel* find(uint64_t modelKey, uint64_t objectKey, int* how = nullptr) const {
+    int h = 0; const LiteModel* m = model(modelKey);
+    if (m) h = 1;
+    if (!m) { const auto it = objects.find(objectKey); if (it != objects.end() && (m = model(it->second)) != nullptr) h = 2; }
+    if (!m) { const auto it = objects.find(modelKey); if (it != objects.end() && (m = model(it->second)) != nullptr) h = 3; }
+    if (how) *how = h;
+    return m;
+  }
 };
+// One line of sims3lights.txt. True when it gave the table something.
+inline bool liteParseLine(LiteTable& t, const char* line) {
+  if (line[0] == '#' || line[0] == '\r' || line[0] == '\n' || !line[0]) return false;
+  if (!strncmp(line, "format", 6)) { t.format = (int) strtol(line + 6, nullptr, 10); return true; }
+  if (t.format != 3) return false;   // an older table (keyed by meshes) names no lamp
+  char* e = nullptr;
+  if (!strncmp(line, "model ", 6)) {
+    LiteModel m = {};
+    m.inst = strtoull(line + 6, &e, 16);
+    const long cnt = strtol(e, &e, 10);
+    for (long i = 0; i < cnt && m.n < 4; ++i) {
+      const long typ = strtol(e, &e, 10);
+      float v[16]; for (int k = 0; k < 16; ++k) v[k] = (float) strtod(e, &e);
+      if (!((typ >= 3 && typ <= 6) || typ == 11)) continue;
+      LiteLight& L = m.lights[m.n++];
+      L.type = (uint8_t) typ; L.pos[0] = v[0]; L.pos[1] = v[1]; L.pos[2] = v[2]; L.col[0] = v[3]; L.col[1] = v[4]; L.col[2] = v[5]; L.intensity = v[6];
+      for (int k = 0; k < 3; ++k) L.at[k] = v[7 + k];
+      for (int k = 0; k < 6; ++k) L.d[k] = v[10 + k];
+    }
+    if (!m.n) return false;
+    t.byModel[m.inst] = (uint32_t) t.models.size(); t.models.push_back(m);
+    return true;
+  }
+  if (!strncmp(line, "object ", 7)) {
+    const uint64_t o = strtoull(line + 7, &e, 16); const uint64_t m = strtoull(e, &e, 16);
+    t.objects[o] = m;
+    return true;
+  }
+  return false;
+}
 inline LiteTable& liteTable() {
   static LiteTable t;
   if (t.loaded) return t;
@@ -1611,35 +1645,9 @@ inline LiteTable& liteTable() {
   FILE* f = fopen(path, "rb");
   if (!f) return t;
   char line[1024];
-  while (fgets(line, sizeof line, f) && t.n < (uint32_t) LiteTable::kMax) {
-    ++t.lines;
-    if (line[0] == '#' || line[0] == '\r' || line[0] == '\n' || !line[0]) continue;
-    if (!strncmp(line, "format", 6)) { t.format = (int) strtol(line + 6, nullptr, 10); continue; }   // format 2: each light with its shape
-    char* e = line;
-    LiteModel m = {};
-    m.ibHash = strtoull(e, &e, 16); m.inst = strtoull(e, &e, 16);
-    const long cnt = strtol(e, &e, 10);
-    if (cnt < 1) continue;
-    for (long i = 0; i < cnt && m.n < 4; ++i) {
-      LiteLight& L = m.lights[m.n];
-      const long typ = strtol(e, &e, 10);
-      float v[16] = {}; const int nv = t.format >= 2 ? 16 : 7;
-      for (int k = 0; k < nv; ++k) v[k] = (float) strtod(e, &e);
-      if (typ < 3 || typ > 6) continue;
-      L.type = (uint8_t) typ; L.pos[0] = v[0]; L.pos[1] = v[1]; L.pos[2] = v[2]; L.col[0] = v[3]; L.col[1] = v[4]; L.col[2] = v[5]; L.intensity = v[6];
-      for (int k = 0; k < 3; ++k) L.at[k] = v[7 + k];
-      for (int k = 0; k < 6; ++k) L.d[k] = v[10 + k];
-      ++m.n;
-    }
-    if (m.n) t.models[t.n++] = m;
-  }
+  while (fgets(line, sizeof line, f)) { ++t.lines; liteParseLine(t, line); }
   fclose(f);
   return t;
-}
-inline const LiteModel* findLiteModel(uint64_t ibHash) {
-  LiteTable& t = liteTable();
-  for (uint32_t k = 0; k < t.n; ++k) if (t.models[k].ibHash == ibHash) return &t.models[k];
-  return nullptr;
 }
 // A model-space point through the World rows the object shaders carry (three rows of four:
 // row . (x, y, z, 1), the translation in .w).
@@ -1657,59 +1665,43 @@ inline bool worldDir(const float* rows, const float* v, float* out) {
 }
 
 // ---- lamps ---------------------------------------------------------------------------------
-// A lamp is one of the game's own lights. WHERE it is and WHAT it is come from the game's light
-// definitions (the table above): an object's index buffer names its model, the model's
-// definition names its lights and their shapes, the object's World rows carry them to the
-// world. WHETHER it is on, in which colour and at which level is the game's own word, handed
-// over by the lamp reporter (above). A lamp the reporter does not name gives no light.
+// A lamp is one of the game's own lights, and everything about it is the game's: WHAT it is
+// (its lights and their shapes) from the game's light definitions, looked up by the keys of
+// its object; WHERE it is from its object's transform; WHETHER it is on, in which colour and
+// at which level from its state. The lamp reporter hands over the keys, the transform and the
+// state (above); the table holds the definitions. Nothing is read from what is drawn, so a
+// lamp gives its light whether or not it is in view.
 //
-// A spot is a sphere light shaped to its cone; a lamp shade is two cones -- the definition's
-// angle around the way its light travels, its bottom angle the other way -- and an unshaped
-// light for what comes through the shade; a tube is a cylinder; a point a sphere.
+// A spot is a sphere light shaped to its cone; a lamp shade (and a world light with a
+// direction) is two cones -- the definition's angle around the way its light travels, its
+// bottom angle the other way -- and an unshaped light for what comes through the shade; a
+// tube is a cylinder; a point a sphere.
 //
-// (Milestones 21 to 35 inferred the state: from the light rigs' rays, then from the lot's light
-// maps. By night the maps read true; by day they hold the daylight through the windows and the
-// inference stayed fragile. It was removed with milestone 37; the run journal holds what was
-// learnt about the maps.)
+// The book below holds the lights that are lit, one entry per light of a lit lamp, by the
+// object's id and the light's index. Each frame the device names the lit ones again; an entry
+// not named is put out.
+//
+// (Milestones 21 to 35 inferred the state -- from the light rigs' rays, then from the lot's
+// light maps -- and milestones 22 to 38 named a lamp by the mesh it was drawn with. Both were
+// removed, with milestones 37 and 39; the run journal holds what was learnt.)
 struct Lamp {
-  float pos[3];        // the light, in the world (from the game's definition through the object's World rows)
-  float col[3];        // colour x brightness as forwarded
-  float anchor[3];     // the object's origin
-  uint32_t id;         // the object's origin quantised, with the light's index: the API light's hash
-  uint8_t kind;        // the light type (3 point, 4 spot, 5 lamp shade, 6 tube)
+  uint64_t object;     // the object's id
   uint8_t light;       // which of the model's lights
-  float def[3];        // the definition's colour and intensity: what the reporter's word scales
-  float defIntensity;
-  bool drawn;          // its object was drawn this frame
-  uint32_t unseen;     // consecutive frames its object was not drawn
-  bool named;          // the reporter names it
-  bool on;             // the game's word: lit
-  bool strangerLogged; // the log has said once that the reporter does not name it
-  // the shape, from the game's definition through the object's World rows
-  float dir[3];        // the way the main cone's light travels (unit; zeros = no direction, a point light)
+  uint8_t kind;        // how it is sent: 3 a sphere, 4 a cone, 5 two cones and the shade's light, 6 a cylinder
+  uint32_t id;         // the API light's hash, from the object's id and the light's index
+  float pos[3];        // the light, in the world
+  float col[3];        // colour x brightness as forwarded
+  float dir[3];        // the way the main cone's light travels (unit; zeros = no direction)
   float angle;         // the main cone's angle from its axis in degrees (0 = none)
   float bottom;        // the opposite cone's angle (a lamp shade's bottom opening; 0 = none)
   float shade[3];      // the light through a lamp shade, as a factor of the lamp's colour (zeros = none)
   float tube;          // a tube light's length along dir (0 = none)
+  bool seen;           // named this frame
   void* api;           // the Remix API lights: the main one, the opposite cone's, the shade's
   void* api2;
   void* api3;
   float sentPos[3], sentCol[3], sentDir[3]; bool sent;   // what the runtime holds
 };
-
-// World register of the object vertex shaders (the object's position and rotation come from it).
-struct WorldReg { uint64_t hash; int reg; };
-inline const WorldReg kWorldRegs[] = {
-  { 0x0ba6ddb9aa01913cull, 12 },   // objects 0x12d25080
-  { 0xc3af2a4a82d84e6eull, 12 },   // objects 0x12d213c0
-  { 0x7d1bc3ce6acbd715ull, 16 },   // objects 0x12d17440 (its fused matrix sits at c12..c15)
-  { 0x1bd4405f8346ded4ull, 192 },  // objects, skinned (fused matrix at c188..c191)
-  { 0x4c1d851f37e3c3f2ull, 196 },  // objects, skinned, 0x10a68220 family (fused matrix at c192..c195)
-  { 0xc141e2d46a9df578ull, 16 },   // normal-mapped, alpha-cut object shader with the lot shadow fade (close-zoom sighting)
-  { 0x64154031c30a8800ull, 16 },   // 0xd9c0fe0 family (same layout, scrolling UVs)
-  { 0x4be4f1463f801b19ull, 16 },   // 0xd9c0fe0 family sibling
-};
-inline int findWorldReg(uint64_t hash) { const WorldReg* w = findByHash(kWorldRegs, hash); return w ? w->reg : -1; }
 
 inline float lampDist(const float* a, const float* b) {
   const float d[3] = { a[0]-b[0], a[1]-b[1], a[2]-b[2] };
@@ -1717,39 +1709,35 @@ inline float lampDist(const float* a, const float* b) {
 }
 
 struct Lamps {
-  static const int kMax = 64;
-  static const uint32_t kUnseenLimit = 600;    // released after ten seconds undrawn, unless it is lit
+  static const int kMax = 256;                 // lights (a lamp has up to four)
   Lamp lamps[kMax]; uint32_t n = 0;
-  uint32_t registered = 0, released = 0, lit = 0, out = 0;   // statistics
-  void* gone[3 * kMax]; uint32_t nGone = 0;    // the API lights of the lamps put out or released this frame, for the device to destroy
+  uint32_t lit = 0, out = 0;                   // statistics: lights lit and put out
+  void* gone[3 * kMax]; uint32_t nGone = 0;    // the API lights of the entries put out this frame, for the device to destroy
 
-  // An origin quantised to a quarter unit, hashed: the same object gives the same id.
-  static uint32_t originId(const float* p) {
-    const int32_t q[3] = { (int32_t) std::floor(p[0] * 4.f + 0.5f), (int32_t) std::floor(p[1] * 4.f + 0.5f), (int32_t) std::floor(p[2] * 4.f + 0.5f) };
+  static uint32_t lightId(uint64_t object, uint8_t light) {
     uint32_t h = 2166136261u;
-    for (int i = 0; i < 3; ++i) for (int b = 0; b < 4; ++b) { h ^= (uint32_t) ((q[i] >> (8 * b)) & 0xFF); h *= 16777619u; }
+    for (int b = 0; b < 8; ++b) { h ^= (uint32_t) ((object >> (8 * b)) & 0xFF); h *= 16777619u; }
+    h ^= (uint32_t) light + 1u; h *= 16777619u;
     return h ? h : 1u;
   }
-  Lamp* find(uint8_t light, const float* anchor) {
-    for (uint32_t k = 0; k < n; ++k) if (lamps[k].light == light && lampDist(lamps[k].anchor, anchor) <= 0.5f) return &lamps[k];
+  Lamp* find(uint64_t object, uint8_t light) {
+    for (uint32_t k = 0; k < n; ++k) if (lamps[k].object == object && lamps[k].light == light) return &lamps[k];
     return nullptr;
   }
-  // A lamp from the game's definitions, at each draw of its object: registered, or found again
-  // by its object's position and the light's index. Null when the book is full.
-  Lamp* add(uint32_t id, uint8_t light, const float* anchor, const float* pos, const float* col, float intensity, uint8_t kind) {
-    Lamp* L = find(light, anchor);
-    if (L) {
-      for (int q = 0; q < 3; ++q) { L->anchor[q] = anchor[q]; L->pos[q] = pos[q]; }
-      L->drawn = true;
-      return L;
+  // Frame start: nothing named yet, nothing handed over.
+  void begin() { nGone = 0; for (uint32_t k = 0; k < n; ++k) lamps[k].seen = false; }
+  // A light of a lit lamp, named this frame: its entry, found or made (fresh). Null when the book is full.
+  Lamp* name(uint64_t object, uint8_t light, bool& fresh) {
+    Lamp* L = find(object, light);
+    fresh = L == nullptr;
+    if (!L) {
+      if (n >= (uint32_t) kMax) return nullptr;
+      L = &lamps[n++];
+      std::memset(L, 0, sizeof *L);
+      L->object = object; L->light = light; L->id = lightId(object, light);
+      ++lit;
     }
-    if (n >= (uint32_t) kMax) return nullptr;
-    L = &lamps[n++];
-    std::memset(L, 0, sizeof *L);
-    for (int q = 0; q < 3; ++q) { L->anchor[q] = anchor[q]; L->pos[q] = pos[q]; L->def[q] = col[q]; L->col[q] = col[q] * intensity / 100.f; }
-    L->defIntensity = intensity;
-    L->id = id; L->light = light; L->kind = kind; L->drawn = true;
-    ++registered;
+    L->seen = true;
     return L;
   }
   // Its API lights to the device, to destroy.
@@ -1758,27 +1746,11 @@ struct Lamps {
     for (int q = 0; q < 3; ++q) if (*hs[q]) { if (nGone < (uint32_t) (3 * kMax)) gone[nGone++] = *hs[q]; *hs[q] = nullptr; }
     L.sent = false;
   }
-  // Frame start: nothing handed over yet.
-  void begin() { nGone = 0; }
-  // The game's word for a lamp this frame: named = the reporter has a record of it; on and col = the
-  // record's. True when the lamp was switched by it.
-  bool word(Lamp& L, bool named, bool on, const float* col) {
-    const bool now = named && on;
-    const bool switched = now != L.on;
-    L.named = named;
-    if (named && col) for (int q = 0; q < 3; ++q) L.col[q] = col[q];
-    if (now && !L.on) ++lit;
-    if (!now && L.on) { ++out; handOver(L); }
-    L.on = now;
-    return switched;
-  }
-  // Frame end: a lamp whose object was not drawn for ten seconds is released, unless it is lit (a
-  // lit lamp off screen still lights what is in view).
-  uint32_t frame() {
-    for (uint32_t k = 0; k < n; ++k) { Lamp& L = lamps[k]; L.unseen = L.drawn ? 0 : L.unseen + 1; L.drawn = false; }
+  // Frame end: the entries not named are put out. Returns how many are left, all lit.
+  uint32_t end() {
     for (uint32_t k = 0; k < n; ) {
       Lamp& L = lamps[k];
-      if (L.unseen > kUnseenLimit && !L.on) { handOver(L); L = lamps[n - 1]; --n; ++released; }
+      if (!L.seen) { handOver(L); L = lamps[n - 1]; --n; ++out; }
       else ++k;
     }
     return n;

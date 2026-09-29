@@ -397,7 +397,7 @@ int main() {
     }
     CHECK(findAlbedoStage(0x3ebb622c4fe0be4full) && findAlbedoStage(0x3ebb622c4fe0be4full)->stage == 2 && findAlbedoStage(0xda37b5ef6f7a09a6ull) && findAlbedoStage(0xda37b5ef6f7a09a6ull)->stage == 1 && findAlbedoStage(0xf0d7af09599ed1bcull) == nullptr, "albedo stage: floors -> s2, floor tiles -> s1 (their small shared textures are lightmaps); the wall variant is stripped");
     CHECK(findTexcoordPromote(0x0fcdd50823cd0504ull) == nullptr && findTexcoordPromote(0x22e0b0fb83e51c5cull) == nullptr && findTexcoordPromote(0x1bd4405f8346ded4ull) && findTexcoordPromote(0x1bd4405f8346ded4ull)->texcoordIndex == 2, "promotions: floors no longer promote; the skinned object variant promotes 2");
-    CHECK(findWorldReg(0x1bd4405f8346ded4ull) == 192 && findWorldReg(0x4c1d851f37e3c3f2ull) == 196 && findLightRig(0x1458c67a2c009563ull) != nullptr, "lamps: skinned object variants contribute rays (World at c192 / c196) and the object PS variants carry rigs");
+    CHECK(findLightRig(0x1458c67a2c009563ull) != nullptr, "sun: the object PS variants carry rigs");
     CHECK(useCapturedUv(0x0ba6ddb9aa01913cull) && !useCapturedUv(0x976b73dbd59842cdull) && !useCapturedUv(0xf64835ccff6bffd7ull) && !useCapturedUv(0x1234ull), "captured UVs: promoted families sample with the shader's output; terrain (no input set), walls (stripped) and unknown shaders keep the runtime's default");
     {
       // milestone 7: the pixel shader's samplers read from its bytecode, checked against the hand tables on the real dumps
@@ -426,66 +426,78 @@ int main() {
       } else SKIP("auto: ps_0c19795eb80e2e96 not found");
     }
     {
-      // lamps: one of the game's lights -- at (10, 47.5, 20) on the object at (10, 45.9, 20) -- placed by its
-      // object's draws, switched by the game's own word
-      const float lampPos[3] = { 10.f, 47.5f, 20.f }, base[3] = { 10.f, 45.9f, 20.f }, liteCol[3] = { 1.f, 0.9f, 0.8f };
-      const float warm[3] = { 0.6f, 0.54f, 0.48f }, blue[3] = { 0.f, 0.f, 0.3f };
+      // the light table (format 3): the lights per model, and the objects naming the models
+      LiteTable table;
+      CHECK(!liteParseLine(table, "model 0000000000f29289 1 5 0 1.51 0 1 0.975 0.85 60 0 1 0 30 3 50 0.2327 0.2327 0.2327\n") && table.models.empty(), "light table: nothing is taken before the format line (an older table names no lamp)");
+      liteParseLine(table, "# a comment\n");
+      liteParseLine(table, "format 3\n");
+      const bool m1 = liteParseLine(table, "model 0000000000f29289 1 5 0.0000 1.5100 0.0000 1.0000 0.9750 0.8500 60.0000 0.0000 1.0000 0.0000 30.0000 3.0000 50.0000 0.2327 0.2327 0.2327\n");
+      const bool m2 = liteParseLine(table, "model 000000000005a335 2 11 0 1.69 0.33 1 1 1 97 0 0 0 0 0 0 0 0 0 11 0 3.69 0.0111 0.8 0.8 0.76 40 0 1 0 35 2.2 20 0.2327 0.2327 0.2327\n");
+      const bool m3 = liteParseLine(table, "model 0000000000000777 1 7 0 0 0 1 1 1 1 0 0 1 1 0 0 0 0 0\n");   // a window: no lamp
+      const bool o1 = liteParseLine(table, "object 0000000000000604 0000000000f29289\n");
+      CHECK(m1 && m2 && !m3 && o1 && table.models.size() == 2 && table.objects.size() == 1, "light table: two models with lamp lights and one object read; a model of windows alone is left out");
+      const LiteModel* stand = table.model(0xf29289ull);
+      CHECK(stand && stand->n == 1 && stand->lights[0].type == 5 && nearf(stand->lights[0].pos[1], 1.51f) && nearf(stand->lights[0].intensity, 60.f) && nearf(stand->lights[0].at[1], 1.f) && nearf(stand->lights[0].d[0], 30.f) && nearf(stand->lights[0].d[2], 50.f) && nearf(stand->lights[0].d[3], 0.2327f),
+            "light table: the standing lamp's lamp shade with its direction, cone, bottom cone and shade");
+      const LiteModel* street = table.model(0x5a335ull);
+      CHECK(street && street->n == 2 && street->lights[0].type == 11 && street->lights[1].type == 11 && nearf(street->lights[1].pos[1], 3.69f) && nearf(street->lights[1].d[0], 35.f), "light table: a street lamp's two world lights");
+      int how = -1;
+      CHECK(table.find(0xf29289ull, 0x604ull, &how) == stand && how == 1 && table.find(0x123ull, 0x604ull, &how) == stand && how == 2 && table.find(0x604ull, 0x999ull, &how) == stand && how == 3 && table.find(0x123ull, 0x999ull, &how) == nullptr && how == 0,
+            "light table: a lamp's definition by its model's key, by its object's key, by either in the other's place; none for a stranger");
+      // the book of lit lights
       int h1 = 1, h2 = 2, h3 = 3;
-      Lamps ls;
+      Lamps ls; bool fresh = false;
       ls.begin();
-      Lamp* L = ls.add(Lamps::originId(base) ^ 0x9E3779B9u, 0, base, lampPos, liteCol, 60.f, 5);
-      CHECK(L && ls.n == 1 && ls.registered == 1 && lampDist(L->pos, lampPos) < 1e-3f && nearf(L->col[0], 0.6f) && !L->on, "lamps: a lamp is registered where the game's definition puts its light, dark until the game says on");
-      const float moved[3] = { 10.1f, 45.9f, 20.05f };
-      CHECK(ls.add(1u, 0, moved, lampPos, liteCol, 60.f, 5) == L && ls.n == 1 && ls.add(1u, 1, base, lampPos, liteCol, 60.f, 5) != L && ls.n == 2, "lamps: found again by its object's position and the light's index; a second light of the model is a lamp of its own");
-      L = ls.find(0, base);
-      CHECK(ls.word(*L, true, true, warm) && L->on && L->named && ls.lit == 1 && nearf(L->col[2], 0.48f), "lamps: the game's word switches it on, in the colour it gives");
+      Lamp* L = ls.name(0x1122334455667788ull, 0, fresh);
+      CHECK(L && fresh && ls.n == 1 && ls.lit == 1 && L->seen && L->id == Lamps::lightId(0x1122334455667788ull, 0) && L->id != Lamps::lightId(0x1122334455667788ull, 1) && L->id != Lamps::lightId(0x1122334455667789ull, 0),
+            "lamps: a lit light is entered by its object's id and its index; the id of its API light is its own");
+      Lamp* second = ls.name(0x1122334455667788ull, 1, fresh);
+      CHECK(second && second != L && fresh && ls.n == 2, "lamps: a second light of the same lamp is an entry of its own");
       L->api = &h1; L->api2 = &h2; L->api3 = &h3; L->sent = true;
-      CHECK(!ls.word(*L, true, true, blue) && L->on && nearf(L->col[2], 0.3f) && L->col[0] == 0.f && ls.nGone == 0, "lamps: a colour change while on changes the colour and nothing else");
-      for (uint32_t f = 0; f <= Lamps::kUnseenLimit + 5; ++f) { ls.begin(); ls.word(*ls.find(0, base), true, true, blue); ls.frame(); }
-      CHECK(ls.find(0, base) != nullptr && ls.find(0, base)->on && ls.find(1, base) == nullptr && ls.released == 1, "lamps: undrawn for ten seconds, a lit lamp stays (it still lights what is in view); a dark one is released");
-      L = ls.find(0, base);
+      CHECK(ls.end() == 2 && ls.nGone == 0 && ls.out == 0, "lamps: named this frame, both stay");
       ls.begin();
-      CHECK(ls.word(*L, true, false, blue) && !L->on && ls.out == 1 && ls.nGone == 3 && ls.gone[0] == &h1 && ls.gone[1] == &h2 && ls.gone[2] == &h3 && !L->api && !L->api2 && !L->api3 && !L->sent,
-            "lamps: the game's word puts it out at once, and all three of its lights go to the device (%u handed over)", ls.nGone);
+      CHECK(ls.name(0x1122334455667788ull, 0, fresh) == ls.find(0x1122334455667788ull, 0) && !fresh && ls.lit == 2, "lamps: named again the next frame, it is the same entry");
+      CHECK(ls.end() == 1 && ls.out == 1 && ls.nGone == 0 && ls.find(0x1122334455667788ull, 1) == nullptr, "lamps: the light not named any more is put out (it held no API light)");
       ls.begin();
-      CHECK(ls.word(*L, true, true, warm) && L->on && ls.lit == 2, "lamps: and on again");
-      ls.begin();
-      CHECK(ls.word(*L, false, false, nullptr) && !L->on && !L->named && ls.out == 2, "lamps: a lamp the reporter no longer names goes dark");
-      for (uint32_t f = 0; f <= Lamps::kUnseenLimit; ++f) { ls.begin(); ls.frame(); }
-      CHECK(ls.n == 0 && ls.released == 2, "lamps: dark and undrawn for ten seconds, it is released");
+      CHECK(ls.end() == 0 && ls.out == 2 && ls.nGone == 3 && ls.gone[0] == &h1 && ls.gone[1] == &h2 && ls.gone[2] == &h3, "lamps: put out, all three of its API lights go to the device (%u handed over)", ls.nGone);
       Lamps full; uint32_t made = 0;
-      for (int k = 0; k < Lamps::kMax + 5; ++k) { const float at[3] = { 100.f + 2.f * (float) k, 0.f, 0.f }; if (full.add((uint32_t) k + 1u, 0, at, at, liteCol, 100.f, 3)) ++made; }
-      CHECK(made == (uint32_t) Lamps::kMax && full.n == (uint32_t) Lamps::kMax, "lamps: the book holds %d lamps and refuses the next", Lamps::kMax);
+      full.begin();
+      for (int k = 0; k < Lamps::kMax + 5; ++k) if (full.name(1000ull + (uint64_t) k, 0, fresh)) ++made;
+      CHECK(made == (uint32_t) Lamps::kMax && full.n == (uint32_t) Lamps::kMax, "lamps: the book holds %d lights and refuses the next", Lamps::kMax);
       {
-        // the lamp reporter's block
-        uint32_t head[16] = { kLampMagic0, kLampMagic1, kLampMagic2, 0x12345678u, 1u, 40u, 2u, kLampFloats, kLampCapacity, 7u, 1u, 0u, 0u, 0u, 0u, 0u };
-        uint32_t lamps = 0, seq = 0; bool world = false;
-        CHECK(lampReportHead((const uint8_t*) head, 0x12345678u, lamps, seq, world) && lamps == 2 && seq == 40 && world, "reporter: a whole head is taken: 2 lamps, sequence 40, a world loaded");
-        CHECK(!lampReportHead((const uint8_t*) head, 0x12345679u, lamps, seq, world), "reporter: a head that does not carry its own address is not the block (a copy of the signature elsewhere)");
-        head[6] = kLampCapacity + 1u;
-        CHECK(!lampReportHead((const uint8_t*) head, 0x12345678u, lamps, seq, world), "reporter: more lamps than the capacity is not a head to trust");
+        // the lamp reporter's block, version 2
+        uint32_t head[16] = { kLampMagic0, kLampMagic1, kLampMagic2, 0x12345678u, 2u, 40u, 2u, kLampFloats, kLampCapacity, 7u, 1u, kLampInts, kLampHead, kLampHead + (kLampCapacity + 1u) * kLampFloats * 4u, 0u, 0u };
+        LampHead lh = {};
+        CHECK(lampReportHead((const uint8_t*) head, 0x12345678u, lh) && lh.lamps == 2 && lh.sequence == 40 && lh.world && lh.floatsAt == 64 && lh.intsAt == 64 + 513 * 24 * 4, "reporter: a whole head is taken: 2 lamps, sequence 40, a world loaded, the floats at 64, the ints after them");
+        CHECK(!lampReportHead((const uint8_t*) head, 0x12345679u, lh), "reporter: a head that does not carry its own address is not the block (a copy of the signature elsewhere)");
+        head[4] = 1u;
+        CHECK(!lampReportHead((const uint8_t*) head, 0x12345678u, lh), "reporter: the first version's block is not read");
+        head[4] = 2u; head[6] = kLampCapacity + 1u;
+        CHECK(!lampReportHead((const uint8_t*) head, 0x12345678u, lh), "reporter: more lamps than the capacity is not a head to trust");
+        head[6] = 2u; head[13] = kLampHead + 100u;
+        CHECK(!lampReportHead((const uint8_t*) head, 0x12345678u, lh), "reporter: ints that would lie within the floats are not a head to trust");
+        const int32_t ids[2] = { (int32_t) 0x55667788u, (int32_t) 0x11223344u };
+        CHECK(lampId64(ids) == 0x1122334455667788ull, "reporter: an id from its low and high halves");
         //                      x      y      z     r    g    b   intens dimmer on  preset emits level
-        const float recs[24] = { 10.f, 45.9f, 20.f, 0.f, 0.f, 1.f, 0.5f, 0.5f, 1.f, 3.f,  1.f, 0.f,
-                                 14.f, 46.7f, 22.f, 1.f, 1.f, 1.f, 1.f,  0.f,  0.f, 13.f, 1.f, 0.f };
-        const float here[3] = { 10.2f, 45.9f, 20.1f }, table[3] = { 14.f, 45.9f, 22.f }, away[3] = { 12.f, 45.9f, 21.f }, above[3] = { 10.f, 49.f, 20.f };
-        CHECK(lampReportFind(recs, 2, here) == recs && lampReportFind(recs, 2, table) == recs + 12 && lampReportFind(recs, 2, away) == nullptr && lampReportFind(recs, 2, above) == nullptr,
-              "reporter: a lamp's record is the one at its object: within half a unit on the ground, a floor apart is another lamp");
-        float far_ = 0.f;
-        CHECK(lampReportNearest(recs, 2, away, far_) == recs && far_ > 2.f && far_ < 2.5f && lampReportNearest(recs, 0, away, far_) == nullptr, "reporter: the nearest record whatever the distance, for the log (%.2f away)", far_);
+        const float dimBlueRec[12] = { 10.f, 45.9f, 20.f, 0.f, 0.f, 1.f, 0.6f, 0.6f, 1.f, 3.f,  1.f, 0.f };
+        const float offRec[12]     = { 14.f, 46.7f, 22.f, 1.f, 1.f, 1.f, 1.f,  0.f,  0.f, 13.f, 0.f, 0.f };
+        const float brightRec[12]  = { 14.f, 46.7f, 22.f, 1.f, 1.f, 1.f, 1.f,  1.7f, 1.f, 13.f, 1.f, 0.f };
         const float defCol[3] = { 1.f, 0.9f, 0.8f };
-        const LampWord dimBlue = lampWordFromRecord(recs, defCol, 60.f, 1.f), off = lampWordFromRecord(recs + 12, defCol, 60.f, 1.f);
-        CHECK(dimBlue.on && nearf(dimBlue.level, 0.5f) && dimBlue.col[0] == 0.f && nearf(dimBlue.col[2], 0.3f), "reporter: a blue lamp at the dim level: on, blue, the definition's 60 at half (%.2f %.2f %.2f)", dimBlue.col[0], dimBlue.col[1], dimBlue.col[2]);
+        const LampWord dimBlue = lampWordFromRecord(dimBlueRec, defCol, 60.f, 1.f), off = lampWordFromRecord(offRec, defCol, 60.f, 1.f), bright = lampWordFromRecord(brightRec, defCol, 60.f, 1.f);
+        CHECK(dimBlue.on && nearf(dimBlue.level, 0.6f) && dimBlue.col[0] == 0.f && nearf(dimBlue.col[2], 0.36f), "reporter: a blue lamp at the dim level: on, blue, the definition's 60 at six tenths (%.2f %.2f %.2f)", dimBlue.col[0], dimBlue.col[1], dimBlue.col[2]);
         CHECK(!off.on && nearf(off.col[0], 0.6f) && nearf(off.col[2], 0.48f), "reporter: a lamp left at its default colour takes the definition's; switched off, it is off");
+        CHECK(bright.on && nearf(bright.level, 1.7f) && nearf(bright.col[0], 1.02f), "reporter: the level is the engine's dimmer, whatever the lamp's intensity field says (bright: x%.2f)", bright.level);
         const float custom[12] = { 0.f, 0.f, 0.f, 255.f, 128.f, 0.f, 1.f, 1.f, 1.f, 9.f, 1.f, 0.f };
         const LampWord c = lampWordFromRecord(custom, defCol, 100.f, 1.f);
         CHECK(c.on && nearf(c.col[0], 1.f) && nearf(c.col[1], 128.f / 255.f), "reporter: a custom colour given in 0..255 is scaled to 0..1");
-        // a direction through the World rows
+        // a point and a direction through an object's transform
         const float rowsY90[12] = { 0.f, 0.f, 2.f, 10.f,  0.f, 2.f, 0.f, 20.f,  -2.f, 0.f, 0.f, 30.f };   // a quarter turn about y, scaled by two, translated
-        const float front[3] = { 0.f, 0.f, -1.f }, zero[3] = {}; float wd[3];
-        CHECK(worldDir(rowsY90, front, wd) && nearf(wd[0], -1.f) && nearf(wd[1], 0.f) && nearf(wd[2], 0.f), "lamps: a direction through the World rows is rotated, not translated, and of unit length (%.2f %.2f %.2f)", wd[0], wd[1], wd[2]);
+        const float front[3] = { 0.f, 0.f, -1.f }, zero[3] = {}, up1[3] = { 0.f, 1.f, 0.f }; float wd[3], wp[3];
+        worldPoint(rowsY90, up1, wp);
+        CHECK(nearf(wp[0], 10.f) && nearf(wp[1], 22.f) && nearf(wp[2], 30.f), "lamps: a point of the model through the object's transform (%.1f %.1f %.1f)", wp[0], wp[1], wp[2]);
+        CHECK(worldDir(rowsY90, front, wd) && nearf(wd[0], -1.f) && nearf(wd[1], 0.f) && nearf(wd[2], 0.f), "lamps: a direction through it is rotated, not translated, and of unit length (%.2f %.2f %.2f)", wd[0], wd[1], wd[2]);
         CHECK(!worldDir(rowsY90, zero, wd) && wd[0] == 0.f, "lamps: a point light's zero vector gives no direction");
       }
-            CHECK(findWorldReg(0x0ba6ddb9aa01913cull) == 12 && findWorldReg(0x7d1bc3ce6acbd715ull) == 16 && findWorldReg(0x1234ull) == -1, "lamps: World rows per object shader (c12 / c16); unknown -> none");
     }
     const AlbedoStage* tc = findTintConst(0x0c19795eb80e2e96ull);
     const float purple[3] = { 0.5f, 0.25f, 1.0f }, hot[3] = { 2.f, -1.f, 0.5f };
