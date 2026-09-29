@@ -26,6 +26,11 @@ using System.Runtime.InteropServices;
 using Sims3.SimIFace;
 using Sims3.Gameplay;
 using Sims3.Gameplay.Abstracts;
+using Sims3.UI;
+
+// Without this the game does not read the assembly's tuning, never touches the class below, and
+// the mod is loaded but never started (run 149: every working script mod carries it).
+[assembly: Tunable]
 
 namespace Sims3RtxHook
 {
@@ -46,6 +51,7 @@ namespace Sims3RtxHook
         static int sSequence = 0;
         static int sUpdates = 0;
         static float sDim = 0f, sNormal = 0f, sBright = 0f;
+        static bool sSaid = false;
 
         static LampReporter()
         {
@@ -145,6 +151,13 @@ namespace Sims3RtxHook
             Marshal.WriteInt32(sBlock, 24, n);
             Marshal.WriteInt32(sBlock, 36, ++sUpdates);
             Marshal.WriteInt32(sBlock, 20, ++sSequence);                 // even: whole
+            if (!sSaid && sUpdates >= 20)
+            {
+                // once per game session, a sign of life: the mod runs, and how many lamps it sees
+                sSaid = true;
+                try { StyledNotification.Show(new StyledNotification.Format("RTX lamp reporter: running, " + n + " lamps near the camera.", StyledNotification.NotificationStyle.kSystemMessage)); }
+                catch (Exception) { }
+            }
         }
 
         [Persistable(false)]

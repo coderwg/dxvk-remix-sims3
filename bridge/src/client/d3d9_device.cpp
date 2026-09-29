@@ -293,6 +293,7 @@ namespace {
   std::atomic<const uint8_t*> g_sims3LampBlock { nullptr };
   std::atomic<bool> g_sims3LampScanBusy { false };
   std::atomic<uint32_t> g_sims3LampScans { 0 };
+  std::atomic<uint32_t> g_sims3LampScanRegions { 0 }, g_sims3LampScanMegabytes { 0 };   // what the last search read through
 
   template<typename Dev> void sims3TerrainBlockEnd(Sims3Hook& h, Dev* dev);   // defined with the terrain path (milestone 18g)
 
@@ -1846,9 +1847,9 @@ static void sims3LogStats(bool withTable) {
   uint32_t lampHandles = 0;
   uint32_t lampsOn = 0, lampsNamed = 0;
   for (uint32_t k = 0; k < h.lamps.n; ++k) { const sims3cam::Lamp& Lh = h.lamps.lamps[k]; lampHandles += (Lh.api ? 1u : 0u) + (Lh.api2 ? 1u : 0u) + (Lh.api3 ? 1u : 0u); lampsOn += Lh.on ? 1u : 0u; lampsNamed += Lh.named ? 1u : 0u; }
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   lamp reporter: %s; %u lamps reported; of the hook's %u lamps %u are named by it and %u are on; %u readings (%u while it was writing), %u searches",
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   lamp reporter: %s; %u lamps reported; of the hook's %u lamps %u are named by it and %u are on; %u readings (%u while it was writing), %u searches (the last through %u regions, %u MB)",
            h.lampReportLive ? "live" : (g_sims3LampBlock.load() ? "found, no world loaded" : "NOT FOUND: no lamp gives light (the script mod Sims3RtxLamps.package is not in Mods\\Packages, or no world has loaded yet)"),
-           h.lampReported, h.lamps.n, lampsNamed, lampsOn, h.lampReportReads, h.lampReportStale, g_sims3LampScans.load());
+           h.lampReported, h.lamps.n, lampsNamed, lampsOn, h.lampReportReads, h.lampReportStale, g_sims3LampScans.load(), g_sims3LampScanRegions.load(), g_sims3LampScanMegabytes.load());
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   api lights: %s; %u calls, sun %s, %u lamp handles; the game's light table: %s",
            GlobalOptions::getExposeRemixApi() ? "on" : "off (no lights: exposeRemixApi is not set)", h.apiLightCalls, h.sunApi ? "live" : "none", lampHandles,
@@ -2267,15 +2268,23 @@ static const uint8_t* sims3LampScanRegion(const uint8_t* base, size_t size) {
   return nullptr;
 }
 static void sims3LampScan() {
+  // every committed region that can be written, whatever its kind or size (milestone 38: the game's
+  // own allocator need not hand out plain private read-write pages)
   const uint8_t* a = (const uint8_t*) 0x10000; const uint8_t* found = nullptr;
   MEMORY_BASIC_INFORMATION mbi;
+  uint32_t regions = 0; uint64_t bytes = 0;
   while (!found && VirtualQuery(a, &mbi, sizeof mbi) == sizeof mbi) {
-    if (mbi.State == MEM_COMMIT && mbi.Type == MEM_PRIVATE && mbi.Protect == PAGE_READWRITE && mbi.RegionSize <= ((size_t) 256 << 20))
+    const DWORD prot = mbi.Protect & 0xFF;
+    const bool writable = prot == PAGE_READWRITE || prot == PAGE_EXECUTE_READWRITE || prot == PAGE_WRITECOPY || prot == PAGE_EXECUTE_WRITECOPY;
+    if (mbi.State == MEM_COMMIT && writable && !(mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS))) {
+      ++regions; bytes += mbi.RegionSize;
       found = sims3LampScanRegion((const uint8_t*) mbi.BaseAddress, mbi.RegionSize);
+    }
     const uint8_t* next = (const uint8_t*) mbi.BaseAddress + mbi.RegionSize;
     if (next <= a) break;
     a = next;
   }
+  g_sims3LampScanRegions = regions; g_sims3LampScanMegabytes = (uint32_t) (bytes >> 20);
   if (found) g_sims3LampBlock = found;
   ++g_sims3LampScans;
   g_sims3LampScanBusy = false;
@@ -2285,7 +2294,7 @@ static void sims3LampScan() {
 static int sims3LampRead(const uint8_t* block, float* out, uint32_t& lamps, uint32_t& sequence, bool& world) {
   __try {
     MEMORY_BASIC_INFORMATION mbi;
-    if (VirtualQuery(block, &mbi, sizeof mbi) != sizeof mbi || mbi.State != MEM_COMMIT || (mbi.Protect & 0xFF) != PAGE_READWRITE) return 2;
+    if (VirtualQuery(block, &mbi, sizeof mbi) != sizeof mbi || mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS))) return 2;
     uint8_t head[64]; memcpy(head, block, sizeof head);
     if (!sims3cam::lampReportHead(head, (uint32_t) (uintptr_t) block, lamps, sequence, world)) return 2;
     if (sequence & 1u) return 1;
