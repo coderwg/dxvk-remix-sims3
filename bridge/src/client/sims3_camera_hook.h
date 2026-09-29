@@ -1613,6 +1613,10 @@ inline void worldPoint(const float* rows, const float* p, float* out) {
 // a mesh the light table knows (the bedside lamp's near mesh is not; the lamp was dropped 30
 // frames after every far-mesh sighting and did not exist when it was switched on). A lamp is
 // released only after ten seconds undrawn while off or unjudged.
+// Milestone 31 (run 144): the lot's maps SPLIT the lights between them -- the bedside lamp
+// switched on lit its base to 126 in the 128x128 map and to 2 in the 256x128 one its own
+// draw carries -- so a lamp is on when ANY live map lights its base and off when every map
+// covering it is dark; the map its draws carry is kept only as a diagnostic.
 struct LampRay { float pos[3]; float dir[3]; float col[3]; };
 
 struct Lamp {

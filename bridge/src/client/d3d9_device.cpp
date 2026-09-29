@@ -2011,16 +2011,22 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
       if (h.frames - e.lastFrame > 1u || !sims3LightMapDecode(h, e)) continue;
       changed[k] = e.judged != e.version; e.judged = e.version;
     }
+    bool anyChanged = false;
+    for (int k = 0; k < 4; ++k) anyChanged = anyChanged || changed[k];
     for (uint32_t k = 0; k < h.lamps.nLamps; ++k) {
       sims3cam::Lamp& L = h.lamps.lamps[k];
-      if (!L.map) continue;
-      int mi = -1;
-      for (int j = 0; j < 4; ++j) if ((void*) h.lightMaps[j].tex == L.map) mi = j;
-      if (mi < 0) { L.map = nullptr; L.state = -1; continue; }   // its map forgotten: back to its witnesses, released when undrawn
-      if (!h.lightMaps[mi].valid || (!changed[mi] && L.state >= 0)) continue;
-      const int8_t v = sims3LightMapVerdict(h.lightMaps[mi], L.anchor);
+      if (!anyChanged && L.state >= 0) continue;
+      // every live map's word (milestone 31): the lot's maps split the lights between them, so a
+      // lamp is on when any map lights its base and off when every map covering it is dark
+      int8_t v = -1;
+      for (int j = 0; j < 4; ++j) {
+        const Sims3Hook::LightMapEntry& e = h.lightMaps[j];
+        if (!e.tex || !e.valid) continue;
+        const int8_t w = sims3LightMapVerdict(e, L.anchor);
+        if (w == 1) v = 1; else if (w == 0 && v < 0) v = 0;
+      }
       if (v >= 0) { L.state = v; ++h.lightMapVerdicts; }
-      else if (L.state >= 0) { L.state = -1; ++h.lightMapOutside; }   // beyond its map now: back to its witnesses
+      else if (L.state >= 0) { L.state = -1; ++h.lightMapOutside; }   // beyond every map now: back to its witnesses
     }
     h.lamps.solve();
     for (uint32_t k = 0; k < h.lamps.nEvents && h.lampEventsLogged < 120; ++k) {   // every lamp's first light and its end, while the budget lasts
@@ -4339,7 +4345,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
             ++g_sims3.markDumpLogged;
             const sims3cam::Lamp* Lm_ = g_sims3.lamps.find(0, g_sims3.objWorld);
             char msg_[700];
-            size_t n_ = (size_t) snprintf(msg_, sizeof msg_, "Sims 3 camera hook: lamp object at the mark, frame %u, object at (%.1f, %.1f, %.1f) model %016llx: s2 %p%s; judged by map %p, standing word %d;",
+            size_t n_ = (size_t) snprintf(msg_, sizeof msg_, "Sims 3 camera hook: lamp object at the mark, frame %u, object at (%.1f, %.1f, %.1f) model %016llx: s2 %p%s; its draws' map %p, standing word %d;",
                                           g_sims3.frames + 1, g_sims3.objWorld[0], g_sims3.objWorld[1], g_sims3.objWorld[2], (unsigned long long) m_.inst, (void*) g_sims3.boundTex[2],
                                           e_ ? (e_->shared ? " (a shared map)" : " (seen on this object only)") : " (not a noted map)", Lm_ ? Lm_->map : nullptr, Lm_ ? (int) Lm_->state : -2);
             float wl_[3]; sims3cam::worldPoint(g_sims3.objWorldRows, m_.lights[0].pos, wl_);
@@ -4352,6 +4358,25 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
             }
             Logger::info(msg_);
           }
+        }
+      } else if (sims3cam::enabled() && g_sims3.markDump && g_sims3.markRigLogged < 80 && g_sims3.objWorldValid && *m_state.indices != nullptr) {
+        // At the mark key (milestone 31): a draw WITHOUT a rig shader at a known object position -- a lamp
+        // switched on may be drawn through another shader (run 144's pendant left the rig draws once on):
+        // its mesh, its shaders and its textures, once per mesh.
+        auto* ibn_ = bridge_cast<Direct3DIndexBuffer9_LSS*>(*m_state.indices);
+        const uint8_t* dn_ = ibn_->sims3Data(); const uint32_t szn_ = ibn_->sims3Size();
+        const uint64_t hn_ = dn_ ? sims3cam::fnv1a64(dn_, szn_) : 0;
+        bool named_ = false;
+        for (uint32_t k = 0; k < g_sims3.markMeshCount && !named_; ++k) named_ = g_sims3.markMeshes[k] == hn_;
+        if (!named_) {
+          if (g_sims3.markMeshCount < 80) g_sims3.markMeshes[g_sims3.markMeshCount++] = hn_;
+          ++g_sims3.markRigLogged;
+          char msg_[420];
+          snprintf(msg_, sizeof msg_, "Sims 3 camera hook: draw without a rig at the mark, frame %u, object at (%.1f, %.1f, %.1f), mesh [%u] %u bytes hash %016llx (%s), VS %016llx PS %016llx, textures s0 %ux%u s1 %ux%u s2 %ux%u s3 %ux%u",
+                   g_sims3.frames + 1, g_sims3.objWorld[0], g_sims3.objWorld[1], g_sims3.objWorld[2], (uint32_t) ibn_->getId(), szn_, (unsigned long long) hn_, sims3cam::findLiteModel(hn_) ? "in the light table" : "not in the light table",
+                   (unsigned long long) g_sims3.vsHash, (unsigned long long) g_sims3.psHash, (unsigned) g_sims3.boundW[0], (unsigned) g_sims3.boundH[0], (unsigned) g_sims3.boundW[1], (unsigned) g_sims3.boundH[1],
+                   (unsigned) g_sims3.boundW[2], (unsigned) g_sims3.boundH[2], (unsigned) g_sims3.boundW[3], (unsigned) g_sims3.boundH[3]);
+          Logger::info(msg_);
         }
       }
       // The Sims 3 camera hook: a captured wall draw gets its window and door openings cut into
