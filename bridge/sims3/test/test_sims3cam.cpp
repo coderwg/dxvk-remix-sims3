@@ -452,32 +452,34 @@ int main() {
       };
       uint32_t n = 0;
       for (int f = 0; f < 3; ++f) n = frame(1, true, true, true, true);
-      CHECK(n == 1 && ls.lamps[0].age >= LampSolver::kConfirmFrames && ls.lamps[0].support == 2 && ls.created == 1, "lamps: a lamp whose own draw says on is lit in three frames, the two objects beside it pointing at it (%u witness rays)", ls.lamps[0].support);
+      CHECK(n == 1 && ls.lamps[0].age >= LampSolver::kConfirmFrames && ls.lamps[0].support == 2 && ls.created == 1 && ls.lit == 1, "lamps: a lamp the map says is on is lit in three frames, the two objects beside it pointing at it (%u witness rays)", ls.lamps[0].support);
       CHECK(n == 1 && lampDist(ls.lamps[0].pos, lampPos) < 1e-3f, "lamps: its light where the game's definition puts it");
       CHECK(n == 1 && std::fabs(luminance(ls.lamps[0].col) - luminance(liteCol)) < 0.05f && ls.lamps[0].col[0] > ls.lamps[0].col[2], "lamps: the game's brightness with the witnesses' hue (%.2f,%.2f,%.2f)", ls.lamps[0].col[0], ls.lamps[0].col[1], ls.lamps[0].col[2]);
       uint32_t frames = 0;
-      while (ls.nLamps == 1 && frames < 400) { frame(0, true, true, true, true); ++frames; }   // the map says off, whatever the rays say
-      CHECK(ls.nLamps == 0 && ls.dropped == 1 && frames <= LampSolver::kMissingLimit / 6 + 2, "lamps: the map saying off puts it out within half a second, whatever the rays say (%u frames)", frames);
+      while (ls.lamps[0].age > 0 && frames < 400) { frame(0, true, true, true, true); ++frames; }   // the map says off, whatever the rays say
+      CHECK(ls.nLamps == 1 && ls.out == 1 && ls.dropped == 0 && ls.nDropped == 0 && frames <= LampSolver::kMissingLimit / 6 + 2, "lamps: the map saying off puts it out within half a second, whatever the rays say; the lamp stays registered (%u frames)", frames);
       for (int f = 0; f < 3; ++f) n = frame(1, false, false, false, false);   // on again, nothing else drawn: the definition's colour
-      CHECK(n == 1 && ls.created == 2 && ls.lamps[0].age >= LampSolver::kConfirmFrames && std::fabs(luminance(ls.lamps[0].col) - luminance(liteCol)) < 0.05f, "lamps: lit again by the map, the definition's colour without witnesses (%.2f,%.2f,%.2f)", ls.lamps[0].col[0], ls.lamps[0].col[1], ls.lamps[0].col[2]);
+      CHECK(n == 1 && ls.created == 1 && ls.lit == 2 && ls.lamps[0].age >= LampSolver::kConfirmFrames && std::fabs(luminance(ls.lamps[0].col) - luminance(liteCol)) < 0.05f, "lamps: lit again by the map without a new registration, the definition's colour without witnesses (%.2f,%.2f,%.2f)", ls.lamps[0].col[0], ls.lamps[0].col[1], ls.lamps[0].col[2]);
       for (int f = 0; f < 400; ++f) n = frame(-1, true, false, true, true);   // no new word from the map; the near objects drawn, looking away
-      CHECK(n == 1 && ls.lamps[0].missing == 0 && ls.dropped == 1, "lamps: the map's word stands -- near witnesses looking away cannot put a judged lamp out (milestone 28)");
+      CHECK(n == 1 && ls.lamps[0].missing == 0 && ls.out == 1, "lamps: the map's word stands -- near witnesses looking away cannot put a judged lamp out (milestone 28)");
       for (uint32_t f = 0; f <= LampSolver::kUnseenLimit; ++f) n = ls.solve();   // its object not drawn at all
-      CHECK(n == 1 && ls.dropped == 1, "lamps: a judged lamp undrawn for ten seconds keeps shining (off screen, the map's word stands)");
+      CHECK(n == 1 && ls.dropped == 0 && ls.lamps[0].age > 0, "lamps: a judged lamp undrawn for ten seconds keeps shining (off screen, the map's word stands)");
       frames = 0;
-      while (ls.nLamps == 1 && frames < 400) { frame(0, false, false, false, false); ++frames; }
-      CHECK(ls.nLamps == 0 && ls.dropped == 2 && frames <= LampSolver::kMissingLimit / 6 + 2, "lamps: ...until the map says off (%u frames)", frames);
+      while (ls.lamps[0].age > 0 && frames < 400) { frame(0, false, false, false, false); ++frames; }
+      CHECK(ls.nLamps == 1 && ls.out == 2 && frames <= LampSolver::kMissingLimit / 6 + 2, "lamps: ...until the map says off (%u frames)", frames);
+      for (uint32_t f = 0; f <= LampSolver::kUnseenLimit; ++f) n = ls.solve();   // off and undrawn
+      CHECK(n == 0 && ls.dropped == 1, "lamps: an off lamp undrawn for ten seconds is released");
       // a lamp the map has not judged (beyond it): its witnesses decide, as before
       for (int f = 0; f < 300; ++f) n = frame(-1, false, false, true, false);   // only the far object drawn: no witness, nothing said
-      CHECK(n == 1 && ls.created == 3 && ls.lamps[0].age == 0 && ls.lamps[0].held >= 300, "lamps: unjudged, with nothing near it drawn, it is not lit (%u frames held)", ls.lamps[0].held);
+      CHECK(n == 1 && ls.created == 2 && ls.lamps[0].age == 0 && ls.lamps[0].held >= 300, "lamps: unjudged, with nothing near it drawn, it is not lit (%u frames held)", ls.lamps[0].held);
       for (int f = 0; f < 3; ++f) n = frame(-1, true, true, false, false);   // lit by the near rays alone
-      CHECK(n == 1 && ls.created == 3 && ls.lamps[0].age >= LampSolver::kConfirmFrames, "lamps: unjudged, near rays pointing at it light it");
+      CHECK(n == 1 && ls.lit == 3 && ls.lamps[0].age >= LampSolver::kConfirmFrames, "lamps: unjudged, near rays pointing at it light it");
       frames = 0;
-      while (ls.nLamps == 1 && frames < 400) { frame(-1, true, false, true, true); ++frames; }   // the near objects drawn, looking away: off, whatever the far one says
-      CHECK(ls.nLamps == 0 && ls.dropped == 3 && frames <= LampSolver::kMissingLimit / 2 + 2, "lamps: unjudged, near witnesses looking away put it out within a second and a half (%u frames)", frames);
-      for (int f = 0; f < 3; ++f) n = frame(-1, true, true, false, false);
+      while (ls.lamps[0].age > 0 && frames < 400) { frame(-1, true, false, true, true); ++frames; }   // the near objects drawn, looking away: off, whatever the far one says
+      CHECK(ls.nLamps == 1 && ls.out == 3 && frames <= LampSolver::kMissingLimit / 2 + 2, "lamps: unjudged, near witnesses looking away put it out within a second and a half (%u frames)", frames);
+      for (int f = 0; f < 3; ++f) n = frame(-1, true, true, false, false);   // lit again by the rays
       for (uint32_t f = 0; f <= LampSolver::kUnseenLimit; ++f) n = ls.solve();   // its object not drawn at all
-      CHECK(n == 0 && ls.dropped == 4, "lamps: an unjudged lamp undrawn for ten seconds is released");
+      CHECK(n == 0 && ls.dropped == 2 && ls.out == 4, "lamps: an unjudged lamp undrawn for ten seconds is released, lit or not");
       {
         // milestone 29: a lamp's map is the texture its draws carry -- adopted at once, changed only after three consecutive draws with another
         LampSolver lm; int a = 1, b = 2; void* A = &a; void* B = &b;

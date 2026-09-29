@@ -1608,6 +1608,11 @@ inline void worldPoint(const float* rows, const float* p, float* out) {
 // adopted at once or after three consecutive draws with it), every carried map is decoded and
 // judges its lamps when its content changes. And the map is coloured: a lamp set to blue lit
 // its base in blue and its red plane read dark, so the brightest channel is read, not red.
+// Milestone 30 (run 143): an OFF lamp stays registered -- putting it out only destroys its
+// light -- so that its map's next word can relight it whether or not its object is drawn with
+// a mesh the light table knows (the bedside lamp's near mesh is not; the lamp was dropped 30
+// frames after every far-mesh sighting and did not exist when it was switched on). A lamp is
+// released only after ten seconds undrawn while off or unjudged.
 struct LampRay { float pos[3]; float dir[3]; float col[3]; };
 
 struct Lamp {
@@ -1628,7 +1633,7 @@ struct Lamp {
   void* map;           // the light map texture its draws carry (milestone 29); the device judges it through that map
   void* mapCand;       // another map its draws have carried lately, adopted after kMapConfirm consecutive draws
   uint8_t mapCandN;
-  bool confirmedOnce;  // forwarded at least once (the event log)
+  bool confirmedOnce;  // (unused since milestone 30: every lighting and putting out is an event)
   void* api;           // the Remix API light handle (the device destroys it on drop)
   float sentPos[3], sentCol[3]; bool sent;   // what the runtime holds
 };
@@ -1667,8 +1672,8 @@ struct LampSolver {
   LampRay rays[kMaxRays]; uint32_t nRays = 0;             // this frame's rig rays
   float origins[kMaxOrigins][3]; uint8_t originSlots[kMaxOrigins]; uint32_t nOrigins = 0;   // this frame's object origins (every object-shader draw) and how many of the rig's four slots their rig used
   Lamp lamps[kMaxLamps]; uint32_t nLamps = 0;
-  uint32_t created = 0, dropped = 0;                      // statistics
-  void* droppedApi[kMaxLamps]; uint32_t nDropped = 0;     // the API lights of the lamps dropped this frame, for the device to destroy
+  uint32_t created = 0, dropped = 0, lit = 0, out = 0;    // statistics: registrations, releases, lights lit and put out
+  void* droppedApi[kMaxLamps]; uint32_t nDropped = 0;     // the API lights of the lamps dropped or put out this frame, for the device to destroy
   struct Event { uint8_t kind; float anchor[3]; float y; float col[3]; uint32_t votes, age; };   // 1 lit (first forwarded), 2 dropped
   Event events[16]; uint32_t nEvents = 0;
 
@@ -1793,20 +1798,27 @@ struct LampSolver {
         if (L.age < 100000u) ++L.age;
         // the hue: the witnesses' rays (the player's colour choice); the brightness the game's
         if (luminance(sum) > 1e-6f) { const float hl = luminance(sum); const float sc = L.age <= 1 ? 1.f : 0.2f; for (int q = 0; q < 3; ++q) L.col[q] += sc * (sum[q] / hl * L.base - L.col[q]); }
-        if (L.age == kConfirmFrames && !L.confirmedOnce) { L.confirmedOnce = true; record(1, L, pointing); }
+        if (L.age == kConfirmFrames) { ++lit; record(1, L, pointing); }
       } else if (verdict == 0) {
-        L.missing += L.state == 0 ? 6u : 2u;   // the map's word: out within half a second; the witnesses': a second and a half
+        if (L.age > 0) {
+          L.missing += L.state == 0 ? 6u : 2u;   // the map's word: out within half a second; the witnesses': a second and a half
+          if (L.missing > kMissingLimit) {       // put out: the light goes, the lamp stays registered (milestone 30)
+            if (L.age >= kConfirmFrames) { ++out; record(2, L, 1u); }
+            if (L.api && nDropped < (uint32_t) kMaxLamps) droppedApi[nDropped++] = L.api;
+            L.api = nullptr; L.sent = false; L.age = 0; L.missing = 0;
+          }
+        }
       } else {
         ++L.held;         // nothing says either way: the last state holds
       }
       L.unseen = L.drawn ? 0 : L.unseen + 1;
       L.drawn = false;   // the map's word stands (milestone 28): undrawn, a judged lamp is not handed to the witnesses
     }
-    for (uint32_t k = 0; k < nLamps; ) {
+    for (uint32_t k = 0; k < nLamps; ) {   // released: ten seconds undrawn while off or unjudged (a judged lamp shining off screen stays)
       Lamp& L = lamps[k];
-      if (L.missing > kMissingLimit || (L.unseen > kUnseenLimit && L.state < 0)) {
-        if (L.confirmedOnce) record(2, L, L.missing > kMissingLimit ? 1u : 0u);
-        droppedApi[nDropped++] = L.api;
+      if (L.unseen > kUnseenLimit && (L.state < 0 || L.age == 0)) {
+        if (L.age >= kConfirmFrames) { ++out; record(2, L, 0u); }
+        if (L.api && nDropped < (uint32_t) kMaxLamps) droppedApi[nDropped++] = L.api;
         L = lamps[nLamps - 1]; --nLamps; ++dropped;
       }
       else ++k;

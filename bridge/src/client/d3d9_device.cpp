@@ -121,7 +121,8 @@ namespace {
     bool objWorldValid = false;          // ...and whether it has been uploaded since the shader was bound
     float rig[32] = {};                  // c0..c7 of the bound rig pixel shader (directions, colours)
     float psConst[64] = {}; uint16_t psConstMask = 0;   // c0..c15 of the bound rig pixel shader as uploaded, and which registers were (milestone 24 diagnostic)
-    uint32_t markDump = 0, markDumpLogged = 0, markRigLogged = 0;          // frames left to log the lamp objects' constants after the mark key
+    uint32_t markDump = 0, markDumpLogged = 0, markRigLogged = 0;
+    uint64_t markMeshes[80] = {}; uint32_t markMeshCount = 0;   // the unknown meshes already named at this mark (milestone 30: one line each)          // frames left to log the lamp objects' constants after the mark key
     bool rigValid = false;
     sims3cam::LampSolver lamps;          // lamps voted by the rigs' rays, forwarded as API sphere lights (or fixed-function lights 1..7)
     uint32_t lampEvents = 0;             // SetLight/LightEnable calls made for lamps
@@ -298,6 +299,7 @@ namespace {
   // it (a shared map, not one object's own texture). Returns the map's slot, or -1.
   static int sims3LightMapNote(Sims3Hook& h) {
     IDirect3DBaseTexture9* tex = h.boundTex[2];
+    if (!h.psRig || h.psRig->stage != 3) return -1;   // only the object shaders whose diffuse sits at s3 sample the light map at s2 (milestone 30: the 3-light variant's s2 is its diffuse)
     if (!tex || (h.boundKind[2] & 0x7F) != 1 || h.boundFmt[2] != (uint32_t) D3DFMT_A8R8G8B8) return -1;
     const float* r = h.objRowsAfter;
     const bool rowsOk = h.objRowsAfterValid && r[1] == 0.f && r[5] == 0.f && (r[0] != 0.f || r[2] != 0.f) && (r[4] != 0.f || r[6] != 0.f);
@@ -1863,8 +1865,8 @@ static void sims3LogStats(bool withTable) {
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   state: the game's put back %u times; masked writes emulated %u + %u + %u copied (skipped %u, copy failed %u)",
            h.restoreCount, h.maskEmuA, h.maskEmuB, h.maskEmuC, h.maskEmuSkipped, h.copyFailed);
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   lights: lamps %u (lit %u times, out %u times, %u light calls); sun updates %u, frames without shadow rows %u, frames without a sun candidate %u, sun luminance now %.3f",
-           h.lamps.nLamps, h.lamps.created, h.lamps.dropped, h.lampEvents, h.sunChanges, h.framesNoShadow, h.framesNoSunVote, sims3cam::luminance(h.sun.col));
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   lights: lamps %u (%u registered, %u released, lit %u times, put out %u times, %u light calls); sun updates %u, frames without shadow rows %u, frames without a sun candidate %u, sun luminance now %.3f",
+           h.lamps.nLamps, h.lamps.created, h.lamps.dropped, h.lamps.lit, h.lamps.out, h.lampEvents, h.sunChanges, h.framesNoShadow, h.framesNoSunVote, sims3cam::luminance(h.sun.col));
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   night: sun level %.3f (day reference %.3f), sky brightness %.3f and exposure ceiling %.2f EV sent %u times%s",
            h.skyLevel, h.skyDayRef, h.skyBrightnessSent, h.evMaxSent, h.skySends, GlobalOptions::getExposeRemixApi() ? "" : " (Remix API off: nothing sent)");
@@ -1984,7 +1986,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
       sims3RingPush(h, t);
       h.fCaptured = h.fUncaptured = h.fDropped = h.fHeld = h.fReplayed = h.fTerrainWorld = h.fTerrainLot = h.fCamAdopt = h.fCamAlt = h.fCamMirror = 0;
       const bool f9 = ((GetAsyncKeyState(VK_F9) | GetAsyncKeyState(sims3cam::markKey()) | GetAsyncKeyState(VK_OEM_3)) & 0x8000) != 0;   // F9, the configured key (sims3hook.txt markKey) or backtick
-      if (f9 && !h.f9Down) { sims3RingDump(h, "F9 pressed"); h.markDump = 2; h.markDumpLogged = 0; h.markRigLogged = 0; }   // and the lamp objects and object draws of the next two frames (milestones 24, 29)
+      if (f9 && !h.f9Down) { sims3RingDump(h, "F9 pressed"); h.markDump = 2; h.markDumpLogged = 0; h.markRigLogged = 0; h.markMeshCount = 0; }   // and the lamp objects and object draws of the next two frames (milestones 24, 29)
       else if (h.markDump) --h.markDump;
       h.f9Down = f9;
     }
@@ -4291,16 +4293,21 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
         // At the mark key (milestone 29): every object-shader draw of the marked frames -- its mesh, its
         // light-table match, the texture at s2 and its rows -- to see which objects carry which map, and
         // to name a lamp the table does not know (run 142's ceiling pendant).
-        if (g_sims3.markDump && g_sims3.markRigLogged < 40) {
-          ++g_sims3.markRigLogged;
+        if (g_sims3.markDump && g_sims3.markRigLogged < 80 && model_ < 0) {
           uint64_t ibHash_ = 0;
           for (uint32_t k = 0; k < g_sims3.ibModelCount; ++k) if (g_sims3.ibModelId[k] == ibId_) { ibHash_ = g_sims3.ibHash[k]; break; }
+          bool named_ = false;
+          for (uint32_t k = 0; k < g_sims3.markMeshCount && !named_; ++k) named_ = g_sims3.markMeshes[k] == ibHash_;
+          if (!named_ && g_sims3.markMeshCount < 80) g_sims3.markMeshes[g_sims3.markMeshCount++] = ibHash_;
+          if (!named_) ++g_sims3.markRigLogged;
           const float* r_ = g_sims3.objRowsAfter; char msg_[400];
-          snprintf(msg_, sizeof msg_, "Sims 3 camera hook: object draw at the mark, frame %u, object at (%.1f, %.1f, %.1f), mesh [%u] hash %016llx (%s), VS %016llx PS %016llx, s2 %p %ux%u format %u, rows after World %s(%.4g %.4g %.4g %.4g) (%.4g %.4g %.4g %.4g)",
-                   g_sims3.frames + 1, g_sims3.objWorld[0], g_sims3.objWorld[1], g_sims3.objWorld[2], ibId_, (unsigned long long) ibHash_, model_ >= 0 ? "in the light table" : "not in the light table",
+          if (!named_) {
+          snprintf(msg_, sizeof msg_, "Sims 3 camera hook: object draw at the mark, frame %u, object at (%.1f, %.1f, %.1f), mesh [%u] %u bytes hash %016llx (%s), VS %016llx PS %016llx, s2 %p %ux%u format %u, rows after World %s(%.4g %.4g %.4g %.4g) (%.4g %.4g %.4g %.4g)",
+                   g_sims3.frames + 1, g_sims3.objWorld[0], g_sims3.objWorld[1], g_sims3.objWorld[2], ibId_, ib_->sims3Size(), (unsigned long long) ibHash_, model_ >= 0 ? "in the light table" : "not in the light table",
                    (unsigned long long) g_sims3.vsHash, (unsigned long long) g_sims3.psHash, (void*) g_sims3.boundTex[2], (unsigned) g_sims3.boundW[2], (unsigned) g_sims3.boundH[2], (unsigned) g_sims3.boundFmt[2],
                    g_sims3.objRowsAfterValid ? "" : "(stale) ", r_[0], r_[1], r_[2], r_[3], r_[4], r_[5], r_[6], r_[7]);
           Logger::info(msg_);
+          }
         }
         if (model_ >= 0) {
           const sims3cam::LiteModel& m_ = sims3cam::liteTable().models[model_];

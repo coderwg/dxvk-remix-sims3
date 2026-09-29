@@ -92,19 +92,26 @@ def lite_lights(b):
     return out
 
 class Store:
-    def __init__(self): self.res = {}; self.files = []
+    # Every copy of a resource is kept (milestone 30): a model's LOD meshes are MLODs of the SAME
+    # instance under different groups, and a patch package may carry a second version -- keying
+    # by type and instance alone lost all but one, and the game drew meshes the table never saw.
+    def __init__(self): self.res = {}; self.files = []; self.copies = 0
     def add_package(self, path):
         try: idx = read_index(path)
         except Exception as ex: print('skip', path, ex); return
         fi = len(self.files); self.files.append(open(path, 'rb'))
         for (t, g, inst, off, sz, comp) in idx:
-            if t in (T_LITE, T_MODL, T_MLOD, T_VPXY): self.res[(t, inst)] = (fi, off, sz, comp)   # later packages override
+            if t in (T_LITE, T_MODL, T_MLOD, T_VPXY): self.res.setdefault((t, inst), []).append((fi, g, off, sz, comp)); self.copies += 1
+    def get_all(self, t, inst):
+        """Every copy of (t, inst), decompressed, in package order."""
+        out = []
+        for (fi, g, off, sz, comp) in self.res.get((t, inst), []):
+            f = self.files[fi]; f.seek(off); raw = f.read(sz)
+            out.append(refpack(raw) if comp == 0xFFFF else raw)
+        return out
     def get(self, t, inst):
-        e = self.res.get((t, inst))
-        if not e: return None
-        fi, off, sz, comp = e
-        f = self.files[fi]; f.seek(off); raw = f.read(sz)
-        return refpack(raw) if comp == 0xFFFF else raw
+        all_ = self.get_all(t, inst)
+        return all_[-1] if all_ else None
 
 def keys_in(b, store):
     found = []
@@ -119,18 +126,18 @@ def mesh_hashes(store, t, inst):
     """The (index hash raw, index hash decoded, index bytes, vertex hash, vertex bytes, flags, displacement)
     of every IBUF/VBUF pair inside the RCOL of resource (t, inst): a MODL holds its first LOD's mesh
     chunks, an MLOD the further LODs'."""
-    b = store.get(t, inst)
-    if not b or len(b) < 20: return []
-    internal, chunks = rcol(b)
     out = []
-    ibufs = []; vbufs = []
-    for (tt, g, i), (pos, size) in zip(internal, chunks):
-        tag = b[pos:pos + 4]
-        if tag == b'IBUF': ibufs.append(b[pos:pos + size])
-        elif tag == b'VBUF': vbufs.append(b[pos:pos + size])
-    for k, ibuf in enumerate(ibufs):
-        vbuf = vbufs[k] if k < len(vbufs) else None
-        out += one_mesh(ibuf, vbuf)
+    for b in store.get_all(t, inst):   # every copy: each LOD group, each patched version
+        if not b or len(b) < 20: continue
+        internal, chunks = rcol(b)
+        ibufs = []; vbufs = []
+        for (tt, g, i), (pos, size) in zip(internal, chunks):
+            tag = b[pos:pos + 4]
+            if tag == b'IBUF': ibufs.append(b[pos:pos + size])
+            elif tag == b'VBUF': vbufs.append(b[pos:pos + size])
+        for k, ibuf in enumerate(ibufs):
+            vbuf = vbufs[k] if k < len(vbufs) else None
+            out += one_mesh(ibuf, vbuf)
     return out
 
 def one_mesh(ibuf, vbuf):
@@ -152,20 +159,23 @@ def one_mesh(ibuf, vbuf):
 def model_meshes(store, modlInst):
     """The mesh chunks of a model: its MODL's own, then every MLOD the MODL refers to."""
     rows = mesh_hashes(store, T_MODL, modlInst)
-    b = store.get(T_MODL, modlInst)
-    if b:
-        seen = set()
+    seen = set()
+    for b in store.get_all(T_MODL, modlInst):
         for (tt, i) in keys_in(b, store):
             if tt == T_MLOD and i not in seen:
                 seen.add(i); rows += mesh_hashes(store, T_MLOD, i)
-    return rows
+    if modlInst not in seen: rows += mesh_hashes(store, T_MLOD, modlInst)   # the LOD meshes sit under the model's own instance
+    uniq = []; had = set()
+    for r in rows:
+        if (r[1], r[2]) not in had: had.add((r[1], r[2])); uniq.append(r)
+    return uniq
 
 def main():
     if len(sys.argv) < 3: print(__doc__); return
     root, outPath = sys.argv[1], sys.argv[2]
     verbose = '--verbose' in sys.argv
     hookPath = sys.argv[sys.argv.index('--hook') + 1] if '--hook' in sys.argv else None
-    hookRows = []
+    hookRows = []; hookSeen = set()
     t0 = time.time()
     store = Store()
     pk = []
@@ -179,7 +189,7 @@ def main():
             for f in sorted(fn):
                 if f.endswith('.package'): pk.append(os.path.join(dp, f))
     for p in pk: store.add_package(p)
-    print('%d packages, %d resources of interest, %.1f s' % (len(pk), len(store.res), time.time() - t0))
+    print('%d packages, %d resources of interest in %d copies, %.1f s' % (len(pk), len(store.res), store.copies, time.time() - t0))
     vpxys = [k for k in store.res if k[0] == T_VPXY]
     rows = 0; withLite = 0; withMesh = 0
     with open(outPath, 'w') as out:
@@ -191,7 +201,10 @@ def main():
             if not lites: continue
             withLite += 1
             lights = []
-            for li in lites: lights += lite_lights(store.get(T_LITE, li) or b'')
+            for li in lites:
+                for lb in store.get_all(T_LITE, li):
+                    for L in lite_lights(lb):
+                        if L not in lights: lights.append(L)
             if not lights: continue
             modls = [i for (tt, i) in ks if tt == T_MODL] or [inst]
             meshes = []
@@ -202,15 +215,20 @@ def main():
                 out.write('%016x %016x %d %016x %d %016x %d %d | %s\n' % (ih, ihd, ilen, vh, vlen, inst, flags, disp,
                           '; '.join('%s (%.2f,%.2f,%.2f) rgb %.2f,%.2f,%.2f i %.1f' % L[:8] for L in lights)))
                 rows += 1
-                if lampLights:
+                if lampLights and (ihd, inst) not in hookSeen:
+                    hookSeen.add((ihd, inst))
                     kinds = {'Point': 3, 'Spot': 4, 'LampShade': 5, 'TubeLight': 6}
                     hookRows.append('%016x %016x %d %s' % (ihd, inst, len(lampLights), ' '.join('%d %.4f %.4f %.4f %.4f %.4f %.4f %.2f' % ((kinds[L[0]],) + L[1:8]) for L in lampLights)))
     print('%d visual proxies, %d with lights, %d of those with mesh chunks found; %d mesh rows written to %s in %.1f s' % (len(vpxys), withLite, withMesh, rows, outPath, time.time() - t0))
     if hookPath:
+        # a mesh several models share (a generic quad, a small common part) names none of them (milestone 30)
+        owners = {}
+        for r in hookRows: owners.setdefault(r.split()[0], set()).add(r.split()[1])
+        unique = [r for r in hookRows if len(owners[r.split()[0]]) == 1]
         with open(hookPath, 'w') as hk:
             hk.write('# The Sims 3 camera hook: the game\'s own lamp lights per mesh (milestone 22), written by sims3/tools/lite_table.py.\n')
             hk.write('# <decoded index hash> <model instance> <count> [<type> x y z r g b intensity]...  type 3 point, 4 spot, 5 lamp shade, 6 tube\n')
-            for r in hookRows: hk.write(r + '\n')
-        print('%d mesh lines for the hook written to %s' % (len(hookRows), hookPath))
+            for r in unique: hk.write(r + '\n')
+        print('%d mesh lines for the hook written to %s (%d shared meshes left out)' % (len(unique), hookPath, len(hookRows) - len(unique)))
 
 if __name__ == '__main__': main()
