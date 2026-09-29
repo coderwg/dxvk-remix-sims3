@@ -444,9 +444,8 @@ int main() {
         dirs[4*i] = -0.93f; dirs[4*i+1] = 0.f; dirs[4*i+2] = 0.36f; cols[4*i] = 0.16f; cols[4*i+1] = 0.16f; cols[4*i+2] = 0.2f;
         ls.add(obj, dirs, cols, sun);
       };
-      const float ownCol[3] = { 0.11f, 0.02f, 0.02f };   // the lamp object's own rig when on: a red hue
       auto frame = [&](int state, bool nearDrawn, bool nearToLamp, bool farDrawn, bool farToLamp) {
-        if (state >= 0) ls.addModelLamp(LampSolver::originId(base) ^ 0x9E3779B9u, 0, base, lampPos, liteCol, 100.f, 5, state == 1, ownCol);
+        if (state >= -1) ls.addModelLamp(LampSolver::originId(base) ^ 0x9E3779B9u, 0, base, lampPos, liteCol, 100.f, 5, (int8_t) state);
         if (nearDrawn) { rig(nearObj[0], nearToLamp); rig(nearObj[1], nearToLamp); }
         if (farDrawn) rig(farObj, farToLamp);
         return ls.solve();
@@ -459,10 +458,10 @@ int main() {
       uint32_t frames = 0;
       while (ls.nLamps == 1 && frames < 400) { frame(0, true, true, true, true); ++frames; }   // its own draw says off, whatever the rays say
       CHECK(ls.nLamps == 0 && ls.dropped == 1 && frames <= LampSolver::kMissingLimit / 6 + 2, "lamps: its own draw saying off puts it out within half a second, whatever the rays say (%u frames)", frames);
-      for (int f = 0; f < 3; ++f) n = frame(1, false, false, false, false);   // on again, nothing else drawn: the colour from its own rig
-      CHECK(n == 1 && ls.created == 2 && ls.lamps[0].age >= LampSolver::kConfirmFrames && ls.lamps[0].col[0] > 3.f * ls.lamps[0].col[2], "lamps: lit again by its own draw, coloured by its own rig without witnesses (%.2f,%.2f,%.2f)", ls.lamps[0].col[0], ls.lamps[0].col[1], ls.lamps[0].col[2]);
-      for (int f = 0; f < 300; ++f) n = frame(-1, true, false, true, false);   // its object not drawn, others are: the state holds
-      CHECK(n == 1 && ls.lamps[0].held >= 300 && ls.lamps[0].missing == 0, "lamps: undrawn, the state holds whatever the others say (%u frames held)", ls.lamps[0].held);
+      for (int f = 0; f < 3; ++f) n = frame(1, false, false, false, false);   // on again, nothing else drawn: the definition's colour
+      CHECK(n == 1 && ls.created == 2 && ls.lamps[0].age >= LampSolver::kConfirmFrames && std::fabs(luminance(ls.lamps[0].col) - luminance(liteCol)) < 0.05f, "lamps: lit again by its own draw, the definition's colour without witnesses (%.2f,%.2f,%.2f)", ls.lamps[0].col[0], ls.lamps[0].col[1], ls.lamps[0].col[2]);
+      for (int f = 0; f < 300; ++f) n = frame(-1, true, false, true, false);   // drawn with nothing readable, others drawn: the state holds
+      CHECK(n == 1 && ls.lamps[0].held >= 300 && ls.lamps[0].missing == 0, "lamps: drawn with nothing readable, the state holds whatever the others say (%u frames held)", ls.lamps[0].held);
       for (uint32_t f = 0; f <= LampSolver::kUnseenLimit; ++f) n = ls.solve();   // its object not drawn at all
       CHECK(n == 0 && ls.dropped == 2, "lamps: its object undrawn for ten seconds releases it");
             CHECK(findWorldReg(0x0ba6ddb9aa01913cull) == 12 && findWorldReg(0x7d1bc3ce6acbd715ull) == 16 && findWorldReg(0x1234ull) == -1, "lamps: World rows per object shader (c12 / c16); unknown -> none");

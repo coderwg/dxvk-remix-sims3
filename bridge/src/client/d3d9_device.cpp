@@ -4184,25 +4184,28 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
         }
         if (model_ >= 0) {
           const sims3cam::LiteModel& m_ = sims3cam::liteTable().models[model_];
-          // The lamp's own state (milestone 25): the shared lit texture at s2, or a rig that is not all zeros.
+          // The lamp's own state (milestone 25): OFF = the lot's shared light map at s2, or a rig that is
+          // not all zeros; ON = its own glow map at s2 with a rig of zeros; nothing readable = unknown.
           uint64_t s2_ = 0;
           if (g_sims3.boundTex[2] && (g_sims3.boundKind[2] & 0x7F) == 1) s2_ = bridge_cast<Direct3DTexture9_LSS*>(g_sims3.boundTex[2])->sims3Level0Hash();
-          float rigLum_ = 0.f; int bright_ = -1; float brightLum_ = 0.f;
-          for (int i_ = 0; i_ < 4; ++i_) { const float l_ = sims3cam::luminance(g_sims3.rig + 16 + 4 * i_); rigLum_ += l_; if (l_ > brightLum_) { brightLum_ = l_; bright_ = i_; } }
-          const bool on_ = s2_ == sims3cam::lampOnTexture() || (g_sims3.rigValid && rigLum_ > 0.01f);
-          const float* ownCol_ = (g_sims3.rigValid && bright_ >= 0) ? g_sims3.rig + 16 + 4 * bright_ : nullptr;
+          float rigLum_ = 0.f;
+          for (int i_ = 0; i_ < 4; ++i_) rigLum_ += sims3cam::luminance(g_sims3.rig + 16 + 4 * i_);
+          int8_t state_ = -1;
+          if (s2_ == sims3cam::lampOffTexture() || (g_sims3.rigValid && rigLum_ > 0.01f)) state_ = 0;
+          else if (s2_ != 0 && g_sims3.rigValid) state_ = 1;
+          const bool on_ = state_ == 1;
           for (uint8_t li = 0; li < m_.n; ++li) {
             const sims3cam::LiteLight& L_ = m_.lights[li];
             float wp_[3]; sims3cam::worldPoint(g_sims3.objWorldRows, L_.pos, wp_);
             const uint32_t id_ = sims3cam::LampSolver::originId(g_sims3.objWorld) ^ (0x9E3779B9u * (uint32_t) (li + 1));
-            g_sims3.lamps.addModelLamp(id_, li, g_sims3.objWorld, wp_, L_.col, L_.intensity, L_.type, on_, ownCol_);
+            g_sims3.lamps.addModelLamp(id_, li, g_sims3.objWorld, wp_, L_.col, L_.intensity, L_.type, state_);
           }
           // At the mark key: what the game uploads for this lamp object -- its pixel constants
           // c8..c15 (the rig is c0..c7) and its textures -- to find where its on/off state shows.
           if (g_sims3.markDump && g_sims3.markDumpLogged < 60) {
             ++g_sims3.markDumpLogged;
             char msg_[900]; size_t n_ = (size_t) snprintf(msg_, sizeof msg_, "Sims 3 camera hook: lamp object at the mark, frame %u, object at (%.1f, %.1f, %.1f) model %016llx PS %016llx: %s; rig c4..c7 (%.2f %.2f %.2f) (%.2f %.2f %.2f) (%.2f %.2f %.2f) (%.2f %.2f %.2f);",
-                                                         g_sims3.frames + 1, g_sims3.objWorld[0], g_sims3.objWorld[1], g_sims3.objWorld[2], (unsigned long long) m_.inst, (unsigned long long) g_sims3.psHash, on_ ? "ON" : "off",
+                                                         g_sims3.frames + 1, g_sims3.objWorld[0], g_sims3.objWorld[1], g_sims3.objWorld[2], (unsigned long long) m_.inst, (unsigned long long) g_sims3.psHash, state_ == 1 ? "ON" : (state_ == 0 ? "off" : "unknown"),
                                                          g_sims3.rig[16], g_sims3.rig[17], g_sims3.rig[18], g_sims3.rig[20], g_sims3.rig[21], g_sims3.rig[22], g_sims3.rig[24], g_sims3.rig[25], g_sims3.rig[26], g_sims3.rig[28], g_sims3.rig[29], g_sims3.rig[30]);
             for (int r_ = 8; r_ < 16 && n_ < sizeof msg_ - 80; ++r_)
               if (g_sims3.psConstMask & (1u << r_)) n_ += (size_t) snprintf(msg_ + n_, sizeof msg_ - n_, " c%d(%.3g %.3g %.3g %.3g)", r_, g_sims3.psConst[r_*4], g_sims3.psConst[r_*4+1], g_sims3.psConst[r_*4+2], g_sims3.psConst[r_*4+3]);
