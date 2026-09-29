@@ -114,11 +114,13 @@ namespace {
     // the lot's light maps as the lamps' switch (milestones 27-29): every A8R8G8B8 texture the object-shader draws carry
     // at s2 (with the projection rows they upload after World), decoded on the client at each new version; a lamp is
     // judged through the map its own draws carry
-    struct LightMapEntry { IDirect3DBaseTexture9* tex; uint32_t version, judged, W, H, lastFrame, draws; float rows[8]; bool rowsValid, shared, valid; float origin[3]; std::vector<uint8_t> data; };
+    struct LightMapEntry { IDirect3DBaseTexture9* tex; uint32_t version, judged, W, H, lastFrame, draws; float rows[8]; bool rowsValid, shared, valid; float origin[3]; std::vector<uint8_t> data;
+                           std::vector<uint8_t> prev; bool hasPrev, fresh; uint32_t lastCheck; };   // milestone 33: the version before, to tell a switch from the daylight's drift
     LightMapEntry lightMaps[4] = {};
     uint32_t lightMapDecodes = 0, lightMapVerdicts = 0, lightMapFails = 0, lightMapSwitches = 0, lightMapSwitchesLogged = 0, lightMapOutside = 0;
     uint64_t ibHash[512] = {};   // the hash per cached index buffer (milestone 29: the mark dump names meshes the light table does not know)
     uint32_t loggedShapes = 0;   // light types whose first shaped lamp has been logged (milestone 32)
+    uint32_t lampFlipsLogged = 0;   // lamps' switches by the maps written to the log (milestone 33, bounded)
     bool objWorldValid = false;          // ...and whether it has been uploaded since the shader was bound
     float rig[32] = {};                  // c0..c7 of the bound rig pixel shader (directions, colours)
     float psConst[64] = {}; uint16_t psConstMask = 0;   // c0..c15 of the bound rig pixel shader as uploaded, and which registers were (milestone 24 diagnostic)
@@ -313,6 +315,8 @@ namespace {
       }
       Sims3Hook::LightMapEntry& e = h.lightMaps[slot];
       e.tex = tex; e.version = e.judged = 0xFFFFFFFFu; e.W = e.H = 0; e.draws = 0; e.rowsValid = e.shared = e.valid = false; e.data.clear();
+      e.prev.clear(); e.hasPrev = e.fresh = false; e.lastCheck = 0;
+      for (uint32_t k = 0; k < h.lamps.nLamps; ++k) { h.lamps.lamps[k].ownInit &= (uint8_t) ~(1u << slot); h.lamps.lamps[k].own[slot] = 0.f; }   // another map in this slot: the lamps read it afresh
       for (int q = 0; q < 3; ++q) e.origin[q] = h.objWorld[q];
     }
     Sims3Hook::LightMapEntry& e = h.lightMaps[slot];
@@ -2008,25 +2012,43 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
     for (int k = 0; k < 4; ++k) {
       Sims3Hook::LightMapEntry& e = h.lightMaps[k];
       if (!e.tex) continue;
-      if (h.frames - e.lastFrame > 600u) { e.tex = nullptr; e.valid = false; e.data.clear(); continue; }
-      if (h.frames - e.lastFrame > 1u || !sims3LightMapDecode(h, e)) continue;
+      if (h.frames - e.lastFrame > 600u) { e.tex = nullptr; e.valid = false; e.data.clear(); e.prev.clear(); e.hasPrev = false; continue; }
+      if (h.frames - e.lastFrame > 1u) continue;
+      const bool unseen = h.frames - e.lastCheck > 120u;   // not looked at for two seconds: its changes since are not one switch's
+      e.lastCheck = h.frames;
+      if (!sims3LightMapDecode(h, e, unseen)) continue;
       changed[k] = e.judged != e.version; e.judged = e.version;
     }
-    bool anyChanged = false;
-    for (int k = 0; k < 4; ++k) anyChanged = anyChanged || changed[k];
+    // Each lamp's own part of the light at its base, per map (milestone 33): read outright at its first
+    // sight by night, then moved only by a change of the map that is abrupt and centred on the lamp.
+    // The lamp is on when its own part in any map reaches the on level.
+    const bool night = h.skyLevel < 0.f || h.skyLevel < sims3cam::lampNightLevel();
+    const float jump = sims3cam::lampJump(), onLevel = sims3cam::lampOwnOn(), ring = sims3cam::lampRing();
     for (uint32_t k = 0; k < h.lamps.nLamps; ++k) {
       sims3cam::Lamp& L = h.lamps.lamps[k];
-      if (!anyChanged && L.state >= 0) continue;
-      // every live map's word (milestone 31): the lot's maps split the lights between them, so a
-      // lamp is on when any map lights its base and off when every map covering it is dark
-      int8_t v = -1;
+      bool covered = false; float best = 0.f;
       for (int j = 0; j < 4; ++j) {
         const Sims3Hook::LightMapEntry& e = h.lightMaps[j];
         if (!e.tex || !e.valid) continue;
-        const int8_t w = sims3LightMapVerdict(e, L.anchor);
-        if (w == 1) v = 1; else if (w == 0 && v < 0) v = 0;
+        const bool init = !(L.ownInit & (1u << j));
+        if (init || changed[j]) {
+          float excess = 0.f, local = 0.f; int base = 0, around = 0;
+          if (!sims3LightMapOwn(e, L.anchor, ring, excess, local, base, around)) { L.ownInit &= (uint8_t) ~(1u << j); L.own[j] = 0.f; continue; }   // beyond this map
+          const bool first = init || e.fresh || !e.hasPrev;
+          const float was = L.own[j];
+          L.own[j] = sims3cam::lampOwnStep(was, excess, local, first, night, jump);
+          L.ownInit |= (uint8_t) (1u << j); ++h.lightMapVerdicts;
+          if ((was >= onLevel) != (L.own[j] >= onLevel) && h.lampFlipsLogged < 80) {
+            ++h.lampFlipsLogged; char msg[300];
+            snprintf(msg, sizeof msg, "Sims 3 camera hook: lamp at (%.1f, %.1f, %.1f) %s by light map %ux%u v%u at frame %u: base %d, around it %d, %s %.0f, its own part %.0f -> %.0f; sun level %.2f (%s)",
+                     L.anchor[0], L.anchor[1], L.anchor[2], L.own[j] >= onLevel ? "ON" : "off", e.W, e.H, e.version, h.frames, base, around,
+                     first ? "read outright, above its surroundings by" : "a change centred on it of", first ? excess : local, was, L.own[j], h.skyLevel, night ? "night" : "day");
+            Logger::info(msg);
+          }
+        }
+        if (L.ownInit & (1u << j)) { covered = true; if (L.own[j] > best) best = L.own[j]; }
       }
-      if (v >= 0) { L.state = v; ++h.lightMapVerdicts; }
+      if (covered) L.state = best >= onLevel ? (int8_t) 1 : (int8_t) 0;
       else if (L.state >= 0) { L.state = -1; ++h.lightMapOutside; }   // beyond every map now: back to its witnesses
     }
     h.lamps.solve();
@@ -2281,38 +2303,63 @@ void Direct3DDevice9Ex_LSS<EnableSync>::GetGammaRamp(UINT iSwapChain, D3DGAMMARA
 // channel per texel, the map being coloured -- and read at a world position through its rows
 // (u = P . row0, v = P . row1); beyond it (u or v outside 0..1) nothing is read. Returns the
 // value 0..255, or -1.
-static bool sims3LightMapDecode(Sims3Hook& h, Sims3Hook::LightMapEntry& e) {
+static bool sims3LightMapDecode(Sims3Hook& h, Sims3Hook::LightMapEntry& e, bool unseen) {
   auto* t = bridge_cast<Direct3DTexture9_LSS*>(e.tex);
   const uint32_t ver = t->sims3Level0Version();
   if (ver == e.version && e.valid) return true;
   const D3DSURFACE_DESC d = t->getLevelDesc(0);
+  // the version before is kept to compare with (milestone 33), unless the map is new, resized or was unseen for a while
+  const bool follows = e.valid && e.W == d.Width && e.H == d.Height && !unseen;
+  if (follows) e.prev.swap(e.data); else e.prev.clear();
+  e.hasPrev = follows; e.fresh = !follows;
   e.version = ver; e.W = d.Width; e.H = d.Height;
   e.valid = sims3cam::decodeMaskMax((uint32_t) d.Format, t->sims3Level0Data(), sims3cam::maskBytes((uint32_t) d.Format, d.Width, d.Height), d.Width, d.Height, e.data);
   if (e.valid) ++h.lightMapDecodes; else ++h.lightMapFails;
+  if (!e.valid || e.prev.size() != e.data.size()) { e.hasPrev = false; e.fresh = true; }
   return e.valid;
 }
 static Sims3Hook::LightMapEntry* sims3LightMapOf(Sims3Hook& h, const void* tex) {
   for (int k = 0; k < 4; ++k) if (tex && (const void*) h.lightMaps[k].tex == tex) return &h.lightMaps[k];
   return nullptr;
 }
-static int sims3LightMapAt(const Sims3Hook::LightMapEntry& e, const float* P) {
-  if (!e.valid || !e.rowsValid || e.W == 0 || e.H == 0) return -1;
+static int sims3LightMapRead(const Sims3Hook::LightMapEntry& e, const std::vector<uint8_t>& img, const float* P) {
+  if (!e.valid || !e.rowsValid || e.W == 0 || e.H == 0 || img.size() < (size_t) e.W * e.H) return -1;
   const float* r = e.rows;
   const float u = P[0]*r[0] + P[1]*r[1] + P[2]*r[2] + r[3], v = P[0]*r[4] + P[1]*r[5] + P[2]*r[6] + r[7];
   if (!(u >= 0.f && u < 1.f && v >= 0.f && v < 1.f)) return -1;   // beyond the map (milestone 28: no wrapping -- a street lamp is not judged by the lot's map)
   const uint32_t x = (uint32_t) (u * e.W) % e.W, y = (uint32_t) (v * e.H) % e.H;
-  return e.data[y * e.W + x];
+  return img[y * e.W + x];
 }
-// The map's verdict on a lamp at base B: on when its value is bright (>= 40) and at least twice
-// the darkest of four points 1.5 units around it (run 140: 64 and 101 on, 7 and 15 off, the
-// surroundings 7-14; run 141: 0-32 off, 64 on). -1 when the map cannot be read there.
-static int8_t sims3LightMapVerdict(const Sims3Hook::LightMapEntry& e, const float* B) {
-  const int at = sims3LightMapAt(e, B);
-  if (at < 0) return -1;
-  int around = 255;
-  const float d[4][3] = { { 1.5f, 0.f, 0.f }, { -1.5f, 0.f, 0.f }, { 0.f, 0.f, 1.5f }, { 0.f, 0.f, -1.5f } };
-  for (int k = 0; k < 4; ++k) { const float Q[3] = { B[0] + d[k][0], B[1], B[2] + d[k][2] }; const int v = sims3LightMapAt(e, Q); if (v >= 0 && v < around) around = v; }
-  return (at >= 40 && at >= 2 * around) ? 1 : 0;
+static int sims3LightMapAt(const Sims3Hook::LightMapEntry& e, const float* P) { return sims3LightMapRead(e, e.data, P); }
+// A lamp's own light at its base B in one map (milestone 33). Eight points on a ring around the base
+// stand for its surroundings; a point dark in both versions (a wall, the outside) is left out, and the
+// MEDIAN of the rest is taken, so that another lamp's switch on one side does not pass for the
+// surroundings'. excess = the base above the ring, as the map is now; local = the base's change since
+// the previous version less the ring's (0 without one). False beyond the map.
+static bool sims3LightMapOwn(const Sims3Hook::LightMapEntry& e, const float* B, float ring, float& excess, float& local, int& base, int& around) {
+  base = sims3LightMapAt(e, B); around = 0; excess = local = 0.f;
+  if (base < 0) return false;
+  const bool cmp = e.hasPrev && e.prev.size() == e.data.size();
+  const int baseWas = cmp ? sims3LightMapRead(e, e.prev, B) : base;
+  static const float d[8][2] = { { 1.f, 0.f }, { -1.f, 0.f }, { 0.f, 1.f }, { 0.f, -1.f }, { 0.7071f, 0.7071f }, { -0.7071f, 0.7071f }, { 0.7071f, -0.7071f }, { -0.7071f, -0.7071f } };
+  int now[8], delta[8], n = 0;
+  for (int k = 0; k < 8; ++k) {
+    const float Q[3] = { B[0] + d[k][0] * ring, B[1], B[2] + d[k][1] * ring };
+    const int v = sims3LightMapAt(e, Q);
+    if (v < 0) continue;
+    const int was = cmp ? sims3LightMapRead(e, e.prev, Q) : v;
+    if (v < 3 && was < 3) continue;
+    now[n] = v; delta[n] = v - was; ++n;
+  }
+  int dAround = 0;
+  if (n > 0) {
+    std::sort(now, now + n); std::sort(delta, delta + n);
+    around = n & 1 ? now[n / 2] : (now[n / 2 - 1] + now[n / 2]) / 2;
+    dAround = n & 1 ? delta[n / 2] : (delta[n / 2 - 1] + delta[n / 2]) / 2;
+  }
+  excess = (float) (base - around);
+  local = (float) ((base - baseWas) - dAround);
+  return true;
 }
 
 // The Sims 3 camera hook (milestone 20b): the sun and the lamps as Remix API lights. An API
@@ -4412,13 +4459,14 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
             size_t n_ = (size_t) snprintf(msg_, sizeof msg_, "Sims 3 camera hook: lamp object at the mark, frame %u, object at (%.1f, %.1f, %.1f) model %016llx: s2 %p%s; its draws' map %p, standing word %d;",
                                           g_sims3.frames + 1, g_sims3.objWorld[0], g_sims3.objWorld[1], g_sims3.objWorld[2], (unsigned long long) m_.inst, (void*) g_sims3.boundTex[2],
                                           e_ ? (e_->shared ? " (a shared map)" : " (seen on this object only)") : " (not a noted map)", Lm_ ? Lm_->map : nullptr, Lm_ ? (int) Lm_->state : -2);
-            float wl_[3]; sims3cam::worldPoint(g_sims3.objWorldRows, m_.lights[0].pos, wl_);
-            const float away_[3] = { wl_[0] + 1.5f, wl_[1], wl_[2] };
-            for (int k_ = 0; k_ < 4 && n_ < sizeof msg_ - 120; ++k_) {
+            if (n_ < sizeof msg_ - 60) n_ += (size_t) snprintf(msg_ + n_, sizeof msg_ - n_, " sun level %.2f;", g_sims3.skyLevel);
+            for (int k_ = 0; k_ < 4 && n_ < sizeof msg_ - 140; ++k_) {
               const Sims3Hook::LightMapEntry& em_ = g_sims3.lightMaps[k_];
               if (!em_.tex || !em_.valid) continue;
-              n_ += (size_t) snprintf(msg_ + n_, sizeof msg_ - n_, " map %p %ux%u v%u: at the light %d, at the base %d, 1.5 units away %d;",
-                                      (void*) em_.tex, em_.W, em_.H, em_.version, sims3LightMapAt(em_, wl_), sims3LightMapAt(em_, g_sims3.objWorld), sims3LightMapAt(em_, away_));
+              float ex_ = 0.f, lo_ = 0.f; int b_ = -1, ar_ = -1;
+              const bool in_ = sims3LightMapOwn(em_, g_sims3.objWorld, sims3cam::lampRing(), ex_, lo_, b_, ar_);
+              n_ += (size_t) snprintf(msg_ + n_, sizeof msg_ - n_, " map %p %ux%u v%u: at the base %d, around it %d, its own part %.0f%s;",
+                                      (void*) em_.tex, em_.W, em_.H, em_.version, b_, ar_, (Lm_ && (Lm_->ownInit & (1u << k_))) ? Lm_->own[k_] : -1.f, in_ ? "" : " (beyond it)");
             }
             Logger::info(msg_);
           }

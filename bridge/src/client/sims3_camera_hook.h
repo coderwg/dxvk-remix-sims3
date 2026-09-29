@@ -996,6 +996,26 @@ inline float lampRadiance() { static float s = -1.f; if (s < 0.f) { int v = hook
 inline bool lampShapes() { static int s = -1; if (s < 0) s = hookOption("lampShapes", 1) != 0 ? 1 : 0; return s == 1; }
 inline float lampConeScale() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampConeScale", 1000); if (v < 100) v = 100; s = (float) v / 1000.f; } return s; }
 inline float lampConeSoftness() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampConeSoftness", 300); if (v < 0) v = 0; if (v > 1000) v = 1000; s = (float) v / 1000.f; } return s; }
+// The lamps' switch (milestone 33): a lamp's OWN part of the light at its base, kept per light map.
+// lampJump = the smallest change centred on the lamp, from one version of the map to the next, that
+// counts as the lamp's doing (map units 0..255); lampOwnOn = the own part from which the lamp is on;
+// lampRing = the radius of the ring of points around the base (thousandths of a unit); lampNightLevel
+// = the sun level (thousandths) below which a map's outright reading is trusted (no daylight in it).
+inline float lampJump() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampJump", 15); if (v < 1) v = 1; s = (float) v; } return s; }
+inline float lampOwnOn() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampOwnOn", 25); if (v < 1) v = 1; s = (float) v; } return s; }
+inline float lampRing() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampRing", 2500); if (v < 300) v = 300; s = (float) v / 1000.f; } return s; }
+inline float lampNightLevel() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampNightLevel", 300); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
+// One step of a lamp's own part in one map. excess = its base above the ring around it, in the
+// map as it is now; local = the part of the change since the previous version that is centred on
+// the lamp (the base's change less the ring's). first = there is no previous version to compare
+// with (the lamp's first reading, or the map unseen for a while): the outright reading then, by
+// night only -- by day the map holds the daylight through the windows and only a change tells.
+inline float lampOwnStep(float own, float excess, float local, bool first, bool night, float jump) {
+  float v = own;
+  if (first) { if (night) v = excess; }
+  else if (std::fabs(local) >= jump) v = own + local;
+  return v < 0.f ? 0.f : (v > 255.f ? 255.f : v);
+}
 inline float lampShadeGlow() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampShadeGlow", 1000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
 
 // layerPass: every draw is a layer pass. lotFamily: a lot's ground and its paint composite --
@@ -1646,6 +1666,11 @@ inline bool worldDir(const float* rows, const float* v, float* out) {
 // Milestone 32: the lamps' shapes. A spot is a sphere light shaped to its cone; a lamp shade is
 // two cones -- the definition's angle around the way its light travels, its bottom angle the
 // other way -- and an unshaped light for what comes through the shade; a tube is a cylinder.
+// Milestone 33 (run 146): by day the maps hold the daylight through the windows -- 95 to 233 at
+// the lamps' bases with every lamp off -- so a bright base no longer means a lit lamp. What is
+// the lamp's own is what changes ABRUPTLY and CENTRED on it: a switch changes the map in one
+// version, around the lamp; daylight drifts over many versions, evenly. So each lamp keeps its
+// own part per map, moved only by such changes (lampOwnStep), read outright only by night.
 struct LampRay { float pos[3]; float dir[3]; float col[3]; };
 
 struct Lamp {
@@ -1663,7 +1688,9 @@ struct Lamp {
   uint32_t held;       // frames held for want of witnesses (statistics)
   bool drawn;          // the object was drawn this frame
   int8_t state;        // the light map's standing word for it (milestone 28): 1 on, 0 off, -1 not judged (beyond the map, or none read yet); it stands until the map says otherwise
-  void* map;           // the light map texture its draws carry (milestone 29); the device judges it through that map
+  float own[4];        // its own part of the light at its base, per light map slot (milestone 33; map units 0..255)
+  uint8_t ownInit;     // the slots that have read it once
+  void* map;           // the light map texture its draws carry (milestone 29; a diagnostic since milestone 31)
   void* mapCand;       // another map its draws have carried lately, adopted after kMapConfirm consecutive draws
   uint8_t mapCandN;
   bool confirmedOnce;  // (unused since milestone 30: every lighting and putting out is an event)

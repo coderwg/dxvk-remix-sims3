@@ -30,6 +30,16 @@ lampRadiance = 40000
 # lampConeScale     every cone angle times this, in thousandths (1000 = the definitions' angles taken as the angle from the axis; 500 = half as wide)
 # lampConeSoftness  the softness of a cone's edge, in thousandths (0 = hard, 1000 = soft across the whole cone)
 # lampShadeGlow     the light through a lamp shade times this, in thousandths (0 = none)
+# The lamps' switch is the lot's light map: a lamp's own part of the light at its base, moved only by changes of
+# the map that are abrupt and centred on the lamp (by day the map also holds the daylight through the windows).
+# lampJump        the smallest such change that counts, in map units (0..255)
+# lampOwnOn       the own part from which a lamp is on, in map units
+# lampRing        the radius of the ring of points taken as the lamp's surroundings, in thousandths of a unit
+# lampNightLevel  the sun level, in thousandths, below which a map is read outright (no daylight in it)
+lampJump = 15
+lampOwnOn = 25
+lampRing = 2500
+lampNightLevel = 300
 lampShapes = 1
 lampConeScale = 1000
 lampConeSoftness = 300
