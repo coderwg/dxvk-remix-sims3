@@ -16,10 +16,6 @@ markKey = 220
 # sunRadiance   the sun's radiance per unit of rig colour, thousandths
 # lampRadius    the lamps' sphere radius in thousandths of a unit
 # lampRadiance  the lamps' radiance per unit of colour, thousandths
-# lampOffTexture the content hash (hex) of the lot's shared light map, bound at a lamp's shader stage 2 while the lamp is OFF
-#               (f3e6c2b1f83e7fd8 on the current game version). A lamp drawn with it, or with a light rig that is not all
-#               zeros, is off; drawn with its own glow map and a rig of zeros, it is on. The "lamp object at the mark" log
-#               lines (backslash) show both for any lamp in view.
 skyFromSun = 1
 skyDayLevel = 900
 skyMinBrightness = 30
@@ -29,4 +25,3 @@ sunAngle = 2000
 sunRadiance = 1000
 lampRadius = 150
 lampRadiance = 40000
-lampOffTexture = f3e6c2b1f83e7fd8

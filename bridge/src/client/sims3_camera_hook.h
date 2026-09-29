@@ -989,35 +989,6 @@ inline float sunAngle() { static float s = -1.f; if (s < 0.f) { int v = hookOpti
 inline float sunRadiance() { static float s = -1.f; if (s < 0.f) { int v = hookOption("sunRadiance", 1000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
 inline float lampRadius() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampRadius", 150); if (v < 20) v = 20; s = (float) v / 1000.f; } return s; }
 inline float lampRadiance() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampRadiance", 40000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
-// lampOffTexture (milestone 25): the content hash (hex) of the lot's shared light map, bound at
-// the lamp shader's s2 for every lamp that is OFF (f3e6c2b1f83e7fd8 on this install); a lamp
-// object drawn with it, or with a rig that is not all zeros, is off; drawn with its own glow
-// map and a rig of zeros, it is on.
-inline uint64_t lampOffTexture() {
-  static uint64_t s = 0; static bool read = false;
-  if (!read) {
-    read = true; s = 0xf3e6c2b1f83e7fd8ull;
-    char path[MAX_PATH] = {};
-    HMODULE self = GetModuleHandleA("d3d9.dll");
-    if (self && GetModuleFileNameA(self, path, MAX_PATH)) {
-      if (char* slash = strrchr(path, '\\')) {
-        snprintf(slash + 1, (size_t) (MAX_PATH - (slash + 1 - path)), "sims3hook.txt");
-        if (FILE* f = fopen(path, "rb")) {
-          char line[256];
-          while (fgets(line, sizeof line, f)) {
-            char* p = line; while (*p == ' ' || *p == '\t') ++p;
-            if (strncmp(p, "lampOffTexture", 14) != 0) continue;
-            char* eq = strchr(p, '='); if (!eq) continue;
-            const uint64_t v = strtoull(eq + 1, nullptr, 16);
-            if (v) s = v;
-          }
-          fclose(f);
-        }
-      }
-    }
-  }
-  return s;
-}
 
 // layerPass: every draw is a layer pass. lotFamily: a lot's ground and its paint composite --
 // drawn in place, the first copy visible and every re-submission (further chunk copies, the
@@ -1615,13 +1586,12 @@ inline void worldPoint(const float* rows, const float* p, float* out) {
 // holds the last state. The game keeps a lamp's own light out of that lamp's rig (run 136),
 // so a lamp cannot vouch for itself.
 //
-// Milestone 25: it can, after all -- not through its rig's directions but through its draw.
-// Run 138's marks, read right in run 139 (the first reading had them reversed): a lamp that is
-// ON is drawn with its own glow map at s2 (the stage its shader reads as the light map: the
-// shade lights itself) and a rig of zeros; OFF, it is drawn like any object, with the lot's
-// shared light map at s2 (one texture for every object of the lot) and a rig of lights. So the
-// lamp object's own draw says on or off, authoritatively, whenever it is drawn; the witnesses'
-// rays only colour it.
+// Milestone 25 read a state flag into the lamp's own draw (its s2 texture, its rig); run 139
+// refuted it: s2 is the lot's light map, one texture for every object, whose content and hash
+// change whenever the lighting changes, and the zero rig with a model texture at s2 was the
+// lamp selected under the cursor. So the witnesses decide again (milestone 26), and the draw
+// may set the state only when something authoritative is read from it -- the light map
+// itself, sampled at the lamp's position, is the candidate under test.
 struct LampRay { float pos[3]; float dir[3]; float col[3]; };
 
 struct Lamp {
@@ -1770,16 +1740,21 @@ struct LampSolver {
       for (uint32_t i = 0; i < nRays; ++i)
         if (witness(rays[i].pos, L) && pointsAt(rays[i], L.pos)) { ++pointing; for (int q = 0; q < 3; ++q) sum[q] += rays[i].col[q]; }
       L.support = pointing;
-      if (L.state == 1) {
+      uint32_t witnesses = 0;
+      for (uint32_t o = 0; o < nOrigins; ++o) if (witness(origins[o], L) && canTestify(origins[o], originSlots[o], L)) ++witnesses;
+      // the verdict: the draw's own state when it read one; else the witnesses -- one pointing
+      // at the light says on, one able to testify and not pointing says off, none holds
+      const int8_t verdict = L.state >= 0 ? L.state : (pointing ? (int8_t) 1 : (witnesses ? (int8_t) 0 : (int8_t) -1));
+      if (verdict == 1) {
         L.missing = 0;
         if (L.age < 100000u) ++L.age;
         // the hue: the witnesses' rays (the player's colour choice); the brightness the game's
         if (luminance(sum) > 1e-6f) { const float hl = luminance(sum); const float sc = L.age <= 1 ? 1.f : 0.2f; for (int q = 0; q < 3; ++q) L.col[q] += sc * (sum[q] / hl * L.base - L.col[q]); }
         if (L.age == kConfirmFrames && !L.confirmedOnce) { L.confirmedOnce = true; record(1, L, pointing); }
-      } else if (L.state == 0) {
-        L.missing += 6;   // its own draw says off: out within half a second
+      } else if (verdict == 0) {
+        L.missing += L.state == 0 ? 6u : 2u;   // the draw's own word: out within half a second; the witnesses': a second and a half
       } else {
-        ++L.held;         // not drawn: the last state holds
+        ++L.held;         // nothing says either way: the last state holds
       }
       L.unseen = L.drawn ? 0 : L.unseen + 1;
       L.drawn = false; L.state = -1;

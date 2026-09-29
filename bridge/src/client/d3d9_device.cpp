@@ -110,6 +110,7 @@ namespace {
     int vsWorldReg = -1;                 // bound vertex shader's World rows (kWorldRegs), or -1
     float objWorld[3] = {};              // World translation of the bound object shader...
     float objWorldRows[12] = {};         // ...and its three World rows (milestone 22: the game's lights carried to the world)
+    float objRowsAfter[8] = {}; bool objRowsAfterValid = false;   // the two rows after World (c15, c16 on the main object shader: the light map projection, milestone 26)
     bool objWorldValid = false;          // ...and whether it has been uploaded since the shader was bound
     float rig[32] = {};                  // c0..c7 of the bound rig pixel shader (directions, colours)
     float psConst[64] = {}; uint16_t psConstMask = 0;   // c0..c15 of the bound rig pixel shader as uploaded, and which registers were (milestone 24 diagnostic)
@@ -4184,35 +4185,42 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
         }
         if (model_ >= 0) {
           const sims3cam::LiteModel& m_ = sims3cam::liteTable().models[model_];
-          // The lamp's own state (milestone 25): OFF = the lot's shared light map at s2, or a rig that is
-          // not all zeros; ON = its own glow map at s2 with a rig of zeros; nothing readable = unknown.
-          uint64_t s2_ = 0;
-          if (g_sims3.boundTex[2] && (g_sims3.boundKind[2] & 0x7F) == 1) s2_ = bridge_cast<Direct3DTexture9_LSS*>(g_sims3.boundTex[2])->sims3Level0Hash();
-          float rigLum_ = 0.f;
-          for (int i_ = 0; i_ < 4; ++i_) rigLum_ += sims3cam::luminance(g_sims3.rig + 16 + 4 * i_);
-          int8_t state_ = -1;
-          if (s2_ == sims3cam::lampOffTexture() || (g_sims3.rigValid && rigLum_ > 0.01f)) state_ = 0;
-          else if (s2_ != 0 && g_sims3.rigValid) state_ = 1;
-          const bool on_ = state_ == 1;
+          const int8_t state_ = -1;   // the draw sets no state (milestone 26): the witnesses decide until the light map is read
           for (uint8_t li = 0; li < m_.n; ++li) {
             const sims3cam::LiteLight& L_ = m_.lights[li];
             float wp_[3]; sims3cam::worldPoint(g_sims3.objWorldRows, L_.pos, wp_);
             const uint32_t id_ = sims3cam::LampSolver::originId(g_sims3.objWorld) ^ (0x9E3779B9u * (uint32_t) (li + 1));
             g_sims3.lamps.addModelLamp(id_, li, g_sims3.objWorld, wp_, L_.col, L_.intensity, L_.type, state_);
           }
-          // At the mark key: what the game uploads for this lamp object -- its pixel constants
-          // c8..c15 (the rig is c0..c7) and its textures -- to find where its on/off state shows.
+          // At the mark key (milestone 26): the lot's light map as this lamp object samples it -- the
+          // texture at s2, the projection rows after World, and the map's brightness at the lamp's
+          // light, at its base and 1.5 units away -- to see whether the game's own map says on or off.
           if (g_sims3.markDump && g_sims3.markDumpLogged < 60) {
             ++g_sims3.markDumpLogged;
-            char msg_[900]; size_t n_ = (size_t) snprintf(msg_, sizeof msg_, "Sims 3 camera hook: lamp object at the mark, frame %u, object at (%.1f, %.1f, %.1f) model %016llx PS %016llx: %s; rig c4..c7 (%.2f %.2f %.2f) (%.2f %.2f %.2f) (%.2f %.2f %.2f) (%.2f %.2f %.2f);",
-                                                         g_sims3.frames + 1, g_sims3.objWorld[0], g_sims3.objWorld[1], g_sims3.objWorld[2], (unsigned long long) m_.inst, (unsigned long long) g_sims3.psHash, state_ == 1 ? "ON" : (state_ == 0 ? "off" : "unknown"),
-                                                         g_sims3.rig[16], g_sims3.rig[17], g_sims3.rig[18], g_sims3.rig[20], g_sims3.rig[21], g_sims3.rig[22], g_sims3.rig[24], g_sims3.rig[25], g_sims3.rig[26], g_sims3.rig[28], g_sims3.rig[29], g_sims3.rig[30]);
-            for (int r_ = 8; r_ < 16 && n_ < sizeof msg_ - 80; ++r_)
-              if (g_sims3.psConstMask & (1u << r_)) n_ += (size_t) snprintf(msg_ + n_, sizeof msg_ - n_, " c%d(%.3g %.3g %.3g %.3g)", r_, g_sims3.psConst[r_*4], g_sims3.psConst[r_*4+1], g_sims3.psConst[r_*4+2], g_sims3.psConst[r_*4+3]);
-            for (int s_ = 0; s_ < 6 && n_ < sizeof msg_ - 40; ++s_) {
-              auto* t_ = (g_sims3.boundTex[s_] && (g_sims3.boundKind[s_] & 0x7F) == 1) ? bridge_cast<Direct3DTexture9_LSS*>(g_sims3.boundTex[s_]) : nullptr;
-              if (t_) n_ += (size_t) snprintf(msg_ + n_, sizeof msg_ - n_, " s%d %016llx", s_, (unsigned long long) t_->sims3Level0Hash());
-            }
+            char msg_[700]; size_t n_ = (size_t) snprintf(msg_, sizeof msg_, "Sims 3 camera hook: lamp object at the mark, frame %u, object at (%.1f, %.1f, %.1f) model %016llx:",
+                                                         g_sims3.frames + 1, g_sims3.objWorld[0], g_sims3.objWorld[1], g_sims3.objWorld[2], (unsigned long long) m_.inst);
+            auto* t_ = (g_sims3.boundTex[2] && (g_sims3.boundKind[2] & 0x7F) == 1) ? bridge_cast<Direct3DTexture9_LSS*>(g_sims3.boundTex[2]) : nullptr;
+            if (t_) {
+              const D3DSURFACE_DESC d_ = t_->getLevelDesc(0);
+              n_ += (size_t) snprintf(msg_ + n_, sizeof msg_ - n_, " s2 %ux%u format %u pool %u written %u times hash %016llx;", d_.Width, d_.Height, (unsigned) d_.Format, (unsigned) d_.Pool, t_->sims3Level0Version(), (unsigned long long) t_->sims3Level0Hash());
+              if (g_sims3.objRowsAfterValid) {
+                const float* r_ = g_sims3.objRowsAfter;
+                n_ += (size_t) snprintf(msg_ + n_, sizeof msg_ - n_, " rows after World (%.4g %.4g %.4g %.4g) (%.4g %.4g %.4g %.4g);", r_[0], r_[1], r_[2], r_[3], r_[4], r_[5], r_[6], r_[7]);
+                std::vector<uint8_t> map_;
+                if (sims3cam::decodeMaskRed((uint32_t) d_.Format, t_->sims3Level0Data(), sims3cam::maskBytes((uint32_t) d_.Format, d_.Width, d_.Height), d_.Width, d_.Height, map_)) {
+                  auto sample_ = [&](const float* P) -> int {
+                    const float u = P[0]*r_[0] + P[1]*r_[1] + P[2]*r_[2] + r_[3], v = P[0]*r_[4] + P[1]*r_[5] + P[2]*r_[6] + r_[7];
+                    float fu = u - std::floor(u), fv = v - std::floor(v);
+                    const uint32_t x = (uint32_t) (fu * d_.Width) % d_.Width, y = (uint32_t) (fv * d_.Height) % d_.Height;
+                    return map_[y * d_.Width + x];
+                  };
+                  float wl_[3]; sims3cam::worldPoint(g_sims3.objWorldRows, m_.lights[0].pos, wl_);
+                  const float away_[3] = { wl_[0] + 1.5f, wl_[1], wl_[2] };
+                  const float u = wl_[0]*r_[0] + wl_[1]*r_[1] + wl_[2]*r_[2] + r_[3], v = wl_[0]*r_[4] + wl_[1]*r_[5] + wl_[2]*r_[6] + r_[7];
+                  n_ += (size_t) snprintf(msg_ + n_, sizeof msg_ - n_, " map at the light (uv %.3f %.3f) %d, at the base %d, 1.5 units away %d", u, v, sample_(wl_), sample_(g_sims3.objWorld), sample_(away_));
+                } else n_ += (size_t) snprintf(msg_ + n_, sizeof msg_ - n_, " map not decodable on the client");
+              } else n_ += (size_t) snprintf(msg_ + n_, sizeof msg_ - n_, " rows after World not uploaded with it");
+            } else n_ += (size_t) snprintf(msg_ + n_, sizeof msg_ - n_, " no 2D texture at s2");
             Logger::info(msg_);
           }
         }
@@ -4686,6 +4694,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetVertexShaderConstantF(UINT StartRe
     g_sims3.objWorld[0] = w[3]; g_sims3.objWorld[1] = w[7]; g_sims3.objWorld[2] = w[11];
     memcpy(g_sims3.objWorldRows, w, sizeof g_sims3.objWorldRows);
     g_sims3.objWorldValid = true;
+    g_sims3.objRowsAfterValid = StartRegister + Vector4fCount >= (UINT) g_sims3.vsWorldReg + 5;
+    if (g_sims3.objRowsAfterValid) memcpy(g_sims3.objRowsAfter, w + 12, sizeof g_sims3.objRowsAfter);
   }
   // The Sims 3 camera hook: the sun's direction from the shadow-map view-projection rows.
   if (sims3cam::enabled() && !g_sims3.ourConsts && !m_stateRecording && g_sims3.vsShadowReg >= 0 && StartRegister <= (UINT) g_sims3.vsShadowReg &&

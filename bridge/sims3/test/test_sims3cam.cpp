@@ -460,10 +460,15 @@ int main() {
       CHECK(ls.nLamps == 0 && ls.dropped == 1 && frames <= LampSolver::kMissingLimit / 6 + 2, "lamps: its own draw saying off puts it out within half a second, whatever the rays say (%u frames)", frames);
       for (int f = 0; f < 3; ++f) n = frame(1, false, false, false, false);   // on again, nothing else drawn: the definition's colour
       CHECK(n == 1 && ls.created == 2 && ls.lamps[0].age >= LampSolver::kConfirmFrames && std::fabs(luminance(ls.lamps[0].col) - luminance(liteCol)) < 0.05f, "lamps: lit again by its own draw, the definition's colour without witnesses (%.2f,%.2f,%.2f)", ls.lamps[0].col[0], ls.lamps[0].col[1], ls.lamps[0].col[2]);
-      for (int f = 0; f < 300; ++f) n = frame(-1, true, false, true, false);   // drawn with nothing readable, others drawn: the state holds
-      CHECK(n == 1 && ls.lamps[0].held >= 300 && ls.lamps[0].missing == 0, "lamps: drawn with nothing readable, the state holds whatever the others say (%u frames held)", ls.lamps[0].held);
+      for (int f = 0; f < 300; ++f) n = frame(-1, false, false, true, false);   // no state read, only the far object drawn: no witness, the state holds
+      CHECK(n == 1 && ls.lamps[0].held >= 300 && ls.lamps[0].missing == 0, "lamps: with no state read and nothing near it drawn, the state holds (%u frames held)", ls.lamps[0].held);
+      frames = 0;
+      while (ls.nLamps == 1 && frames < 400) { frame(-1, true, false, true, true); ++frames; }   // the near objects drawn, looking away: off, whatever the far one says
+      CHECK(ls.nLamps == 0 && ls.dropped == 2 && frames <= LampSolver::kMissingLimit / 2 + 2, "lamps: with no state read, near witnesses looking away put it out within a second and a half (%u frames)", frames);
+      for (int f = 0; f < 3; ++f) n = frame(-1, true, true, false, false);   // lit by the near rays alone
+      CHECK(n == 1 && ls.created == 3 && ls.lamps[0].age >= LampSolver::kConfirmFrames, "lamps: with no state read, near rays pointing at it light it");
       for (uint32_t f = 0; f <= LampSolver::kUnseenLimit; ++f) n = ls.solve();   // its object not drawn at all
-      CHECK(n == 0 && ls.dropped == 2, "lamps: its object undrawn for ten seconds releases it");
+      CHECK(n == 0 && ls.dropped == 3, "lamps: its object undrawn for ten seconds releases it");
             CHECK(findWorldReg(0x0ba6ddb9aa01913cull) == 12 && findWorldReg(0x7d1bc3ce6acbd715ull) == 16 && findWorldReg(0x1234ull) == -1, "lamps: World rows per object shader (c12 / c16); unknown -> none");
     }
     const AlbedoStage* tc = findTintConst(0x0c19795eb80e2e96ull);
