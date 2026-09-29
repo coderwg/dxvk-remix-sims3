@@ -465,17 +465,28 @@ int main() {
       for (int k = 0; k < Lamps::kMax + 5; ++k) if (full.name(1000ull + (uint64_t) k, 0, fresh)) ++made;
       CHECK(made == (uint32_t) Lamps::kMax && full.n == (uint32_t) Lamps::kMax, "lamps: the book holds %d lights and refuses the next", Lamps::kMax);
       {
-        // the lamp reporter's block, version 2
-        uint32_t head[16] = { kLampMagic0, kLampMagic1, kLampMagic2, 0x12345678u, 2u, 40u, 2u, kLampFloats, kLampCapacity, 7u, 1u, kLampInts, kLampHead, kLampHead + (kLampCapacity + 1u) * kLampFloats * 4u, 0u, 0u };
+        // the lamp reporter's block, version 3
+        uint32_t head[16] = { kLampMagic0, kLampMagic1, kLampMagic2, 0x12345678u, 3u, 40u, 2u, kLampFloats, kLampCapacity, 7u, 1u, kLampInts, kLampHead, kLampHead + (kLampCapacity + 1u) * kLampFloats * 4u, 0u, 0u };
         LampHead lh = {};
         CHECK(lampReportHead((const uint8_t*) head, 0x12345678u, lh) && lh.lamps == 2 && lh.sequence == 40 && lh.world && lh.floatsAt == 64 && lh.intsAt == 64 + 513 * 24 * 4, "reporter: a whole head is taken: 2 lamps, sequence 40, a world loaded, the floats at 64, the ints after them");
         CHECK(!lampReportHead((const uint8_t*) head, 0x12345679u, lh), "reporter: a head that does not carry its own address is not the block (a copy of the signature elsewhere)");
-        head[4] = 1u;
-        CHECK(!lampReportHead((const uint8_t*) head, 0x12345678u, lh), "reporter: the first version's block is not read");
-        head[4] = 2u; head[6] = kLampCapacity + 1u;
+        head[4] = 2u;
+        CHECK(!lampReportHead((const uint8_t*) head, 0x12345678u, lh) && kLampMagic2 == 0x33303076u, "reporter: an older version's block is not read (the clock came with version 3)");
+        head[4] = 3u; head[6] = kLampCapacity + 1u;
         CHECK(!lampReportHead((const uint8_t*) head, 0x12345678u, lh), "reporter: more lamps than the capacity is not a head to trust");
         head[6] = 2u; head[13] = kLampHead + 100u;
         CHECK(!lampReportHead((const uint8_t*) head, 0x12345678u, lh), "reporter: ints that would lie within the floats are not a head to trust");
+        // the game's clock in the frame record
+        float frameRec[24] = {}; frameRec[8] = 19.5f; frameRec[9] = 6.f; frameRec[10] = 18.f; frameRec[11] = 1.f;
+        const GameClock evening = clockFromRecord(frameRec);
+        CHECK(evening.known && evening.night && nearf(evening.hour, 19.5f) && nearf(evening.sunrise, 6.f) && nearf(evening.sunset, 18.f), "clock: half past seven in the evening, night by the game's word");
+        frameRec[8] = 12.f; frameRec[11] = 0.f;
+        CHECK(clockFromRecord(frameRec).known && !clockFromRecord(frameRec).night, "clock: noon is day");
+        frameRec[8] = -1.f;
+        CHECK(!clockFromRecord(frameRec).known, "clock: an hour the reporter could not read is not a clock");
+        frameRec[8] = 12.f; frameRec[9] = 0.f; frameRec[10] = 0.f;
+        CHECK(!clockFromRecord(frameRec).known, "clock: without sunrise and sunset it is not a clock");
+        CHECK(isLitTerrainPs(0x17eabad58f650687ull) && isLitTerrainPs(0xd63bf505ec4a44a0ull) && !isLitTerrainPs(0x028ce2dde691b739ull) && !isLitTerrainPs(0x99ee53ff6ef1b0b6ull), "terrain light: the four lit terrain shaders carry it; the unlit world terrain and the composite do not");
         const int32_t ids[2] = { (int32_t) 0x55667788u, (int32_t) 0x11223344u };
         CHECK(lampId64(ids) == 0x1122334455667788ull, "reporter: an id from its low and high halves");
         //                      x      y      z     r    g    b   intens dimmer on  preset emits level

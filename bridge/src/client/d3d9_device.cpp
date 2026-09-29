@@ -116,6 +116,10 @@ namespace {
     uint32_t lampsOn = 0, lampsUndefined = 0, lampsBeyondBudget = 0, lampKeyHow = 0;   // this frame: reported lit, of those without a definition, of those beyond lampMax; the ways a definition was found so far
     uint64_t lampUndefinedKeys[64] = {}; uint32_t lampUndefinedCount = 0;   // the models without a definition the log has named
     bool lampReportLive = false, lampReportWorld = false, lampReportAnnounced = false;
+    // the game's clock (milestone 40), and the world lights it keeps dark by day
+    sims3cam::GameClock clock = {}; bool clockSaid = false, clockNight = false; uint32_t clockLogged = 0, lampsWorldDark = 0;
+    // the directional light the lit terrain shaders were handed (milestone 40, a diagnostic): c0, c1 at the last such draw
+    float terrainSunCol[3] = {}, terrainSunDir[3] = {}, sunSourcesLum = -1.f; uint32_t terrainSunDraws = 0, terrainSunDrawsLast = 0, sunSourcesLogged = 0, sunSourcesFrame = 0;
     uint32_t markDump = 0;               // frames left to log after the mark key
     sims3cam::Lamps lamps;               // the game's own lamps, forwarded as Remix API lights
     uint32_t lampEvents = 0;             // API light creations and destructions made for lamps
@@ -1838,6 +1842,10 @@ static void sims3LogStats(bool withTable) {
   Logger::info(msg);
   uint32_t lampHandles = 0;
   for (uint32_t k = 0; k < h.lamps.n; ++k) { const sims3cam::Lamp& Lh = h.lamps.lamps[k]; lampHandles += (Lh.api ? 1u : 0u) + (Lh.api2 ? 1u : 0u) + (Lh.api3 ? 1u : 0u); }
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   clock: %s %.2f h, sunrise %.2f, sunset %.2f; %u lit lamps of world lights alone left dark by day; terrain light %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f (%u draws in the last frame), %u sun source lines",
+           !h.clock.known ? "unknown," : (h.clock.night ? "night," : "day,"), h.clock.hour, h.clock.sunrise, h.clock.sunset, h.lampsWorldDark,
+           h.terrainSunCol[0], h.terrainSunCol[1], h.terrainSunCol[2], h.terrainSunDir[0], h.terrainSunDir[1], h.terrainSunDir[2], h.terrainSunDrawsLast, h.sunSourcesLogged);
+  Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   lamp reporter: %s; %u lamps reported, %u lit, %u of those without a definition in the light table, %u beyond the budget of %u; %u readings (%u while it was writing), %u searches (the last through %u regions, %u MB)",
            h.lampReportLive ? "live" : (g_sims3LampBlock.load() ? "found, no world loaded" : "NOT FOUND: no lamp gives light (the script mod Sims3RtxLamps.package is not in Mods\\Packages, is an older version, or no world has loaded yet)"),
            h.lampReported, h.lampsOn, h.lampsUndefined, h.lampsBeyondBudget, sims3cam::lampMax(), h.lampReportReads, h.lampReportStale, g_sims3LampScans.load(), g_sims3LampScanRegions.load(), g_sims3LampScanMegabytes.load());
@@ -1985,9 +1993,20 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
         Logger::info(msg);
       }
     }
+    // the game's clock; the world lights (a street lamp's) are reported on around the clock (run 151)
+    // and are lit by night only, by the game's own word for night
+    h.clock = h.lampReportLive ? sims3cam::clockFromRecord(h.lampRecords.data()) : sims3cam::GameClock {};
+    const bool worldLights = sims3cam::lampWorldLights() && h.clock.known && h.clock.night;
+    if (h.clock.known && (!h.clockSaid || h.clock.night != h.clockNight) && h.clockLogged < 80u) {
+      h.clockSaid = true; h.clockNight = h.clock.night; ++h.clockLogged;
+      char msg[260];
+      snprintf(msg, sizeof msg, "Sims 3 camera hook: the game's clock at frame %u: %.2f h, %s (sunrise %.2f, sunset %.2f): the world lights (street lamps) are %s",
+               h.frames, h.clock.hour, h.clock.night ? "NIGHT" : "DAY", h.clock.sunrise, h.clock.sunset, worldLights ? "lit where the game has them on" : (sims3cam::lampWorldLights() ? "dark" : "dark (lampWorldLights 0)"));
+      Logger::info(msg);
+    }
     // the lit lamps that have a definition, the nearest to the camera's target first
     h.lamps.begin();
-    h.lampsOn = h.lampsUndefined = h.lampsBeyondBudget = 0;
+    h.lampsOn = h.lampsUndefined = h.lampsBeyondBudget = h.lampsWorldDark = 0;
     const bool mark = h.markDump == 2;
     if (h.lampReportLive) {
       const sims3cam::LiteTable& table = sims3cam::liteTable();
@@ -2023,6 +2042,9 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
                    (unsigned) id[4], (unsigned long long) modelKey, (unsigned) id[7], (unsigned long long) objectKey, (unsigned long long) m->inst);
           Logger::info(msg);
         }
+        uint32_t usable = 0;
+        for (uint8_t li = 0; li < m->n; ++li) if (m->lights[li].type != 11 || worldLights) ++usable;
+        if (!usable) { ++h.lampsWorldDark; continue; }   // world lights alone, and it is day
         const float d[3] = { rec[0] - frame[0], rec[1] - frame[1], rec[2] - frame[2] };
         picks.push_back({ k, d[0]*d[0] + d[1]*d[1] + d[2]*d[2], m });
       }
@@ -2040,7 +2062,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
         const uint64_t object = sims3cam::lampId64(id);
         for (uint8_t li = 0; li < pick.m->n; ++li) {
           const sims3cam::LiteLight& def = pick.m->lights[li];
-          if (def.type == 11 && !sims3cam::lampWorldLights()) continue;
+          if (def.type == 11 && !worldLights) continue;
           bool fresh = false;
           sims3cam::Lamp* L = h.lamps.name(object, li, fresh);
           if (!L) break;
@@ -2080,8 +2102,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
     h.lamps.end();
     if (mark) {
       char msg[300];
-      snprintf(msg, sizeof msg, "Sims 3 camera hook: lamps at the mark, frame %u: %u reported, %u lit, %u of those without a definition, %u beyond the budget of %u; %u lights held",
-               h.frames, h.lampReported, h.lampsOn, h.lampsUndefined, h.lampsBeyondBudget, sims3cam::lampMax(), h.lamps.n);
+      snprintf(msg, sizeof msg, "Sims 3 camera hook: lamps at the mark, frame %u: %u reported, %u lit, %u of those without a definition, %u of world lights alone and dark by day, %u beyond the budget of %u; %u lights held; clock %.2f h, %s",
+               h.frames, h.lampReported, h.lampsOn, h.lampsUndefined, h.lampsWorldDark, h.lampsBeyondBudget, sims3cam::lampMax(), h.lamps.n, h.clock.hour, !h.clock.known ? "unknown" : (h.clock.night ? "night" : "day"));
       Logger::info(msg);
     }
     for (uint32_t k = 0; k < h.lamps.nGone; ++k) {   // the lights of the entries put out this frame
@@ -2120,7 +2142,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
     sims3cam::SunVote v;
     const bool haveVote = h.voter.best(v);
     if (!haveVote) ++h.framesNoSunVote;   // no rig light above the horizon brighter than the floor this frame (milestone 19d)
-    if (h.frames != h.shadowDirFrame) ++h.framesNoShadow;
+    if (h.frames != h.shadowDirFrame + 1u) ++h.framesNoShadow;   // Present has counted this frame already (until milestone 40 every frame was counted here)
     bool send = false;
     sims3cam::SunVote next = h.sun;
     if (h.shadowDirValid) {
@@ -2248,6 +2270,30 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
           }
         }
       }
+    }
+    // The sun's sources side by side (milestone 40, a diagnostic for the next step): the game's
+    // clock, the directional light the lit terrain shaders were handed in this frame, the vote,
+    // and the sun the hook holds. Every two seconds, at each step of the terrain's light, at the mark.
+    {
+      const bool fresh = h.terrainSunDraws > 0;
+      const float tl = sims3cam::luminance(h.terrainSunCol);
+      const bool stepped = fresh && (h.sunSourcesLum < 0.f || std::fabs(tl - h.sunSourcesLum) > 0.08f) && h.frames - h.sunSourcesFrame >= 10u;
+      if (h.clock.known && (h.frames % 120u == 0u || stepped || h.markDump == 2) && h.sunSourcesLogged < 900u) {
+        ++h.sunSourcesLogged; h.sunSourcesFrame = h.frames;
+        if (fresh) h.sunSourcesLum = tl;
+        sims3cam::SunVote match = {};
+        const bool haveMatch = h.shadowDirValid && h.voter.matching(h.shadowDir, match);
+        char msg[760];
+        snprintf(msg, sizeof msg, "Sims 3 camera hook: sun sources, frame %u: clock %.2f h %s (sunrise %.2f, sunset %.2f); TERRAIN %s colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f (%u draws); VOTE %s colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f (%u votes, %u candidates); by the shadow's direction %s colour %.3f, %.3f, %.3f; SHADOW %s toward %.3f, %.3f, %.3f; HELD colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f",
+                 h.frames, h.clock.hour, h.clock.night ? "night" : "day", h.clock.sunrise, h.clock.sunset,
+                 fresh ? "this frame" : "not drawn, last", h.terrainSunCol[0], h.terrainSunCol[1], h.terrainSunCol[2], h.terrainSunDir[0], h.terrainSunDir[1], h.terrainSunDir[2], h.terrainSunDraws,
+                 haveVote ? "winner" : "none,", haveVote ? v.col[0] : 0.f, haveVote ? v.col[1] : 0.f, haveVote ? v.col[2] : 0.f, haveVote ? v.dir[0] : 0.f, haveVote ? v.dir[1] : 0.f, haveVote ? v.dir[2] : 0.f, haveVote ? v.count : 0u, h.voter.n,
+                 haveMatch ? "brightest" : "none,", match.col[0], match.col[1], match.col[2],
+                 !h.shadowDirValid ? "never seen," : (h.frames == h.shadowDirFrame + 1u ? "this frame" : "earlier"), h.shadowDir[0], h.shadowDir[1], h.shadowDir[2],
+                 h.sun.col[0], h.sun.col[1], h.sun.col[2], h.sun.dir[0], h.sun.dir[1], h.sun.dir[2]);
+        Logger::info(msg);
+      }
+      h.terrainSunDrawsLast = h.terrainSunDraws; h.terrainSunDraws = 0;
     }
     h.voter.clear();
   }
@@ -4305,6 +4351,14 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
   ZoneScoped;
   LogFunctionCall();
   SIMS3_BEGIN_DRAW();
+  // The Sims 3 camera hook (milestone 40, a diagnostic): the directional light a lit terrain shader
+  // is handed for this draw, c0 its colour and c1 the direction toward it, for the log that sets
+  // it next to the vote.
+  if (sims3cam::enabled() && primCount > 0 && sims3cam::isLitTerrainPs(g_sims3.psHash)) {
+    memcpy(g_sims3.terrainSunCol, &m_state.pixelConstants.fConsts[0], sizeof g_sims3.terrainSunCol);
+    memcpy(g_sims3.terrainSunDir, &m_state.pixelConstants.fConsts[1], sizeof g_sims3.terrainSunDir);
+    ++g_sims3.terrainSunDraws;
+  }
   // The Sims 3 camera hook: a captured draw whose render states make it invisible in-game
   // (colour writes off, a depth test that never passes, an alpha test that never passes, a
   // blend of zero source and one destination) contributes nothing to the game's image, so

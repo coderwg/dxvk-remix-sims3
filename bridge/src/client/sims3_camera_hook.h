@@ -1001,14 +1001,15 @@ inline float lampRadiance() { static float s = -1.f; if (s < 0.f) { int v = hook
 inline bool lampShapes() { static int s = -1; if (s < 0) s = hookOption("lampShapes", 1) != 0 ? 1 : 0; return s == 1; }
 inline float lampConeScale() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampConeScale", 1000); if (v < 100) v = 100; s = (float) v / 1000.f; } return s; }
 inline float lampConeSoftness() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampConeSoftness", 300); if (v < 0) v = 0; if (v > 1000) v = 1000; s = (float) v / 1000.f; } return s; }
-// ---- the lamps' own word (milestones 36, 39) ---------------------------------------------
+// ---- the lamps' own word and the game's clock (milestones 36, 39, 40) --------------------
 // Nothing about a lamp is in what the game draws but its mesh. The game's scripts know it all,
 // and the lamp reporter (sims3/scriptmod: a script mod) hands it over: for every lamp near the
 // camera the keys of its object and of its model, its transform, whether it is on, its colour
 // and its level, written a few times a second into a block of memory the hook finds by its
 // signature (the block's head carries the block's own address, so nothing else in the process
-// passes for it). The reporter's word is the lamp; what it does not name gives no light.
-inline constexpr uint32_t kLampMagic0 = 0x58523353u, kLampMagic1 = 0x504D414Cu, kLampMagic2 = 0x32303076u;   // 'S3RX' 'LAMP' 'v002'
+// passes for it). The reporter's word is the lamp; what it does not name gives no light. With
+// the lamps comes the game's clock (version 3).
+inline constexpr uint32_t kLampMagic0 = 0x58523353u, kLampMagic1 = 0x504D414Cu, kLampMagic2 = 0x33303076u;   // 'S3RX' 'LAMP' 'v003'
 inline constexpr uint32_t kLampHead = 64, kLampFloats = 24, kLampInts = 8, kLampCapacity = 512;
 // The block's head, checked: the signature, the block's own address, the version, the record
 // sizes, a lamp count within the capacity, the two areas where they can be. head = its first 64
@@ -1017,10 +1018,20 @@ struct LampHead { uint32_t lamps, sequence, floatsAt, intsAt; bool world; };
 inline bool lampReportHead(const uint8_t* head, uint32_t address, LampHead& out) {
   uint32_t h[16]; std::memcpy(h, head, sizeof h);
   if (h[0] != kLampMagic0 || h[1] != kLampMagic1 || h[2] != kLampMagic2 || h[3] != address) return false;
-  if (h[4] != 2u || h[7] != kLampFloats || h[11] != kLampInts || h[8] > kLampCapacity || h[6] > h[8]) return false;
+  if (h[4] != 3u || h[7] != kLampFloats || h[11] != kLampInts || h[8] > kLampCapacity || h[6] > h[8]) return false;
   if (h[12] < kLampHead || h[12] > 4096u || h[13] < h[12] + (h[8] + 1u) * kLampFloats * 4u || h[13] > (1u << 20)) return false;
   out.lamps = h[6]; out.sequence = h[5]; out.world = h[10] != 0; out.floatsAt = h[12]; out.intsAt = h[13];
   return true;
+}
+// The game's clock, from the reporter's frame record: the hour of the day, the game's sunrise and
+// sunset, and the game's own word for night (SimClock.IsNightTime: the hour lies between sunset
+// and sunrise). known: the reporter could read it.
+struct GameClock { float hour, sunrise, sunset; bool night, known; };
+inline GameClock clockFromRecord(const float* frame) {
+  GameClock c;
+  c.hour = frame[8]; c.sunrise = frame[9]; c.sunset = frame[10]; c.night = frame[11] > 0.5f;
+  c.known = c.hour >= 0.f && c.hour < 24.f && c.sunset > c.sunrise;
+  return c;
 }
 inline uint64_t lampId64(const int32_t* lowHigh) { return (uint64_t) (uint32_t) lowHigh[0] | ((uint64_t) (uint32_t) lowHigh[1] << 32); }
 // A record's word for one light of a lamp: on or off, and the colour to send -- the player's colour
@@ -1083,6 +1094,11 @@ inline uint8_t terrainDrawKind(const TerrainShader* t, DWORD alphaBlendEnable, b
 // `mad oC0.xyz, albedo, light, fog`; the unlit variant keeps the albedo (psUnlitOutput).
 inline const uint64_t kUnlitPatches[] = { 0x17eabad58f650687ull, 0x670dbe0fa52c4650ull, 0x98062e8d4d12af7dull, 0xd63bf505ec4a44a0ull };
 inline bool wantsUnlitPatch(uint64_t psHash) { for (uint64_t h : kUnlitPatches) if (h == psHash) return true; return false; }
+// The same four are the lit terrain shaders: light = shadow x dot(normal, c1) x c0 + light map x
+// c7.x + probe x c8.x, so c0 is the directional light's colour (sun or moon) and c1 the unit
+// direction toward it, as the game hands them over for the draw (read from the disassembly,
+// milestone 40; the terrain is outdoors, so nothing attenuates it as a room does an object's rig).
+inline bool isLitTerrainPs(uint64_t psHash) { return wantsUnlitPatch(psHash); }
 
 inline constexpr uint32_t kDxsoRegSampler = 10u, kDxsoRegColorOut = 8u, kDxsoOpMov = 1u, kDxsoOpMad = 4u;
 

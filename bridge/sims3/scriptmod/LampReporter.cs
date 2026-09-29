@@ -12,14 +12,16 @@
 // and the block's own address, and rewrites the lamps near the camera a few times a second.
 // The hook, in the same process, finds the block by the signature and reads it every frame.
 //
-// Block layout, version 2 (little endian):
-//   0  'S3RX'   4  'LAMP'   8  'v002'   12  the block's own address
-//   16 version (2)   20 sequence (odd while the records are being written)
+// Block layout, version 3 (little endian):
+//   0  'S3RX'   4  'LAMP'   8  'v003'   12  the block's own address
+//   16 version (3)   20 sequence (odd while the records are being written)
 //   24 lamps in the block   28 floats per record (24)   32 capacity   36 updates so far
 //   40 world loaded (1) or not (0)   44 ints per record (8)
 //   48 where the floats start   52 where the ints start   56..63 reserved
 //   floats: record 0, the frame: camera target x y z, the radius asked, the game's intensity
-//      levels dim, normal, bright, lamps found before the cap, then zeros;
+//      levels dim, normal, bright, lamps found before the cap; the game's clock: 8 the hour of
+//      the day (-1 when it could not be read), 9 sunrise, 10 sunset (hours), 11 night (1/0, the
+//      game's own test: the hour lies between sunset and sunrise); then zeros;
 //      then one record per lamp:
 //        0..2  x y z    3..5  r g b    6 intensity    7 the engine's dimmer    8 on (1/0)
 //        9 the colour preset (LightColor)    10 emits light (1/0)    11 floor level
@@ -91,14 +93,14 @@ namespace Sims3RtxHook
                 {
                     IntPtr p = Marshal.AllocHGlobal(kBytes);
                     for (int i = 0; i < kHead; i += 4) Marshal.WriteInt32(p, i, 0);
-                    Marshal.WriteInt32(p, 16, 2);
+                    Marshal.WriteInt32(p, 16, 3);
                     Marshal.WriteInt32(p, 28, kFloats);
                     Marshal.WriteInt32(p, 32, kCapacity);
                     Marshal.WriteInt32(p, 44, kInts);
                     Marshal.WriteInt32(p, 48, kFloatsAt);
                     Marshal.WriteInt32(p, 52, kIntsAt);
                     Marshal.WriteInt32(p, 12, p.ToInt32());
-                    Marshal.WriteInt32(p, 8, 0x32303076);    // 'v002'
+                    Marshal.WriteInt32(p, 8, 0x33303076);    // 'v003'
                     Marshal.WriteInt32(p, 4, 0x504D414C);    // 'LAMP'
                     Marshal.WriteInt32(p, 0, 0x58523353);    // 'S3RX', last: the head is whole when the signature stands
                     sBlock = p;
@@ -136,6 +138,15 @@ namespace Sims3RtxHook
             for (int i = 0; i < kFloats; ++i) f[i] = 0f;
             f[0] = cam.x; f[1] = cam.y; f[2] = cam.z; f[3] = kRadius;
             f[4] = sDim; f[5] = sNormal; f[6] = sBright; f[7] = (float) found;
+            float hour = -1f, sunrise = 0f, sunset = 0f, night = 0f;
+            try
+            {
+                hour = Sims3.Gameplay.Utilities.SimClock.HoursPassedOfDay;
+                sunrise = World.GetSunriseTime(); sunset = World.GetSunsetTime();
+                night = Sims3.Gameplay.Utilities.SimClock.IsNightTime() ? 1f : 0f;
+            }
+            catch (Exception) { hour = -1f; }
+            f[8] = hour; f[9] = sunrise; f[10] = sunset; f[11] = night;
             int n = 0;
             for (int i = 0; i < found && n < kCapacity; ++i)
             {
