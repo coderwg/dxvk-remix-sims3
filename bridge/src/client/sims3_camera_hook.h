@@ -1587,11 +1587,14 @@ inline void worldPoint(const float* rows, const float* p, float* out) {
 // so a lamp cannot vouch for itself.
 //
 // Milestone 25 read a state flag into the lamp's own draw (its s2 texture, its rig); run 139
-// refuted it: s2 is the lot's light map, one texture for every object, whose content and hash
-// change whenever the lighting changes, and the zero rig with a model texture at s2 was the
-// lamp selected under the cursor. So the witnesses decide again (milestone 26), and the draw
-// may set the state only when something authoritative is read from it -- the light map
-// itself, sampled at the lamp's position, is the candidate under test.
+// refuted it: s2 is the lot's LIGHT MAP, one texture for every object, whose content and hash
+// change whenever the lighting changes. Milestone 27 reads that map instead (run 140): the game
+// computes it on the CPU and uploads it (256x128 A8R8G8B8, a new version at every lighting
+// change), the object shaders project world positions into it with the two constant rows
+// after World, and at a lamp's base it reads 64-101 with the lamp on against 7-15 off, its
+// surroundings unchanged. So the map's value at a lamp's base, bright and clearly above the
+// points around it, says on; it is read for every known lamp whenever the map changes, drawn
+// or not, and it overrides the witnesses, who remain the fallback without a readable map.
 struct LampRay { float pos[3]; float dir[3]; float col[3]; };
 
 struct Lamp {
@@ -1608,7 +1611,8 @@ struct Lamp {
   uint32_t unseen;     // consecutive frames its object was not drawn
   uint32_t held;       // frames held for want of witnesses (statistics)
   bool drawn;          // the object was drawn this frame
-  int8_t state;        // what the object's own draw said this frame: 1 on, 0 off, -1 not drawn or nothing readable (milestone 25)
+  int8_t state;        // what was read for it this frame: 1 on, 0 off, -1 nothing (milestones 25, 27: the light map)
+  bool mapped;         // the light map has judged it at least once (milestone 27): off screen it stays until the map says off
   bool confirmedOnce;  // forwarded at least once (the event log)
   void* api;           // the Remix API light handle (the device destroys it on drop)
   float sentPos[3], sentCol[3]; bool sent;   // what the runtime holds
@@ -1752,7 +1756,7 @@ struct LampSolver {
         if (luminance(sum) > 1e-6f) { const float hl = luminance(sum); const float sc = L.age <= 1 ? 1.f : 0.2f; for (int q = 0; q < 3; ++q) L.col[q] += sc * (sum[q] / hl * L.base - L.col[q]); }
         if (L.age == kConfirmFrames && !L.confirmedOnce) { L.confirmedOnce = true; record(1, L, pointing); }
       } else if (verdict == 0) {
-        L.missing += L.state == 0 ? 6u : 2u;   // the draw's own word: out within half a second; the witnesses': a second and a half
+        L.missing += L.state == 0 ? 6u : 2u;   // the map's word: out within half a second; the witnesses': a second and a half
       } else {
         ++L.held;         // nothing says either way: the last state holds
       }
@@ -1761,7 +1765,7 @@ struct LampSolver {
     }
     for (uint32_t k = 0; k < nLamps; ) {
       Lamp& L = lamps[k];
-      if (L.missing > kMissingLimit || L.unseen > kUnseenLimit) {
+      if (L.missing > kMissingLimit || (L.unseen > kUnseenLimit && !L.mapped)) {
         if (L.confirmedOnce) record(2, L, L.missing > kMissingLimit ? 1u : 0u);
         droppedApi[nDropped++] = L.api;
         L = lamps[nLamps - 1]; --nLamps; ++dropped;

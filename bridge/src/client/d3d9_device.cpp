@@ -111,6 +111,10 @@ namespace {
     float objWorld[3] = {};              // World translation of the bound object shader...
     float objWorldRows[12] = {};         // ...and its three World rows (milestone 22: the game's lights carried to the world)
     float objRowsAfter[8] = {}; bool objRowsAfterValid = false;   // the two rows after World (c15, c16 on the main object shader: the light map projection, milestone 26)
+    // the lot's light map as the lamps' switch (milestone 27): the texture the object shaders sample at s2, decoded
+    // on the client at each new version, the projection rows from the last lamp draw that carried them
+    IDirect3DBaseTexture9* lightMapTex = nullptr; uint32_t lightMapVersion = 0xFFFFFFFFu, lightMapW = 0, lightMapH = 0, lightMapDecodes = 0, lightMapVerdicts = 0, lightMapFails = 0;
+    std::vector<uint8_t> lightMap; float lightMapRows[8] = {}; bool lightMapValid = false; uint32_t lightMapJudged = 0xFFFFFFFFu;
     bool objWorldValid = false;          // ...and whether it has been uploaded since the shader was bound
     float rig[32] = {};                  // c0..c7 of the bound rig pixel shader (directions, colours)
     float psConst[64] = {}; uint16_t psConstMask = 0;   // c0..c15 of the bound rig pixel shader as uploaded, and which registers were (milestone 24 diagnostic)
@@ -1838,6 +1842,8 @@ static void sims3LogStats(bool withTable) {
   Logger::info(msg);
   uint32_t lampHandles = 0;
   for (uint32_t k = 0; k < h.lamps.nLamps; ++k) if (h.lamps.lamps[k].api) ++lampHandles;
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   light map: %s, %ux%u, %u versions decoded, %u verdicts, %u decode failures", h.lightMapValid ? "read" : "not read", h.lightMapW, h.lightMapH, h.lightMapDecodes, h.lightMapVerdicts, h.lightMapFails);
+  Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   api lights: %s; %u calls, sun %s, %u lamp handles; the game's light table: %s",
            GlobalOptions::getExposeRemixApi() ? "on" : "off (no lights: exposeRemixApi is not set)", h.apiLightCalls, h.sunApi ? "live" : "none", lampHandles,
            sims3cam::liteTable().n ? format_string("%u models read from sims3lights.txt, %u meshes matched", sims3cam::liteTable().n, h.liteMatches).c_str() : "no sims3lights.txt next to the DLL (no lamps; run sims3/tools/lite_table.py --hook)");
@@ -1954,6 +1960,15 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
     auto& h = g_sims3;
     const bool api = GlobalOptions::getExposeRemixApi();
     const uint32_t raysThisFrame = h.lamps.nRays;
+    // A new version of the light map judges every known lamp, drawn this frame or not (milestone 27).
+    if (h.lightMapValid && h.lightMapJudged != h.lightMapVersion) {
+      h.lightMapJudged = h.lightMapVersion;
+      for (uint32_t k = 0; k < h.lamps.nLamps; ++k) {
+        sims3cam::Lamp& L = h.lamps.lamps[k];
+        const int8_t v = sims3LightMapVerdict(h, L.anchor);
+        if (v >= 0) { L.state = v; L.mapped = true; ++h.lightMapVerdicts; }
+      }
+    }
     h.lamps.solve();
     for (uint32_t k = 0; k < h.lamps.nEvents && h.lampEventsLogged < 120; ++k) {   // every lamp's first light and its end, while the budget lasts
       const sims3cam::LampSolver::Event& e = h.lamps.events[k];
@@ -1962,7 +1977,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
         snprintf(msg, sizeof msg, "Sims 3 camera hook: lamp lit at frame %u on the object at (%.1f, %.1f, %.1f), light height %.1f: %u witness rays, colour %.2f,%.2f,%.2f",
                  h.frames, e.anchor[0], e.anchor[1], e.anchor[2], e.y, e.votes, e.col[0], e.col[1], e.col[2]);
       else
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: lamp out at frame %u, the object at (%.1f, %.1f, %.1f), light height %.1f, after %u lit frames (%s)", h.frames, e.anchor[0], e.anchor[1], e.anchor[2], e.y, e.age, e.votes ? "its object said off" : "its object undrawn for ten seconds");
+        snprintf(msg, sizeof msg, "Sims 3 camera hook: lamp out at frame %u, the object at (%.1f, %.1f, %.1f), light height %.1f, after %u lit frames (%s)", h.frames, e.anchor[0], e.anchor[1], e.anchor[2], e.y, e.age, e.votes ? "the map or the witnesses said off" : "its object undrawn for ten seconds");
       Logger::info(msg);
     }
     for (uint32_t k = 0; k < h.lamps.nDropped; ++k) {   // the lamps gone this frame
@@ -2188,6 +2203,41 @@ void Direct3DDevice9Ex_LSS<EnableSync>::GetGammaRamp(UINT iSwapChain, D3DGAMMARA
     ClientMessage c(Commands::IDirect3DDevice9Ex_GetGammaRamp, getId());
     c.send_data(iSwapChain);
   }
+}
+
+// The Sims 3 camera hook (milestone 27): the lot's light map, decoded on the client whenever the
+// game uploads a new version, and read at a world position through the projection rows the object
+// shaders carry (u = P . row0, v = P . row1, wrapping). Returns the red value 0..255, or -1.
+static bool sims3LightMapUpdate(Sims3Hook& h, IDirect3DBaseTexture9* tex, const float* rows) {
+  auto* t = (tex && (h.boundKind[2] & 0x7F) == 1) ? bridge_cast<Direct3DTexture9_LSS*>(tex) : nullptr;
+  if (!t) return false;
+  memcpy(h.lightMapRows, rows, sizeof h.lightMapRows);
+  const uint32_t ver = t->sims3Level0Version();
+  if (tex == h.lightMapTex && ver == h.lightMapVersion && h.lightMapValid) return true;
+  const D3DSURFACE_DESC d = t->getLevelDesc(0);
+  h.lightMapTex = tex; h.lightMapVersion = ver; h.lightMapW = d.Width; h.lightMapH = d.Height;
+  h.lightMapValid = sims3cam::decodeMaskRed((uint32_t) d.Format, t->sims3Level0Data(), sims3cam::maskBytes((uint32_t) d.Format, d.Width, d.Height), d.Width, d.Height, h.lightMap);
+  if (h.lightMapValid) ++h.lightMapDecodes; else ++h.lightMapFails;
+  return h.lightMapValid;
+}
+static int sims3LightMapAt(const Sims3Hook& h, const float* P) {
+  if (!h.lightMapValid || h.lightMapW == 0 || h.lightMapH == 0) return -1;
+  const float* r = h.lightMapRows;
+  const float u = P[0]*r[0] + P[1]*r[1] + P[2]*r[2] + r[3], v = P[0]*r[4] + P[1]*r[5] + P[2]*r[6] + r[7];
+  const float fu = u - std::floor(u), fv = v - std::floor(v);
+  const uint32_t x = (uint32_t) (fu * h.lightMapW) % h.lightMapW, y = (uint32_t) (fv * h.lightMapH) % h.lightMapH;
+  return h.lightMap[y * h.lightMapW + x];
+}
+// The map's verdict on a lamp at base B: on when its value is bright (>= 40) and at least twice
+// the darkest of four points 1.5 units around it (run 140: 64 and 101 on, 7 and 15 off, the
+// surroundings 7-14). -1 when the map cannot be read there.
+static int8_t sims3LightMapVerdict(const Sims3Hook& h, const float* B) {
+  const int at = sims3LightMapAt(h, B);
+  if (at < 0) return -1;
+  int around = 255;
+  const float d[4][3] = { { 1.5f, 0.f, 0.f }, { -1.5f, 0.f, 0.f }, { 0.f, 0.f, 1.5f }, { 0.f, 0.f, -1.5f } };
+  for (int k = 0; k < 4; ++k) { const float Q[3] = { B[0] + d[k][0], B[1], B[2] + d[k][2] }; const int v = sims3LightMapAt(h, Q); if (v >= 0 && v < around) around = v; }
+  return (at >= 40 && at >= 2 * around) ? 1 : 0;
 }
 
 // The Sims 3 camera hook (milestone 20b): the sun and the lamps as Remix API lights. An API
@@ -4185,12 +4235,19 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
         }
         if (model_ >= 0) {
           const sims3cam::LiteModel& m_ = sims3cam::liteTable().models[model_];
-          const int8_t state_ = -1;   // the draw sets no state (milestone 26): the witnesses decide until the light map is read
+          // The lamp's state from the lot's light map (milestone 27), when this draw carries the map
+          // and the projection rows; else -1 and the witnesses decide.
+          int8_t state_ = -1;
+          if (g_sims3.objRowsAfterValid && sims3LightMapUpdate(g_sims3, g_sims3.boundTex[2], g_sims3.objRowsAfter)) {
+            state_ = sims3LightMapVerdict(g_sims3, g_sims3.objWorld);
+            if (state_ >= 0) ++g_sims3.lightMapVerdicts;
+          }
           for (uint8_t li = 0; li < m_.n; ++li) {
             const sims3cam::LiteLight& L_ = m_.lights[li];
             float wp_[3]; sims3cam::worldPoint(g_sims3.objWorldRows, L_.pos, wp_);
             const uint32_t id_ = sims3cam::LampSolver::originId(g_sims3.objWorld) ^ (0x9E3779B9u * (uint32_t) (li + 1));
             g_sims3.lamps.addModelLamp(id_, li, g_sims3.objWorld, wp_, L_.col, L_.intensity, L_.type, state_);
+            if (state_ >= 0) for (uint32_t k_ = 0; k_ < g_sims3.lamps.nLamps; ++k_) { sims3cam::Lamp& Lk_ = g_sims3.lamps.lamps[k_]; if (Lk_.light == li && sims3cam::lampDist(Lk_.anchor, g_sims3.objWorld) < 0.5f) Lk_.mapped = true; }
           }
           // At the mark key (milestone 26): the lot's light map as this lamp object samples it -- the
           // texture at s2, the projection rows after World, and the map's brightness at the lamp's
