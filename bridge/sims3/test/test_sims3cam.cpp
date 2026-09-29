@@ -363,13 +363,6 @@ int main() {
 
   // --- the sun from the per-object light rig (milestone 2b), values from trace call 1279780
   {
-    const float rig[8*4] = {
-      -0.4649119f, 0.6168639f, 0.6350873f, 0,   0.3836397f, 0, -0.9234828f, 0,   0.9296833f, 0.3626721f, -0.06448147f, 0,   -0.160909f, 0.2970355f, -0.941211f, 0,
-       0.7642452f, 0.7881421f, 1.057779f, 0,    0.1157435f, 0.1157435f, 0.1446793f, 0.1157435f,   0.2641693f, 0.2724295f, 0.3656323f, 0,   0.1645248f, 0.1669443f, 0.1935585f, 0 };
-    const float lamp[8*4] = {      // an indoor rig: a bright lamp from above, three dim fills below the horizon
-       0.2f, 0.9f, 0.4f, 0,   0, -1, 0, 0,   0.7f, -0.1f, 0.7f, 0,   -0.7f, -0.1f, 0.7f, 0,
-       0.9f, 0.8f, 0.6f, 0,   0.1f, 0.1f, 0.1f, 0,   0.1f, 0.1f, 0.1f, 0,   0.1f, 0.1f, 0.1f, 0 };
-    CHECK(findLightRig(0x0c19795eb80e2e96ull) != nullptr && findLightRig(0x1234ull) == nullptr, "light-rig pixel shader found by hash; unknown hash -> none");
     const AlbedoStage* ao = findAlbedoStage(0x0c19795eb80e2e96ull); const AlbedoStage* af = findAlbedoStage(0x17eabad58f650687ull);
     CHECK(ao && ao->stage == 3 && af && af->stage == 2 && findAlbedoStage(0x1234ull) == nullptr, "albedo stage: object PS -> 3, floor PS -> 2, unknown -> none");
     CHECK(findTexcoordPromote(0x0ba6ddb9aa01913cull) && findTexcoordPromote(0x0ba6ddb9aa01913cull)->texcoordIndex == 2 && findTexcoordPromote(0x55c99586fb17cd1cull) == nullptr, "promotions: objects promote 2; the terrain paint no longer promotes");
@@ -397,7 +390,6 @@ int main() {
     }
     CHECK(findAlbedoStage(0x3ebb622c4fe0be4full) && findAlbedoStage(0x3ebb622c4fe0be4full)->stage == 2 && findAlbedoStage(0xda37b5ef6f7a09a6ull) && findAlbedoStage(0xda37b5ef6f7a09a6ull)->stage == 1 && findAlbedoStage(0xf0d7af09599ed1bcull) == nullptr, "albedo stage: floors -> s2, floor tiles -> s1 (their small shared textures are lightmaps); the wall variant is stripped");
     CHECK(findTexcoordPromote(0x0fcdd50823cd0504ull) == nullptr && findTexcoordPromote(0x22e0b0fb83e51c5cull) == nullptr && findTexcoordPromote(0x1bd4405f8346ded4ull) && findTexcoordPromote(0x1bd4405f8346ded4ull)->texcoordIndex == 2, "promotions: floors no longer promote; the skinned object variant promotes 2");
-    CHECK(findLightRig(0x1458c67a2c009563ull) != nullptr, "sun: the object PS variants carry rigs");
     CHECK(useCapturedUv(0x0ba6ddb9aa01913cull) && !useCapturedUv(0x976b73dbd59842cdull) && !useCapturedUv(0xf64835ccff6bffd7ull) && !useCapturedUv(0x1234ull), "captured UVs: promoted families sample with the shader's output; terrain (no input set), walls (stripped) and unknown shaders keep the runtime's default");
     {
       // milestone 7: the pixel shader's samplers read from its bytecode, checked against the hand tables on the real dumps
@@ -512,46 +504,29 @@ int main() {
     }
     const AlbedoStage* tc = findTintConst(0x0c19795eb80e2e96ull);
     const float purple[3] = { 0.5f, 0.25f, 1.0f }, hot[3] = { 2.f, -1.f, 0.5f };
-    CHECK(tc && tc->tint && tc->rig && kTintRegister == 8 && findTintConst(0x1234ull) == nullptr && findTintConst(0x5aee1186d554dbc4ull) == nullptr && findLightRig(0x5aee1186d554dbc4ull) != nullptr,
-          "tint: the recolourable object PS carries the tint at c8 (and a rig); the 3-light variant carries a rig but no tint; unknown -> none");
+    CHECK(tc && tc->tint && kTintRegister == 8 && findTintConst(0x1234ull) == nullptr && findTintConst(0x5aee1186d554dbc4ull) == nullptr,
+          "tint: the recolourable object PS carries the tint at c8; the 3-light variant carries none; unknown -> none");
     CHECK(packTint(purple) == 0xFF8040FFu && packTint(hot) == 0xFFFF0080u, "packTint: ARGB with rounding and clamping (%08X, %08X)", packTint(purple), packTint(hot));
-    SunVoter voter; SunVote v;
-    CHECK(!voter.best(v), "no votes -> no sun");
-    voter.add(rig, rig + 16); voter.add(rig, rig + 16); voter.add(lamp, lamp + 16);
-    CHECK(voter.best(v) && v.count == 2 && voter.n == 2, "majority vote: the outdoor rig (2 votes) beats the lamp (1)");
-    CHECK(std::fabs(v.dir[0] + 0.4649f) < 0.002f && std::fabs(v.dir[1] - 0.6169f) < 0.002f && std::fabs(v.dir[2] - 0.6351f) < 0.002f, "sun direction = the rig's brightest light (toward the light, 38 deg up)");
-    CHECK(std::fabs(v.col[0] - 0.7642f) < 0.001f && std::fabs(v.col[2] - 1.0578f) < 0.001f, "sun colour = c4 (bluish-white key)");
     {
-      float fill[32] = {}; fill[0] = 0.095f; fill[1] = 0.953f; fill[2] = 0.286f; fill[16] = 0.08f; fill[17] = 0.09f; fill[18] = 0.15f;
-      SunVoter v2; SunVote w;
-      for (int i = 0; i < 8; ++i) v2.add(fill, fill + 16);
-      for (int i = 0; i < 3; ++i) v2.add(rig, rig + 16);
-      CHECK(v2.best(w) && w.count == 3 && w.col[2] > 1.f, "sun: the bright key with 3 votes beats the dim sky fill with 8 (an indoor-heavy view must not dim the scene)");
-      SunVoter v3;
-      for (int i = 0; i < 8; ++i) v3.add(fill, fill + 16);
-      v3.add(rig, rig + 16);
-      CHECK(v3.best(w) && w.count == 8, "sun: a single-vote key does not qualify, the majority stands (the hysteresis covers such frames)");
-      // the shadow map's light axis: the terrain-paint shader's four rows from the trace (call 1279124)
-      const float rows[16] = { 0.006960565f, 2.483528e-10f, -0.01514359f, 0.f,  0.0117161f, -0.01055988f, 0.005385159f, 0.f,
-                               -0.002892925f, -0.003887773f, -0.001329697f, 0.f,  0.5f, 0.5f, 0.f, 1.f };
-      float sd[3];
-      CHECK(shadowLightDir(rows, sd) && std::fabs(sd[0] - 0.576f) < 0.005f && std::fabs(sd[1] - 0.774f) < 0.005f && std::fabs(sd[2] - 0.265f) < 0.005f,
-            "shadow map: the x/y gradients of the light view-projection cross to the sun (0.576, 0.774, 0.265), up-signed");
-      const float zero[16] = {}; const float flat[16] = { 1.f, 0.f, 0.f, 0.f,  0.f, 0.f, 1.f, 0.f,  0.f, 1.f, 0.f, 0.f,  0.f, 0.f, 0.f, 1.f };
-      CHECK(!shadowLightDir(zero, sd) && shadowLightDir(flat, sd) && sd[1] > 0.99f, "shadow map: degenerate rows rejected; a top-down light reads straight up");
-      const float side[16] = { 0.f, 1.f, 0.f, 0.f,  0.f, 0.f, 1.f, 0.f,  1.f, 0.f, 0.f, 0.f,  0.f, 0.f, 0.f, 1.f };
-      CHECK(!shadowLightDir(side, sd), "shadow map: a light at the horizon is not a sun");
-      CHECK(findShadowSource(0x55c99586fb17cd1cull) == 0 && findShadowSource(0x91105fa83207c4f9ull) == -1 && findShadowSource(0x1234ull) == -1, "shadow map: rows at c0 for the terrain paint shader; the Sim body (stripped) and unknown hashes -> none");
-      const float sunAxis[3] = { -0.4649f, 0.6169f, 0.6351f }; const float other[3] = { 0.576f, 0.774f, 0.265f };
-      CHECK(v3.matching(sunAxis, w) && w.count == 1 && !v3.matching(other, w), "sun: the vote candidate matching the shadow axis supplies the colour; no match, no candidate");
+      // the sun: the terrain's light as the game hands it over (values of run 152)
+      const float noonCol[4] = { 1.f, 1.f, 0.995f, 0.f }, noonDir[4] = { 0.019f, 0.946f, 0.324f, 0.f };
+      Sun noon = {};
+      CHECK(sunFromTerrain(noonCol, noonDir, noon) && nearf(noon.col[2], 0.995f) && nearf(len3(noon.dir), 1.f) && nearf(noon.dir[1], 0.946f), "sun: the terrain's light at noon, white from high up (%.3f %.3f %.3f)", noon.dir[0], noon.dir[1], noon.dir[2]);
+      const float darkCol[4] = { 0.f, 0.f, 0.f, 0.f }, moonDir[4] = { 0.645f, 0.723f, 0.247f, 0.f };
+      Sun dark = {};
+      CHECK(sunFromTerrain(darkCol, moonDir, dark) && luminance(dark.col) == 0.f, "sun: at 19 h the game's light is zero, and that is taken as it is");
+      const float moonCol[4] = { 0.137f, 0.137f, 0.392f, 0.f };
+      Sun moon = {};
+      CHECK(sunFromTerrain(moonCol, moonDir, moon) && nearf(luminance(moon.col), 0.1554f), "sun: by night it is the moon's blue (luminance %.4f)", luminance(moon.col));
+      const float noDir[4] = { 0.f, 0.f, 0.f, 0.f }, longDir[4] = { 0.f, 2.f, 0.f, 0.f }, downDir[4] = { 0.f, -1.f, 0.f, 0.f }, badCol[4] = { -0.5f, 1.f, 1.f, 0.f }, hugeCol[4] = { 100.f, 1.f, 1.f, 0.f };
+      Sun none = {};
+      CHECK(!sunFromTerrain(noonCol, noDir, none) && !sunFromTerrain(noonCol, longDir, none) && !sunFromTerrain(noonCol, downDir, none), "sun: constants whose direction is not a unit vector from above are not a light's");
+      CHECK(!sunFromTerrain(badCol, noonDir, none) && !sunFromTerrain(hugeCol, noonDir, none), "sun: a negative colour or one beyond any light's is not a light's");
+      Sun warmer = noon; warmer.col[1] -= 0.01f;
+      Sun turned = noon; turned.dir[0] += 0.01f; { const float n = len3(turned.dir); for (int q = 0; q < 3; ++q) turned.dir[q] /= n; }
+      Sun nearly = noon; nearly.col[0] -= 0.002f;
+      CHECK(sameSun(noon, noon) && sameSun(noon, nearly) && !sameSun(noon, warmer) && !sameSun(noon, turned), "sun: made anew for a hundredth of colour or half a degree, not for less than half a hundredth");
     }
-    D3DLIGHT9 l; makeSunLight(v, l);
-    CHECK(l.Type == D3DLIGHT_DIRECTIONAL && std::fabs(l.Direction.x - 0.4649f) < 0.002f && std::fabs(l.Direction.y + 0.6169f) < 0.002f && l.Diffuse.b > 1.05f && l.Diffuse.a == 1.f, "D3DLIGHT9: directional, travelling downward (-dir), diffuse = colour");
-    SunVote w = v; w.col[1] += 0.5f;
-    CHECK(sameSun(v, v) && !sameSun(v, w), "change detection on colour");
-    const float below[8*4] = { 0, -1, 0, 0,  1, 0, 0, 0,  0, 0, 1, 0,  0, 0.1f, 1, 0,   1, 1, 1, 0,  1, 1, 1, 0,  1, 1, 1, 0,  1, 1, 1, 0 };
-    SunVoter none; none.add(below, below + 16);
-    CHECK(!none.best(v), "a rig with no light from above the horizon casts no vote");
   }
 
   // --- reflection passes (run 66): a mirrored camera is never the play camera, whichever way it looks

@@ -41,7 +41,6 @@ public:
 
   // The Sims 3 camera hook: this pixel shader carries the per-object light rig (by bytecode hash), or null;
   // and the texture stage that is its diffuse/albedo, or -1 when unknown.
-  const sims3cam::AlbedoStage* sims3LightRig = nullptr;   // the table row when the shader carries the 4-light rig at c0..c7
   int sims3AlbedoStage = -1;
   int sims3TintReg = -1;      // pixel constant register holding the Create-A-Style tint, or -1
   uint64_t sims3Hash = 0;     // FNV-1a-64 of the bytecode (diagnostics)

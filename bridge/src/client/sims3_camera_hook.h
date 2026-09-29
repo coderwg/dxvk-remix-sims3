@@ -747,8 +747,9 @@ inline bool appendConstantRead(std::vector<DWORD>& t, uint32_t reg) {
 // s1 and the diffuse blend at s2. The stage below was read from each pixel shader's
 // arithmetic (the sample multiplied by the summed light colour) and is keyed by the pixel
 // shader's bytecode hash; it takes precedence over pickAlbedoStage for captured draws.
-// The object shaders also carry the four-light rig at c0..c7 (rig, see SunVoter) and, the
-// recolourable ones, the Create-A-Style tint at c8 (tint, see packTint).
+// The object shaders also carry a four-light rig at c0..c7 (rig: a fact about the shader, kept
+// for the record; the sun was read from it until milestone 41) and, the recolourable ones, the
+// Create-A-Style tint at c8 (tint, see packTint).
 struct AlbedoStage { uint64_t hash; const char* name; uint8_t stage; bool rig; bool tint; };
 inline constexpr uint8_t kTintRegister = 8;
 
@@ -1097,7 +1098,8 @@ inline bool wantsUnlitPatch(uint64_t psHash) { for (uint64_t h : kUnlitPatches) 
 // The same four are the lit terrain shaders: light = shadow x dot(normal, c1) x c0 + light map x
 // c7.x + probe x c8.x, so c0 is the directional light's colour (sun or moon) and c1 the unit
 // direction toward it, as the game hands them over for the draw (read from the disassembly,
-// milestone 40; the terrain is outdoors, so nothing attenuates it as a room does an object's rig).
+// milestone 40; the terrain is outdoors, so nothing attenuates it as a room does an object's
+// light). The hook's sun is this light (sunFromTerrain, milestone 41).
 inline bool isLitTerrainPs(uint64_t psHash) { return wantsUnlitPatch(psHash); }
 
 inline constexpr uint32_t kDxsoRegSampler = 10u, kDxsoRegColorOut = 8u, kDxsoOpMov = 1u, kDxsoOpMad = 4u;
@@ -1278,75 +1280,37 @@ inline bool isSkyDomeShader(const DWORD* tokens, size_t count) {
   return sky && hasPosInput;
 }
 
-// ---- the sun, from the per-object light rig (milestone 2b) --------------------------------
-// The object pixel shaders light in world space with a four-light rig uploaded per draw:
-// c0..c3 are unit directions TOWARD the lights, c4..c7 their colours (dp3 with the world
-// normal, then colour * NdotL). The brightest light from above the horizon is the sun (or
-// sky key); the rest are fills. Because the rig is per object (indoor objects carry lamp
-// rigs), each upload casts a vote and Present takes the majority, which the client then
-// forwards as a fixed-function directional light. Remix converts fixed-function lights
-// into ray-traced ones and drops its fallback light once a real light exists.
-inline const AlbedoStage* findLightRig(uint64_t hash) { const AlbedoStage* a = findAlbedoStage(hash); return (a && a->rig) ? a : nullptr; }
-
 inline float luminance(const float* c) { return 0.2126f*c[0] + 0.7152f*c[1] + 0.0722f*c[2]; }
 
-struct SunVote { float dir[3]; float col[3]; uint32_t count; };
+// ---- the sun and the moon: the terrain's light (milestone 41) -----------------------------
+// The lit terrain shaders are handed the game's directional light with every draw: c0 its
+// colour, c1 the unit direction toward it (isLitTerrainPs). It is the sun by day and the moon
+// by night. Run 152 (a whole game day): the colour follows the game's timeline by the hour
+// (SunMoonLight of the sky's light file / 255, linear between its keys), it is zero at 19 h and
+// at 6 h, the direction changes sides at 19 h and at 5 h and never stands lower than 45
+// degrees. The hook forwards it as it is, as a distant light.
+//
+// (Milestones 2b to 40 took the colour from a vote over the objects' light rigs and the
+// direction from the shadow map's rows. In run 152 the vote was wrong or absent most of an
+// outdoor day -- the sun at a fifth of its brightness at noon, the night's light through the
+// whole sunrise -- while the terrain's direction equalled the shadow map's in every sample.)
+struct Sun { float dir[3]; float col[3]; };   // dir: unit, toward the light; col: the game's colour, 1 = full
 
-struct SunVoter {
-  SunVote votes[8];
-  uint32_t n = 0;
-  void clear() { n = 0; }
-  // dirs: c0..c3 (4 float4), cols: c4..c7 (4 float4)
-  void add(const float* dirs, const float* cols) {
-    int best = -1; float bestLum = 0.f;
-    for (int i = 0; i < 4; ++i) {
-      const float* d = dirs + i*4; const float* c = cols + i*4;
-      const float len = len3(d);
-      if (len < 0.9f || len > 1.1f || d[1] / len < 0.15f) continue;   // a unit direction, from above the horizon
-      const float lum = luminance(c);
-      if (lum > bestLum) { bestLum = lum; best = i; }
-    }
-    if (best < 0 || bestLum < 0.05f) return;
-    const float* d = dirs + best*4; const float* c = cols + best*4;
-    const float len = len3(d); const float nd[3] = { d[0]/len, d[1]/len, d[2]/len };
-    for (uint32_t k = 0; k < n; ++k) {
-      SunVote& v = votes[k];
-      if (dot3(v.dir, nd) > 0.999f && std::fabs(luminance(v.col) - bestLum) < 0.05f) { ++v.count; return; }
-    }
-    if (n < 8) { SunVote& v = votes[n++]; for (int j = 0; j < 3; ++j) { v.dir[j] = nd[j]; v.col[j] = c[j]; } v.count = 1; }
-  }
-  // The sun is the brightest candidate with real support (two rigs and a fifth of the votes):
-  // a view of mostly indoor objects votes for the dim sky fill by majority, and that must
-  // not dim the whole scene. Without a qualified candidate, the majority decides.
-  bool best(SunVote& out) const {
-    uint32_t total = 0;
-    for (uint32_t k = 0; k < n; ++k) total += votes[k].count;
-    int bi = -1;
-    for (uint32_t k = 0; k < n; ++k) {
-      if (votes[k].count < 2 || votes[k].count * 5 < total) continue;
-      if (bi < 0 || luminance(votes[k].col) > luminance(votes[bi].col)) bi = (int) k;
-    }
-    if (bi < 0)
-      for (uint32_t k = 0; k < n; ++k)
-        if (bi < 0 || votes[k].count > votes[bi].count || (votes[k].count == votes[bi].count && luminance(votes[k].col) > luminance(votes[bi].col))) bi = (int) k;
-    if (bi < 0) return false;
-    out = votes[bi];
-    return true;
-  }
-  // The brightest candidate whose direction matches the given axis (within ~5 degrees), if
-  // any: indoor objects report the sun's direction with a heavily attenuated colour, so the
-  // most-voted match dims with the view while the brightest is the sun itself.
-  bool matching(const float* dir, SunVote& out) const {
-    int bi = -1;
-    for (uint32_t k = 0; k < n; ++k) {
-      if (dot3(votes[k].dir, dir) < 0.995f) continue;
-      if (bi < 0 || luminance(votes[k].col) > luminance(votes[bi].col)) bi = (int) k;
-    }
-    if (bi < 0) return false;
-    out = votes[bi];
-    return true;
-  }
-};
+// The terrain's two constants as the sun. False when they are not a light's: the direction is
+// not a unit vector from above, or a colour is not a number, negative or beyond any light's.
+inline bool sunFromTerrain(const float* c0, const float* c1, Sun& out) {
+  const float n = len3(c1);
+  if (!(n > 0.98f && n < 1.02f) || !(c1[1] > 0.05f)) return false;
+  for (int q = 0; q < 3; ++q) if (!(c0[q] >= 0.f && c0[q] <= 16.f)) return false;
+  for (int q = 0; q < 3; ++q) { out.dir[q] = c1[q] / n; out.col[q] = c0[q]; }
+  return true;
+}
+
+// Whether the runtime's light still stands for this one: within a fifth of a degree and half a
+// hundredth of each colour (an API light cannot be changed, only made anew).
+inline bool sameSun(const Sun& a, const Sun& b) {
+  return dot3(a.dir, b.dir) > 0.999994f && std::fabs(a.col[0] - b.col[0]) < 0.005f && std::fabs(a.col[1] - b.col[1]) < 0.005f && std::fabs(a.col[2] - b.col[2]) < 0.005f;
+}
 
 // ---- what a pixel shader does with its samplers, read from its bytecode (milestone 7) ------
 // The hand tables above answer two questions per shader: which sampler is the albedo, and
@@ -1531,56 +1495,6 @@ inline const CapturedUv kCapturedUv[] = {
 
 inline bool useCapturedUv(uint64_t hash) {
   return findTexcoordPromote(hash) != nullptr || findByHash(kCapturedUv, hash) != nullptr;
-}
-
-// ---- the sun's direction from the shadow map (milestone 3d) ------------------------------
-// The rig vote cannot be trusted for the direction: an object's brightest light is a
-// different key light indoors, so the majority flips with the view. But every shader that
-// reads the 2048x2048 shadow map receives the light's view-projection as four constant
-// rows applied to the world position, and the gradients of its x and y clip coordinates
-// cross to the light axis -- whichever objects are drawn. The vote then only supplies the
-// colour, from the candidate whose direction matches (the trace's sun matched to 1e-3).
-// The rows sit at c0..c3 in every known shader.
-struct ShadowSource { uint64_t hash; const char* name; };
-
-inline const ShadowSource kShadowSources[] = {
-  { 0x55c99586fb17cd1cull, "terrain paint VS 0x15c787a0" },
-  { 0x7d1bc3ce6acbd715ull, "objects 0x12d17440" },
-  { 0x64154031c30a8800ull, "0xd9c0fe0 vs_3_0" },
-  { 0x3c837e49bf748d99ull, "0x164c8ea0 vs_3_0" },
-};
-
-// The register of the shader's shadow rows (0), or -1 when the shader has none.
-inline int findShadowSource(uint64_t hash) { return findByHash(kShadowSources, hash) ? 0 : -1; }
-
-// rows: the four shadow view-projection rows (16 floats). Returns the unit direction toward
-// the light, or false when the rows are degenerate or the light sits at the horizon.
-inline bool shadowLightDir(const float* rows, float* out) {
-  const float* gx = rows; const float* gy = rows + 4;
-  if (len3(gx) < 1e-7f || len3(gy) < 1e-7f) return false;
-  const float c[3] = { gx[1]*gy[2]-gx[2]*gy[1], gx[2]*gy[0]-gx[0]*gy[2], gx[0]*gy[1]-gx[1]*gy[0] };
-  const float n = len3(c);
-  if (n < 1e-14f) return false;
-  float d[3] = { c[0]/n, c[1]/n, c[2]/n };
-  if (d[1] < 0.f) for (int q = 0; q < 3; ++q) d[q] = -d[q];
-  if (d[1] < 0.05f) return false;
-  for (int q = 0; q < 3; ++q) out[q] = d[q];
-  return true;
-}
-
-inline bool sameSun(const SunVote& a, const SunVote& b) {
-  return dot3(a.dir, b.dir) > 0.9995f && std::fabs(a.col[0] - b.col[0]) < 0.02f && std::fabs(a.col[1] - b.col[1]) < 0.02f && std::fabs(a.col[2] - b.col[2]) < 0.02f;
-}
-
-inline void makeSunLight(const SunVote& v, D3DLIGHT9& l) {
-  std::memset(&l, 0, sizeof l);
-  l.Type = D3DLIGHT_DIRECTIONAL;
-  l.Diffuse.r = v.col[0] > 0.f ? v.col[0] : 0.f;
-  l.Diffuse.g = v.col[1] > 0.f ? v.col[1] : 0.f;
-  l.Diffuse.b = v.col[2] > 0.f ? v.col[2] : 0.f;
-  l.Diffuse.a = 1.f;
-  l.Specular = l.Diffuse;
-  l.Direction.x = -v.dir[0]; l.Direction.y = -v.dir[1]; l.Direction.z = -v.dir[2];   // D3D: the direction the light travels
 }
 
 // ---- the game's own lamp lights --------------------------------------------------------

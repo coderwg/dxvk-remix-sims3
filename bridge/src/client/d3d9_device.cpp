@@ -77,26 +77,17 @@ namespace {
     bool remapActive = false;
     bool loggedMain = false, loggedOther = false, loggedDraw3D = false, loggedDraw2D = false, loggedRemap = false;
     uint32_t loggedPatches = 0;          // bit per rule index, so each patch is announced once
-    const sims3cam::AlbedoStage* psRig = nullptr;   // bound pixel shader carries the 4-light rig at c0..c7
     int psAlbedoStage = -1;              // bound pixel shader's known diffuse stage, or -1
     int psTintReg = -1;                  // bound pixel shader's tint constant register, or -1
     float tint[3] = { 1.f, 1.f, 1.f };   // last tint constant uploaded for a tinted pixel shader
     uint32_t sentFactor = 0xFFFFFFFFu;   // D3DRS_TEXTUREFACTOR the runtime currently holds
     uint8_t tssOurs = 0;                 // stage 0's COLOROP / COLORARG1 / COLORARG2 (bits 0..2) currently hold the hook's TFACTOR modulation
     bool loggedTint = false;
-    sims3cam::SunVoter voter;            // this frame's votes for the sun
-    sims3cam::SunVote sun = {};          // the sun currently forwarded as light 0
-    bool sunSet = false;
-    uint32_t sunChanges = 0, sunLogged = 0, framesNoSunVote = 0, sunDarkHeld = 0; float sunLogLum = -1.f, sunLogDir[3] = {};   // the sun trace (milestone 19d)
-    sims3cam::SunVote sunCand = {};      // a different vote winner, waiting out the hysteresis
-    uint32_t sunCandFrames = 0;
-    int vsShadowReg = -1;                // bound vertex shader's shadow view-projection rows (kShadowSources), or -1
-    float shadowDir[3] = {};             // light axis from the last shadow rows seen...
-    bool shadowDirValid = false;
-    uint32_t shadowDirFrame = 0;         // ...and the frame it was seen in
-    bool loggedShadowSun = false;
-    uint32_t sunDarkFrames = 0;          // frames the matching candidate has been much darker than the sun held
-    uint32_t framesNoShadow = 0;         // frames without shadow rows (statistics)
+    // the sun (milestone 41): the directional light the lit terrain shaders were handed, c0 and c1 at the last such draw
+    float terrainSunCol[3] = {}, terrainSunDir[3] = {}; uint32_t terrainSunDraws = 0, terrainSunDrawsLast = 0;
+    sims3cam::Sun sun = {};              // the sun the runtime holds
+    bool sunSet = false, loggedSun = false;
+    uint32_t sunChanges = 0, sunLogged = 0, framesNoTerrainSun = 0, sunRefused = 0; float sunLogLum = -1.f, sunLogDir[3] = {};   // the sun trace (milestone 19d)
     bool rsSet[256] = {};                              // render states the game has set at least once (the array's initial values are not trusted)
     uint32_t invisibleDrawsSkipped = 0, invisibleLogged = 0;   // captured draws whose render states make them invisible in-game (colour writes off, ...)
     bool vsCapturedUv = false;           // bound vertex shader's draws sample with its captured TEXCOORD0 output
@@ -118,13 +109,11 @@ namespace {
     bool lampReportLive = false, lampReportWorld = false, lampReportAnnounced = false;
     // the game's clock (milestone 40), and the world lights it keeps dark by day
     sims3cam::GameClock clock = {}; bool clockSaid = false, clockNight = false; uint32_t clockLogged = 0, lampsWorldDark = 0;
-    // the directional light the lit terrain shaders were handed (milestone 40, a diagnostic): c0, c1 at the last such draw
-    float terrainSunCol[3] = {}, terrainSunDir[3] = {}, sunSourcesLum = -1.f; uint32_t terrainSunDraws = 0, terrainSunDrawsLast = 0, sunSourcesLogged = 0, sunSourcesFrame = 0;
     uint32_t markDump = 0;               // frames left to log after the mark key
     sims3cam::Lamps lamps;               // the game's own lamps, forwarded as Remix API lights
     uint32_t lampEvents = 0;             // API light creations and destructions made for lamps
     // night from the sun (milestone 20d): the sun's luminance smoothed, the day reference, what was sent
-    float skyLevel = -1.f, skyDayRef = 0.f, skyBrightnessSent = -1.f, evMaxSent = -99.f; uint32_t skySends = 0, skySendFrame = 0, skyBrightLogged = 0, skyNoCandFrames = 0; bool skyApiWarned = false;
+    float skyLevel = -1.f, skyDayRef = 0.f, skyBrightnessSent = -1.f, evMaxSent = -99.f; uint32_t skySends = 0, skySendFrame = 0, skyBrightLogged = 0; bool skyApiWarned = false;
     // lights through the Remix API (milestone 20b): the handles of the sun and of each lamp slot (remixapi_LightHandle, declared later in this file)
     void* sunApi = nullptr; uint32_t apiLightCalls = 0; bool loggedApiLights = false, apiLightsWarned = false;   // the lamps' handles live in the solver's lamps
     uint32_t lampEventsLogged = 0;       // lamp creations and drops written to the log (milestone 21c, bounded)
@@ -257,7 +246,6 @@ namespace {
     // terrain kind it is given.
     bool reissue = false; uint8_t reissueKind = 0;
     // The sun (milestone 17x): a shadow-row direction far from the sun has to persist before it moves it.
-    uint32_t sunJumpFrames = 0;
     // A rolling trace of every draw and event of the last ~300 frames (milestone 17y), written to
     // the log when the mark key is pressed (sims3hook.txt ringTrace = 1; off by default).
     static constexpr uint32_t kRingLines = 131072, kRingLine = 80;
@@ -1103,9 +1091,9 @@ namespace {
     h.rt0 = nullptr;
     h.remapActive = false; h.maskEmu = 0; h.viewportOurs = false; h.vsSkyDome = false;
     h.vsBound = nullptr; h.vsTabled = false; h.vsNormal = nullptr; h.pendingPromote = 0; h.vsHash = 0;
-    h.patch = nullptr; h.vsNeverCapture = 0; h.vsCapturedUv = false; h.vsShadowReg = -1;
+    h.patch = nullptr; h.vsNeverCapture = 0; h.vsCapturedUv = false;
     h.lotCopies.clear();
-    h.psAuto = nullptr; h.psRig = nullptr; h.psAlbedoStage = -1; h.psTintReg = -1; h.psHash = 0;
+    h.psAuto = nullptr; h.psAlbedoStage = -1; h.psTintReg = -1; h.psHash = 0;
     h.declIs3D = false; h.drawCaptured = false; h.autoCapturedUv = false;
     for (int i = 0; i < 16; ++i) { h.boundTex[i] = nullptr; h.boundColor2D[i] = false; h.boundKind[i] = 0; h.boundFmt[i] = 0; h.boundW[i] = h.boundH[i] = 0; }
     for (uint32_t i = 0; i < h.scratchCount; ++i) { if (h.scratch[i].surf) h.scratch[i].surf->Release(); if (h.scratch[i].tex) h.scratch[i].tex->Release(); h.scratch[i] = Sims3Hook::Scratch(); }
@@ -1115,7 +1103,7 @@ namespace {
     h.tssOurs = 0; h.uvIndexHidden = false; h.factorOurs = false; h.sentFactor = 0xFFFFFFFFu; h.gameFactor = 0xFFFFFFFFu;
     h.gameTss0[0] = D3DTOP_MODULATE; h.gameTss0[1] = D3DTA_TEXTURE; h.gameTss0[2] = D3DTA_CURRENT; h.gameTss0[3] = 0;
     h.gameXformSet[0] = h.gameXformSet[1] = false;
-    h.voter.clear(); h.sunSet = false; h.sunCandFrames = 0; h.shadowDirValid = false;
+    h.sunSet = false; h.terrainSunDraws = 0;
     for (uint32_t k = 0; k < h.lamps.n; ++k) { sims3cam::Lamp& Lr = h.lamps.lamps[k]; Lr.sent = false; Lr.api = Lr.api2 = Lr.api3 = nullptr; }   // the runtime's lights are gone with the device; the lamps are re-sent
     for (bool& r : h.rsSet) r = false;
     Logger::info("Sims 3 camera hook: device reset -> the hook's objects released, held state cleared");
@@ -1338,7 +1326,6 @@ namespace {
     h.vsNeverCapture = pLssVertexShader ? pLssVertexShader->sims3NeverCapture : 0;
     h.vsSkyDome = pLssVertexShader ? pLssVertexShader->sims3SkyDome : false;
     h.vsHash = pLssVertexShader ? pLssVertexShader->sims3Hash : 0;
-    h.vsShadowReg = pLssVertexShader ? sims3cam::findShadowSource(pLssVertexShader->sims3Hash) : -1;
     h.vsCapturedUv = pLssVertexShader ? sims3cam::useCapturedUv(pLssVertexShader->sims3Hash) : false;
     h.vsBound = pShader;
     h.vsNormal = pLssVertexShader ? &pLssVertexShader->sims3Normal : nullptr;
@@ -1349,7 +1336,6 @@ namespace {
   void sims3NotePixelShader(Sims3Hook& h, IDirect3DPixelShader9* pShader) {
     Direct3DPixelShader9_LSS* pLssPixelShader = bridge_cast<Direct3DPixelShader9_LSS*>(pShader);
     h.psBound = pShader;
-    h.psRig = pLssPixelShader ? pLssPixelShader->sims3LightRig : nullptr;
     h.psAlbedoStage = pLssPixelShader ? pLssPixelShader->sims3AlbedoStage : -1;
     h.psTintReg = pLssPixelShader ? pLssPixelShader->sims3TintReg : -1;
     h.psHash = pLssPixelShader ? pLssPixelShader->sims3Hash : 0;
@@ -1834,17 +1820,17 @@ static void sims3LogStats(bool withTable) {
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   state: the game's put back %u times; masked writes emulated %u + %u + %u copied (skipped %u, copy failed %u)",
            h.restoreCount, h.maskEmuA, h.maskEmuB, h.maskEmuC, h.maskEmuSkipped, h.copyFailed);
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   lights: %u lamp lights held (lit %u times, put out %u times, %u light calls); sun updates %u, frames without shadow rows %u, frames without a sun candidate %u, sun luminance now %.3f",
-           h.lamps.n, h.lamps.lit, h.lamps.out, h.lampEvents, h.sunChanges, h.framesNoShadow, h.framesNoSunVote, sims3cam::luminance(h.sun.col));
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   lights: %u lamp lights held (lit %u times, put out %u times, %u light calls); sun: the terrain's light, colour %.3f, %.3f, %.3f (luminance %.3f) toward %.3f, %.3f, %.3f; %u updates, %u terrain draws in the last frame, %u frames without one, %u refused",
+           h.lamps.n, h.lamps.lit, h.lamps.out, h.lampEvents, h.sun.col[0], h.sun.col[1], h.sun.col[2], sims3cam::luminance(h.sun.col), h.sun.dir[0], h.sun.dir[1], h.sun.dir[2],
+           h.sunChanges, h.terrainSunDrawsLast, h.framesNoTerrainSun, h.sunRefused);
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   night: sun level %.3f (day reference %.3f), sky brightness %.3f and exposure ceiling %.2f EV sent %u times%s",
            h.skyLevel, h.skyDayRef, h.skyBrightnessSent, h.evMaxSent, h.skySends, GlobalOptions::getExposeRemixApi() ? "" : " (Remix API off: nothing sent)");
   Logger::info(msg);
   uint32_t lampHandles = 0;
   for (uint32_t k = 0; k < h.lamps.n; ++k) { const sims3cam::Lamp& Lh = h.lamps.lamps[k]; lampHandles += (Lh.api ? 1u : 0u) + (Lh.api2 ? 1u : 0u) + (Lh.api3 ? 1u : 0u); }
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   clock: %s %.2f h, sunrise %.2f, sunset %.2f; %u lit lamps of world lights alone left dark by day; terrain light %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f (%u draws in the last frame), %u sun source lines",
-           !h.clock.known ? "unknown," : (h.clock.night ? "night," : "day,"), h.clock.hour, h.clock.sunrise, h.clock.sunset, h.lampsWorldDark,
-           h.terrainSunCol[0], h.terrainSunCol[1], h.terrainSunCol[2], h.terrainSunDir[0], h.terrainSunDir[1], h.terrainSunDir[2], h.terrainSunDrawsLast, h.sunSourcesLogged);
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   clock: %s %.2f h, sunrise %.2f, sunset %.2f; %u lit lamps of world lights alone left dark by day",
+           !h.clock.known ? "unknown," : (h.clock.night ? "night," : "day,"), h.clock.hour, h.clock.sunrise, h.clock.sunset, h.lampsWorldDark);
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   lamp reporter: %s; %u lamps reported, %u lit, %u of those without a definition in the light table, %u beyond the budget of %u; %u readings (%u while it was writing), %u searches (the last through %u regions, %u MB)",
            h.lampReportLive ? "live" : (g_sims3LampBlock.load() ? "found, no world loaded" : "NOT FOUND: no lamp gives light (the script mod Sims3RtxLamps.package is not in Mods\\Packages, is an older version, or no world has loaded yet)"),
@@ -2133,80 +2119,26 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
     }
   }
 
-  // The Sims 3 camera hook: the sun as light 0. Its direction comes from the shadow-map rows
-  // seen this frame (the vote picks a different key light indoors); the rig vote supplies the
-  // colour of the candidate that matches that direction. Without fresh shadow rows, the vote
-  // decides, with hysteresis.
+  // The Sims 3 camera hook: the sun, or the moon: the directional light the lit terrain shaders
+  // were handed in this frame, forwarded as it is (milestone 41). A frame without such a draw
+  // keeps the light the runtime holds.
   if (sims3cam::enabled()) {
     auto& h = g_sims3;
-    sims3cam::SunVote v;
-    const bool haveVote = h.voter.best(v);
-    if (!haveVote) ++h.framesNoSunVote;   // no rig light above the horizon brighter than the floor this frame (milestone 19d)
-    if (h.frames != h.shadowDirFrame + 1u) ++h.framesNoShadow;   // Present has counted this frame already (until milestone 40 every frame was counted here)
-    bool send = false;
-    sims3cam::SunVote next = h.sun;
-    if (h.shadowDirValid) {
-      // Once the shadow map has given a direction it keeps it (the far view may stop drawing
-      // the shaders that carry the rows; the sun does not move in the meantime).
-      if (!h.sunSet) {
-        for (int q = 0; q < 3; ++q) next.dir[q] = h.shadowDir[q];
-      } else {
-        // A direction far from the current sun (more than ~11 degrees) has to hold for 30 frames
-        // before it moves the sun (milestone 17x): the sun never jumps, but rows read from an
-        // upload that is not the sun's shadow matrix would otherwise swing the shadows.
-        const float agree = sims3cam::dot3(h.shadowDir, h.sun.dir);
-        if (agree < 0.98f) ++h.sunJumpFrames; else h.sunJumpFrames = 0;
-        if (agree >= 0.98f || h.sunJumpFrames >= 30) {
-          for (int q = 0; q < 3; ++q) next.dir[q] = h.sun.dir[q] + 0.1f * (h.shadowDir[q] - h.sun.dir[q]);
-          const float n = sims3cam::len3(next.dir);
-          if (n > 1e-6f) for (int q = 0; q < 3; ++q) next.dir[q] /= n;
-        }
-      }
-      // Colour: the brightest matching candidate. Brighter is adopted at once; a much darker
-      // one (a view of indoor objects, which see the sun attenuated -- or dusk) after a second
-      // and then half-way per update (milestone 19e: the former 20-second hold and 20 % steps
-      // took four minutes of real time to reach night, longer than a game night at top speed;
-      // run 121's sun trace).
-      sims3cam::SunVote match;
-      if (h.voter.matching(h.shadowDir, match)) {
-        const float lm = sims3cam::luminance(match.col), lc = sims3cam::luminance(h.sun.col);
-        bool adopt = !h.sunSet || lm >= 0.7f * lc;
-        if (!adopt && ++h.sunDarkFrames >= 60) adopt = true;
-        if (!adopt && h.sunDarkFrames == 1 && ++h.sunDarkHeld <= 20) { char msg[200]; snprintf(msg, sizeof msg, "Sims 3 camera hook: sun: a darker matching rig candidate (luminance %.3f vs the sun's %.3f) held back at frame %u", lm, lc, h.frames); Logger::info(msg); }
-        if (adopt) {
-          h.sunDarkFrames = 0;
-          const float a = h.sunSet ? 0.5f : 1.f;
-          for (int q = 0; q < 3; ++q) next.col[q] = h.sun.col[q] + a * (match.col[q] - h.sun.col[q]);
-          next.count = match.count;
-        }
-      } else if (!h.sunSet && haveVote) {
-        for (int q = 0; q < 3; ++q) next.col[q] = v.col[q];
-        next.count = v.count;
-      }
-      h.sunCandFrames = 0;
-      send = !h.sunSet || !sims3cam::sameSun(next, h.sun);
-      if (send && !h.loggedShadowSun) {
-        h.loggedShadowSun = true;
-        char msg[240];
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: sun direction taken from the shadow map (toward %.3f,%.3f,%.3f); colour %.2f,%.2f,%.2f from the matching rig candidate (%u votes)",
-                 next.dir[0], next.dir[1], next.dir[2], next.col[0], next.col[1], next.col[2], next.count);
+    sims3cam::Sun now = {};
+    bool fresh = false;
+    if (h.terrainSunDraws > 0) {
+      fresh = sims3cam::sunFromTerrain(h.terrainSunCol, h.terrainSunDir, now);
+      if (!fresh && ++h.sunRefused <= 20u) {
+        char msg[260];
+        snprintf(msg, sizeof msg, "Sims 3 camera hook: sun: the terrain's constants at frame %u are not a light's and are left aside: c0 %.3f, %.3f, %.3f, c1 %.3f, %.3f, %.3f (%u draws)",
+                 h.frames, h.terrainSunCol[0], h.terrainSunCol[1], h.terrainSunCol[2], h.terrainSunDir[0], h.terrainSunDir[1], h.terrainSunDir[2], h.terrainSunDraws);
         Logger::info(msg);
       }
-    } else if (haveVote) {
-      if (!h.sunSet) {
-        next = v; send = true;
-      } else if (!sims3cam::sameSun(v, h.sun)) {
-        // Hysteresis: a different winner must hold for 15 frames before it replaces the sun.
-        if (h.sunCandFrames > 0 && sims3cam::sameSun(v, h.sunCand)) ++h.sunCandFrames;
-        else { h.sunCand = v; h.sunCandFrames = 1; }
-        if (h.sunCandFrames >= 15) { next = v; send = true; h.sunCandFrames = 0; }
-      } else {
-        h.sunCandFrames = 0;
-      }
     }
-    if (send) {
+    if (!fresh) ++h.framesNoTerrainSun;
+    if (fresh && (!h.sunSet || !sims3cam::sameSun(now, h.sun))) {
       if (GlobalOptions::getExposeRemixApi()) {   // milestones 20b, 23: the API or nothing
-        h.sunApi = sims3ApiSun(h.sunApi, next); ++h.apiLightCalls;
+        h.sunApi = sims3ApiSun(h.sunApi, now); ++h.apiLightCalls;
         if (!h.loggedApiLights) {
           h.loggedApiLights = true; char msg[240];
           snprintf(msg, sizeof msg, "Sims 3 camera hook: the sun goes out as a Remix API distant light (angular diameter %.2f degrees, radiance x%.2f per unit of colour), the lamps as sphere lights (radius %.2f, radiance x%.1f)",
@@ -2217,31 +2149,37 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
         h.apiLightsWarned = true;
         Logger::warn("Sims 3 camera hook: no lights: the Remix API is off (exposeRemixApi = True in .trex\\bridge.conf turns it on for the bridge server)");
       }
-      h.sun = next; h.sunSet = true;
+      h.sun = now; h.sunSet = true;
       ++h.sunChanges;
-      const float lum = sims3cam::luminance(next.col);
-      const bool moved = h.sunLogLum < 0.f || std::fabs(lum - h.sunLogLum) > 0.1f * (h.sunLogLum > 0.f ? h.sunLogLum : 1.f) || sims3cam::dot3(next.dir, h.sunLogDir) < 0.996f;
-      if (moved && h.sunLogged < 200) {   // the sun trace (milestone 19d): every step of brightness or direction
-        ++h.sunLogged; h.sunLogLum = lum; for (int q = 0; q < 3; ++q) h.sunLogDir[q] = next.dir[q];
-        char msg[240];
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: sun forwarded as light 0 at frame %u (toward %.3f,%.3f,%.3f; colour %.2f,%.2f,%.2f, luminance %.3f; %u votes of %u candidates)",
-                 h.frames, next.dir[0], next.dir[1], next.dir[2], next.col[0], next.col[1], next.col[2], lum, next.count, h.voter.n);
+      const float lum = sims3cam::luminance(now.col);
+      if (!h.loggedSun) {
+        h.loggedSun = true; char msg[260];
+        snprintf(msg, sizeof msg, "Sims 3 camera hook: the sun is the terrain's light: first taken at frame %u from %u terrain draws, colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f",
+                 h.frames, h.terrainSunDraws, now.col[0], now.col[1], now.col[2], now.dir[0], now.dir[1], now.dir[2]);
+        Logger::info(msg);
+      }
+      // the sun trace: every step of a tenth in brightness (or 0.02 near the dark) or of five degrees, with the game's clock
+      const bool moved = h.sunLogLum < 0.f || std::fabs(lum - h.sunLogLum) > (h.sunLogLum > 0.2f ? 0.1f * h.sunLogLum : 0.02f) || sims3cam::dot3(now.dir, h.sunLogDir) < 0.996f;
+      if (moved && h.sunLogged < 400) {
+        ++h.sunLogged; h.sunLogLum = lum; for (int q = 0; q < 3; ++q) h.sunLogDir[q] = now.dir[q];
+        char msg[300];
+        snprintf(msg, sizeof msg, "Sims 3 camera hook: sun at frame %u, clock %.2f h%s: colour %.3f, %.3f, %.3f (luminance %.3f) toward %.3f, %.3f, %.3f; %u terrain draws; sky level %.3f",
+                 h.frames, h.clock.known ? h.clock.hour : -1.f, !h.clock.known ? " (unknown)" : (h.clock.night ? " night" : " day"), now.col[0], now.col[1], now.col[2], lum, now.dir[0], now.dir[1], now.dir[2], h.terrainSunDraws, h.skyLevel);
         Logger::info(msg);
       }
     }
-    if (h.sunApi) remixapi::remixapi_DrawLightInstance((remixapi_LightHandle) h.sunApi);   // every frame (milestone 20b)
-    // Night from the sun (milestone 20d): the luminance of the sun the hook holds follows the
-    // game's clock (0.97 at noon, orange 0.3 at dusk, 0.07 late, then no candidate above the
-    // floor at all); the game's rig carries no sky light of its own (an outdoor rig is the sun
-    // alone). Relative to full day it sets the runtime's sky brightness -- the sky probe scaled
-    // wherever a ray escapes, ambient and backdrop together -- and the ceiling of the
+    h.terrainSunDrawsLast = h.terrainSunDraws; h.terrainSunDraws = 0;
+    const bool haveSun = h.sunSet;   // for the night below
+    if (h.sunApi && h.sunSet && sims3cam::luminance(h.sun.col) > 0.001f) remixapi::remixapi_DrawLightInstance((remixapi_LightHandle) h.sunApi);   // every frame it gives light (milestone 20b)
+    // Night from the sun (milestone 20d): the luminance of the light the hook holds follows the
+    // game's clock (1 at noon, orange 0.3 at dusk, zero at 19 h, the moon's 0.16 by night, zero
+    // again at 6 h). Relative to full day it sets the runtime's sky brightness -- the sky probe
+    // scaled wherever a ray escapes, ambient and backdrop together -- and the ceiling of the
     // auto-exposure, which would otherwise brighten the dark scene back up (its default range
-    // reaches +5 EV). Without a candidate for a second the level decays to the floor: night.
+    // reaches +5 EV).
     if (sims3cam::skyFromSun()) {
-      if (haveVote) h.skyNoCandFrames = 0; else ++h.skyNoCandFrames;
       float target = -1.f;
-      if (h.skyNoCandFrames > 60) target = 0.f;
-      else if (h.sunSet) target = sims3cam::luminance(h.sun.col);
+      if (haveSun) target = sims3cam::luminance(h.sun.col);
       if (target >= 0.f) {
         h.skyLevel = h.skyLevel < 0.f ? target : h.skyLevel + 0.05f * (target - h.skyLevel);
         if (h.skyLevel > h.skyDayRef) h.skyDayRef = h.skyLevel;
@@ -2260,8 +2198,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
             h.skyBrightnessSent = b; h.evMaxSent = ev; h.skySendFrame = h.frames; ++h.skySends;
             if (step && h.skyBrightLogged < 100) {
               ++h.skyBrightLogged; char msg[220];
-              snprintf(msg, sizeof msg, "Sims 3 camera hook: sky brightness %.3f and exposure ceiling %.2f EV sent at frame %u (sun level %.3f, day reference %.3f%s)",
-                       b, ev, h.frames, h.skyLevel, dayRef, h.skyNoCandFrames > 60 ? ", no sun candidate: night" : "");
+              snprintf(msg, sizeof msg, "Sims 3 camera hook: sky brightness %.3f and exposure ceiling %.2f EV sent at frame %u (sun level %.3f, day reference %.3f; clock %.2f h)",
+                       b, ev, h.frames, h.skyLevel, dayRef, h.clock.known ? h.clock.hour : -1.f);
               Logger::info(msg);
             }
           } else if (!h.skyApiWarned) {
@@ -2271,31 +2209,6 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
         }
       }
     }
-    // The sun's sources side by side (milestone 40, a diagnostic for the next step): the game's
-    // clock, the directional light the lit terrain shaders were handed in this frame, the vote,
-    // and the sun the hook holds. Every two seconds, at each step of the terrain's light, at the mark.
-    {
-      const bool fresh = h.terrainSunDraws > 0;
-      const float tl = sims3cam::luminance(h.terrainSunCol);
-      const bool stepped = fresh && (h.sunSourcesLum < 0.f || std::fabs(tl - h.sunSourcesLum) > 0.08f) && h.frames - h.sunSourcesFrame >= 10u;
-      if (h.clock.known && (h.frames % 120u == 0u || stepped || h.markDump == 2) && h.sunSourcesLogged < 900u) {
-        ++h.sunSourcesLogged; h.sunSourcesFrame = h.frames;
-        if (fresh) h.sunSourcesLum = tl;
-        sims3cam::SunVote match = {};
-        const bool haveMatch = h.shadowDirValid && h.voter.matching(h.shadowDir, match);
-        char msg[760];
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: sun sources, frame %u: clock %.2f h %s (sunrise %.2f, sunset %.2f); TERRAIN %s colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f (%u draws); VOTE %s colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f (%u votes, %u candidates); by the shadow's direction %s colour %.3f, %.3f, %.3f; SHADOW %s toward %.3f, %.3f, %.3f; HELD colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f",
-                 h.frames, h.clock.hour, h.clock.night ? "night" : "day", h.clock.sunrise, h.clock.sunset,
-                 fresh ? "this frame" : "not drawn, last", h.terrainSunCol[0], h.terrainSunCol[1], h.terrainSunCol[2], h.terrainSunDir[0], h.terrainSunDir[1], h.terrainSunDir[2], h.terrainSunDraws,
-                 haveVote ? "winner" : "none,", haveVote ? v.col[0] : 0.f, haveVote ? v.col[1] : 0.f, haveVote ? v.col[2] : 0.f, haveVote ? v.dir[0] : 0.f, haveVote ? v.dir[1] : 0.f, haveVote ? v.dir[2] : 0.f, haveVote ? v.count : 0u, h.voter.n,
-                 haveMatch ? "brightest" : "none,", match.col[0], match.col[1], match.col[2],
-                 !h.shadowDirValid ? "never seen," : (h.frames == h.shadowDirFrame + 1u ? "this frame" : "earlier"), h.shadowDir[0], h.shadowDir[1], h.shadowDir[2],
-                 h.sun.col[0], h.sun.col[1], h.sun.col[2], h.sun.dir[0], h.sun.dir[1], h.sun.dir[2]);
-        Logger::info(msg);
-      }
-      h.terrainSunDrawsLast = h.terrainSunDraws; h.terrainSunDraws = 0;
-    }
-    h.voter.clear();
   }
 
   return m_pSwapchain->Present(pSourceRect, pDestRect, hDestWindowOverride, pDirtyRegion, 0);
@@ -2424,7 +2337,7 @@ static void* sims3ApiLightReplace(void* old, const remixapi_LightInfo& info) {
   if (remixapi::remixapi_CreateLight(&info, &h) != REMIXAPI_ERROR_CODE_SUCCESS) return nullptr;
   return (void*) h;
 }
-static void* sims3ApiSun(void* old, const sims3cam::SunVote& s) {
+static void* sims3ApiSun(void* old, const sims3cam::Sun& s) {
   remixapi_LightInfoDistantEXT d = {};
   d.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_DISTANT_EXT;
   d.direction.x = -s.dir[0]; d.direction.y = -s.dir[1]; d.direction.z = -s.dir[2];   // the direction the light travels
@@ -4351,9 +4264,9 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
   ZoneScoped;
   LogFunctionCall();
   SIMS3_BEGIN_DRAW();
-  // The Sims 3 camera hook (milestone 40, a diagnostic): the directional light a lit terrain shader
-  // is handed for this draw, c0 its colour and c1 the direction toward it, for the log that sets
-  // it next to the vote.
+  // The Sims 3 camera hook: the directional light a lit terrain shader is handed for this draw, c0
+  // its colour and c1 the direction toward it: the sun, or the moon (milestone 41). Present
+  // forwards what the frame's last such draw was given.
   if (sims3cam::enabled() && primCount > 0 && sims3cam::isLitTerrainPs(g_sims3.psHash)) {
     memcpy(g_sims3.terrainSunCol, &m_state.pixelConstants.fConsts[0], sizeof g_sims3.terrainSunCol);
     memcpy(g_sims3.terrainSunDir, &m_state.pixelConstants.fConsts[1], sizeof g_sims3.terrainSunDir);
@@ -4891,16 +4804,6 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetVertexShaderConstantF(UINT StartRe
     return D3DERR_INVALIDCALL;
   }
 
-  // The Sims 3 camera hook: the sun's direction from the shadow-map view-projection rows.
-  if (sims3cam::enabled() && !g_sims3.ourConsts && !m_stateRecording && g_sims3.vsShadowReg >= 0 && StartRegister <= (UINT) g_sims3.vsShadowReg &&
-      StartRegister + Vector4fCount >= (UINT) g_sims3.vsShadowReg + 4) {
-    const float* rows = pConstantData + ((UINT) g_sims3.vsShadowReg - StartRegister) * 4;
-    float d[3];
-    if (sims3cam::shadowLightDir(rows, d)) {
-      g_sims3.shadowDir[0] = d[0]; g_sims3.shadowDir[1] = d[1]; g_sims3.shadowDir[2] = d[2];
-      g_sims3.shadowDirValid = true; g_sims3.shadowDirFrame = g_sims3.frames;
-    }
-  }
   // The Sims 3 camera hook: the World rows c4..c6 as the device holds them, for the lot terrain's
   // per-frame copy key (milestone 16); an upload may cover them partly.
   if (sims3cam::enabled() && !g_sims3.ourConsts && !m_stateRecording) {
@@ -5320,7 +5223,6 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreatePixelShader(CONST DWORD* pFunct
     sims3DumpShader("ps", hash, pFunction, count);
     if (const sims3cam::AlbedoStage* a = sims3cam::findAlbedoStage(hash)) {
       pLssPixelShader->sims3AlbedoStage = a->stage;
-      pLssPixelShader->sims3LightRig = a->rig ? a : nullptr;
       pLssPixelShader->sims3TintReg = a->tint ? sims3cam::kTintRegister : -1;
       char msg[224];
       snprintf(msg, sizeof msg, "Sims 3 camera hook: albedo is texture stage %u for %s%s%s", (unsigned) a->stage, a->name, a->rig ? "; carries the light rig" : "", a->tint ? "; tint constant c8 forwarded as texture factor" : "");
@@ -5399,11 +5301,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetPixelShaderConstantF(UINT StartReg
     return D3DERR_INVALIDCALL;
   }
 
-  // The Sims 3 camera hook: a light-rig upload (c0..c3 directions, c4..c7 colours) casts a
-  // vote for this frame's sun; Present forwards the winner as a fixed-function light.
-  if (sims3cam::enabled() && g_sims3.psRig != nullptr && StartRegister == 0 && Vector4fCount >= 8)
-    g_sims3.voter.add(pConstantData, pConstantData + 16);
-  // ...and the Create-A-Style tint constant of the bound pixel shader.
+  // The Sims 3 camera hook: the Create-A-Style tint constant of the bound pixel shader.
   if (sims3cam::enabled() && g_sims3.psTintReg >= 0 && (UINT) g_sims3.psTintReg >= StartRegister && (UINT) g_sims3.psTintReg < StartRegister + Vector4fCount) {
     const float* t = pConstantData + ((UINT) g_sims3.psTintReg - StartRegister) * 4;
     g_sims3.tint[0] = t[0]; g_sims3.tint[1] = t[1]; g_sims3.tint[2] = t[2];
