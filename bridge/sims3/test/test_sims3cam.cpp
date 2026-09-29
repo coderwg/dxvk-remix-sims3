@@ -478,6 +478,19 @@ int main() {
       for (int f = 0; f < 3; ++f) n = frame(-1, true, true, false, false);
       for (uint32_t f = 0; f <= LampSolver::kUnseenLimit; ++f) n = ls.solve();   // its object not drawn at all
       CHECK(n == 0 && ls.dropped == 4, "lamps: an unjudged lamp undrawn for ten seconds is released");
+      {
+        // milestone 29: a lamp's map is the texture its draws carry -- adopted at once, changed only after three consecutive draws with another
+        LampSolver lm; int a = 1, b = 2; void* A = &a; void* B = &b;
+        lm.addModelLamp(LampSolver::originId(base) ^ 0x9E3779B9u, 0, base, lampPos, liteCol, 100.f, 5, (int8_t) -1);
+        const bool c1 = lm.mapLamp(0, base, A, nullptr); const bool a1 = lm.lamps[0].map == A;
+        const bool c2 = lm.mapLamp(0, base, B, nullptr), c3 = lm.mapLamp(0, base, B, nullptr), c4 = lm.mapLamp(0, base, A, nullptr); const bool a4 = lm.lamps[0].map == A;
+        const bool c5 = lm.mapLamp(0, base, B, nullptr), c6 = lm.mapLamp(0, base, B, nullptr); void* from = nullptr; const bool c7 = lm.mapLamp(0, base, B, &from);
+        CHECK(c1 && a1 && !c2 && !c3 && !c4 && a4 && !c5 && !c6 && c7 && lm.lamps[0].map == B && from == A && lm.find(0, base) == &lm.lamps[0] && lm.find(1, base) == nullptr,
+              "lamps: a map is adopted at once, another only after three consecutive draws with it (two draws, a draw with its own map between, then three); find() by light and anchor");
+        const uint8_t px[4] = { 200, 30, 10, 255 }; std::vector<uint8_t> mx, rdp;
+        CHECK(decodeMaskMax((uint32_t) D3DFMT_A8R8G8B8, px, 4, 1, 1, mx) && mx[0] == 200 && decodeMaskRed((uint32_t) D3DFMT_A8R8G8B8, px, 4, 1, 1, rdp) && rdp[0] == 10,
+              "light map: the brightest channel of a blue texel reads 200 where the red plane reads 10");
+      }
             CHECK(findWorldReg(0x0ba6ddb9aa01913cull) == 12 && findWorldReg(0x7d1bc3ce6acbd715ull) == 16 && findWorldReg(0x1234ull) == -1, "lamps: World rows per object shader (c12 / c16); unknown -> none");
     }
     const AlbedoStage* tc = findTintConst(0x0c19795eb80e2e96ull);

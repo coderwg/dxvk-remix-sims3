@@ -94,6 +94,19 @@ inline bool decodeMaskRed(uint32_t format, const uint8_t* data, size_t size, uin
   }
 }
 
+// The brightest channel per texel (milestone 29): the lot's light map is coloured -- a lamp set
+// to blue lights its base in blue -- so its red plane alone reads dark there. A8R8G8B8 and
+// X8R8G8B8; any other format reads as decodeMaskRed.
+inline bool decodeMaskMax(uint32_t format, const uint8_t* data, size_t size, uint32_t w, uint32_t h, std::vector<uint8_t>& out) {
+  if (format != (uint32_t) D3DFMT_A8R8G8B8 && format != (uint32_t) D3DFMT_X8R8G8B8) return decodeMaskRed(format, data, size, w, h, out);
+  if (!data || w == 0 || h == 0 || w > 4096 || h > 4096) return false;
+  const size_t texels = (size_t) w * h;
+  if (size < texels * 4) return false;
+  out.resize(texels);
+  for (size_t i = 0; i < texels; ++i) { const uint8_t* q = data + i * 4; uint8_t m = q[0]; if (q[1] > m) m = q[1]; if (q[2] > m) m = q[2]; out[i] = m; }
+  return true;
+}
+
 // The cut can be switched off for A/B tests with SIMS3_WALL_CUT=0 (unset / 1 = on).
 inline bool wallCutEnabled() {
   static int s = -1;

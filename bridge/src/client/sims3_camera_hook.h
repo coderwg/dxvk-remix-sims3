@@ -1601,6 +1601,13 @@ inline void worldPoint(const float* rows, const float* p, float* out) {
 // frame carry at s2, not whatever the last lamp draw carried (a second texture displaced it
 // 63 times in run 141 while the map itself changed 17 times, each time re-judging every lamp
 // against the wrong texels). A lamp beyond the map's extent is not judged by it.
+// Milestone 29 (run 142): the lot has MORE THAN ONE light map -- a 256x128 one and a 128x128
+// one over the western half at the same texel size, both re-uploaded at every lighting change,
+// each carried by its own objects -- so the frame's majority map was the wrong map for half the
+// lamps half the time. Now each lamp is judged by the map its own draws carry (a shared texture,
+// adopted at once or after three consecutive draws with it), every carried map is decoded and
+// judges its lamps when its content changes. And the map is coloured: a lamp set to blue lit
+// its base in blue and its red plane read dark, so the brightest channel is read, not red.
 struct LampRay { float pos[3]; float dir[3]; float col[3]; };
 
 struct Lamp {
@@ -1618,6 +1625,9 @@ struct Lamp {
   uint32_t held;       // frames held for want of witnesses (statistics)
   bool drawn;          // the object was drawn this frame
   int8_t state;        // the light map's standing word for it (milestone 28): 1 on, 0 off, -1 not judged (beyond the map, or none read yet); it stands until the map says otherwise
+  void* map;           // the light map texture its draws carry (milestone 29); the device judges it through that map
+  void* mapCand;       // another map its draws have carried lately, adopted after kMapConfirm consecutive draws
+  uint8_t mapCandN;
   bool confirmedOnce;  // forwarded at least once (the event log)
   void* api;           // the Remix API light handle (the device destroys it on drop)
   float sentPos[3], sentCol[3]; bool sent;   // what the runtime holds
@@ -1697,6 +1707,29 @@ struct LampSolver {
   // A lamp from the game's definitions, once per draw of its object: the light's exact world
   // position; the definition's colour and intensity until the witnesses give the colour.
   // ...`state` is what the object's own draw says (milestone 25): 1 on, 0 off, -1 nothing readable this draw.
+  static const uint8_t kMapConfirm = 3;   // consecutive draws with another map before a lamp changes map (a one-off texture cannot steal it)
+  // The light map a lamp's draws carry (milestone 29): adopted at once when it has none, else only
+  // after kMapConfirm consecutive draws with the same other map. True when the lamp's map changed
+  // (from = the map it had).
+  bool mapLamp(uint8_t light, const float* anchor, void* map, void** from) {
+    for (uint32_t k = 0; k < nLamps; ++k) {
+      Lamp& L = lamps[k];
+      if (L.light != light || lampDist(L.anchor, anchor) > 0.5f) continue;
+      if (L.map == map) { L.mapCand = nullptr; L.mapCandN = 0; return false; }
+      if (L.map == nullptr || (L.mapCand == map && ++L.mapCandN >= kMapConfirm)) {
+        if (from) *from = L.map;
+        L.map = map; L.state = -1; L.mapCand = nullptr; L.mapCandN = 0;
+        return true;
+      }
+      if (L.mapCand != map) { L.mapCand = map; L.mapCandN = 1; }
+      return false;
+    }
+    return false;
+  }
+  const Lamp* find(uint8_t light, const float* anchor) const {
+    for (uint32_t k = 0; k < nLamps; ++k) if (lamps[k].light == light && lampDist(lamps[k].anchor, anchor) <= 0.5f) return &lamps[k];
+    return nullptr;
+  }
   void addModelLamp(uint32_t id, uint8_t light, const float* anchor, const float* pos, const float* col, float intensity, uint8_t kind, int8_t state) {
     for (uint32_t k = 0; k < nLamps; ++k) {
       Lamp& L = lamps[k];
