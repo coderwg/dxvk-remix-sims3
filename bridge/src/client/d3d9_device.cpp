@@ -2040,7 +2040,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
     const float jump = sims3cam::lampJump(), onLevel = sims3cam::lampOwnOn(), ring = sims3cam::lampRing();
     for (uint32_t k = 0; k < h.lamps.nLamps; ++k) {
       sims3cam::Lamp& L = h.lamps.lamps[k];
-      bool covered = false; float best = 0.f;
+      bool covered = false, wentOut = false, cameOn = false; float best = 0.f;
       for (int j = 0; j < 4; ++j) {
         const Sims3Hook::LightMapEntry& e = h.lightMaps[j];
         if (!e.tex || !e.valid) continue;
@@ -2050,25 +2050,34 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
           if (!sims3LightMapOwn(e, L.anchor, ring, r)) { L.ownInit &= (uint8_t) ~(1u << j); L.own[j] = 0.f; continue; }   // beyond this map
           const float was = init ? 0.f : L.own[j];
           const bool compared = changed[j] && !init && e.hasPrev && !e.fresh;
+          const float seen = init ? (float) r.base : L.seen[j];
           if (night) L.own[j] = sims3cam::lampLitByNight(r.base, r.darkest) ? (float) r.base : 0.f;
           else if (compared) L.own[j] = sims3cam::lampOwnDay(was, (float) r.base, (float) r.dBase, (float) r.dRing, jump);
-          else L.own[j] = was < (float) r.base ? was : (float) r.base;   // by day with nothing to compare: what it had stands, within what its base holds
+          else L.own[j] = sims3cam::lampOwnAfterGap(was, (float) r.base, seen);   // by day with no version to compare: the lamp's record of its base
+          L.seen[j] = (float) r.base;
           L.ownInit |= (uint8_t) (1u << j); ++h.lightMapVerdicts;
-          if ((was >= onLevel) != (L.own[j] >= onLevel) && h.lampFlipsLogged < 120) {
-            ++h.lampFlipsLogged; char msg[320];
-            snprintf(msg, sizeof msg, "Sims 3 camera hook: lamp at (%.1f, %.1f, %.1f) %s by light map %ux%u v%u at frame %u: base %d (moved by %d), the ring around it %d (moved by %d), the darkest near it %d; its own part %.0f -> %.0f; %s, sun level %.2f",
-                     L.anchor[0], L.anchor[1], L.anchor[2], L.own[j] >= onLevel ? "ON" : "off", e.W, e.H, e.version, h.frames, r.base, r.dBase, r.around, r.dRing, r.darkest,
-                     was, L.own[j], night ? "read as it is (night)" : (compared ? "by its change (day)" : "nothing to compare (day)"), h.skyLevel);
-            Logger::info(msg);
+          if ((was >= onLevel) != (L.own[j] >= onLevel)) {
+            if (!night) { if (L.own[j] >= onLevel) cameOn = true; else wentOut = true; }
+            if (h.lampFlipsLogged < (night ? 150u : 600u)) {   // the day's switches have the larger budget: they are the ones in question
+              ++h.lampFlipsLogged; char msg[340];
+              snprintf(msg, sizeof msg, "Sims 3 camera hook: lamp at (%.1f, %.1f, %.1f) %s by light map %ux%u v%u at frame %u: base %d (moved by %d, %.0f at its last reading), the ring around it %d (moved by %d), the darkest near it %d; its own part %.0f -> %.0f; %s, sun level %.2f",
+                       L.anchor[0], L.anchor[1], L.anchor[2], L.own[j] >= onLevel ? "ON" : "off", e.W, e.H, e.version, h.frames, r.base, r.dBase, seen, r.around, r.dRing, r.darkest,
+                       was, L.own[j], night ? "read as it is (night)" : (compared ? "by its change (day)" : "no version to compare (day)"), h.skyLevel);
+              Logger::info(msg);
+            }
           }
         }
-        if (L.ownInit & (1u << j)) { covered = true; if (L.own[j] > best) best = L.own[j]; }
+        if (L.ownInit & (1u << j)) covered = true;
       }
+      // by day a map that saw the lamp go out puts it out in every map (milestone 35): another map may
+      // not have seen the change, and what it holds would keep the lamp lit until the night
+      if (wentOut && !cameOn) for (int j = 0; j < 4; ++j) L.own[j] = 0.f;
+      for (int j = 0; j < 4; ++j) if ((L.ownInit & (1u << j)) && L.own[j] > best) best = L.own[j];
       if (covered) L.state = best >= onLevel ? (int8_t) 1 : (int8_t) 0;
       else if (L.state >= 0) { L.state = -1; ++h.lightMapOutside; }   // beyond every map now: back to its witnesses
     }
     h.lamps.solve();
-    for (uint32_t k = 0; k < h.lamps.nEvents && h.lampEventsLogged < 120; ++k) {   // every lamp's first light and its end, while the budget lasts
+    for (uint32_t k = 0; k < h.lamps.nEvents && h.lampEventsLogged < 600; ++k) {   // every lamp's lighting and putting out, while the budget lasts (milestone 35: 600, a day and a night of auto-lights took 120 in six minutes)
       const sims3cam::LampSolver::Event& e = h.lamps.events[k];
       ++h.lampEventsLogged; char msg[260];
       if (e.kind == 1)
@@ -4484,8 +4493,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
               if (!em_.tex || !em_.valid) continue;
               Sims3LampReading rd_;
               const bool in_ = sims3LightMapOwn(em_, g_sims3.objWorld, sims3cam::lampRing(), rd_);
-              n_ += (size_t) snprintf(msg_ + n_, sizeof msg_ - n_, " map %p %ux%u v%u: at the base %d, the ring around it %d, the darkest near it %d, its own part %.0f%s;",
-                                      (void*) em_.tex, em_.W, em_.H, em_.version, rd_.base, rd_.around, rd_.darkest, (Lm_ && (Lm_->ownInit & (1u << k_))) ? Lm_->own[k_] : -1.f, in_ ? "" : " (beyond it)");
+              n_ += (size_t) snprintf(msg_ + n_, sizeof msg_ - n_, " map %p %ux%u v%u: at the base %d (%.0f at its last reading), the ring around it %d, the darkest near it %d, its own part %.0f%s;",
+                                      (void*) em_.tex, em_.W, em_.H, em_.version, rd_.base, (Lm_ && (Lm_->ownInit & (1u << k_))) ? Lm_->seen[k_] : -1.f, rd_.around, rd_.darkest, (Lm_ && (Lm_->ownInit & (1u << k_))) ? Lm_->own[k_] : -1.f, in_ ? "" : " (beyond it)");
             }
             Logger::info(msg_);
           }

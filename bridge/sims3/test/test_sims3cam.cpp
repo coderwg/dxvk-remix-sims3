@@ -525,6 +525,12 @@ int main() {
                 "lamps: a rise its surroundings share is not the lamp's; a rise of its own is");
           CHECK(lampOwnDay(171.f, 0.f, -149.f, -1.f, 15.f) == 0.f && lampOwnDay(36.f, 20.f, 0.f, 0.f, 15.f) == 20.f,
                 "lamps: a lamp's own part is never more than the light at its base");
+          // milestone 35: what a lamp had is not known exactly (the map's limit, the daylight on top)
+          CHECK(lampOwnDay(255.f, 78.f, -177.f, -2.f, 15.f) == 0.f && lampOwnDay(255.f, 89.f, -166.f, 0.f, 15.f) == 0.f,
+                "lamps: a fall that takes most of what the lamp had puts it out, the daylight left at its base notwithstanding (run 148: 255 to 78 and to 89)");
+          CHECK(lampOwnDay(160.f, 200.f, -60.f, 0.f, 15.f) == 100.f, "lamps: a lesser fall dims it (160 to 100)");
+          CHECK(lampOwnAfterGap(255.f, 78.f, 255.f) == 0.f && lampOwnAfterGap(160.f, 150.f, 160.f) == 150.f && lampOwnAfterGap(0.f, 90.f, 20.f) == 0.f,
+                "lamps: a map unseen for a while compares the base with the lamp's record of it: gone, standing, never lit");
         }
       }
             CHECK(findWorldReg(0x0ba6ddb9aa01913cull) == 12 && findWorldReg(0x7d1bc3ce6acbd715ull) == 16 && findWorldReg(0x1234ull) == -1, "lamps: World rows per object shader (c12 / c16); unknown -> none");

@@ -1015,12 +1015,27 @@ inline bool lampLitByNight(int base, int darkest) { return base >= 40 && base >=
 // of the surroundings alone is another lamp's (run 147: neighbours switching off darkened the
 // rings of lamps whose own bases read 0, and the difference lit them). And a lamp's own part is
 // never more than the light at its base.
+// A fall that takes most of what the lamp had (kLampGone of it) puts it out altogether (milestone 35):
+// what it had is not known exactly -- a lit lamp's base reads 255, the map's limit, with the mods'
+// lamps, and by day the daylight sits on top -- so the remainder of a subtraction would be the
+// daylight, and the lamp would stand lit by it (run 148: 255 by night, 78 left in the morning).
+inline constexpr float kLampGone = 0.6f;
 inline float lampOwnDay(float own, float base, float dBase, float dRing, float jump) {
   float v = own;
   if (dBase >= jump) { const float rise = dBase - (dRing > 0.f ? dRing : 0.f); if (rise >= jump) v += rise; }
-  else if (dBase <= -jump) { const float fall = dBase - (dRing < 0.f ? dRing : 0.f); if (fall <= -jump) v += fall; }
+  else if (dBase <= -jump) {
+    const float fall = dBase - (dRing < 0.f ? dRing : 0.f);
+    if (fall <= -jump) v = (-fall >= kLampGone * own) ? 0.f : v + fall;
+  }
   if (v > base) v = base;
   return v < 0.f ? 0.f : v;
+}
+// A map read again by day with no version to compare (unseen for a while): the lamp's own record of
+// its base tells. seen = its base at its last reading: fallen by most of what the lamp had, the
+// lamp is out; else what it had stands, within what its base holds.
+inline float lampOwnAfterGap(float own, float base, float seen) {
+  if (own > 0.f && seen - base >= kLampGone * own) return 0.f;
+  return own < base ? own : base;
 }
 inline float lampShadeGlow() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampShadeGlow", 1000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
 
@@ -1683,6 +1698,10 @@ inline bool worldDir(const float* rows, const float* v, float* out) {
 // "by night" at a load by day, the sun not yet known (level 0). Now: by night -- the sun level
 // under the night level for ten seconds with the maps live -- the proven reading of the map as it
 // is; by day a change of the lamp's own base only, and never more own light than the base holds.
+// Milestone 35 (run 148): a whole day and night held; the next morning two lamps stood lit, their
+// own part exactly their base's daylight reading (78, 89) in one map and 0 in the other. A fall
+// that takes most of what a lamp had now puts it out; a map that sees a lamp go out puts it out
+// in every map; and a map unseen for a while compares the base with the lamp's record of it.
 struct LampRay { float pos[3]; float dir[3]; float col[3]; };
 
 struct Lamp {
@@ -1702,6 +1721,7 @@ struct Lamp {
   int8_t state;        // the light map's standing word for it (milestone 28): 1 on, 0 off, -1 not judged (beyond the map, or none read yet); it stands until the map says otherwise
   float own[4];        // its own part of the light at its base, per light map slot (milestone 33; map units 0..255)
   uint8_t ownInit;     // the slots that have read it once
+  float seen[4];       // its base at its last reading, per slot (milestone 35)
   void* map;           // the light map texture its draws carry (milestone 29; a diagnostic since milestone 31)
   void* mapCand;       // another map its draws have carried lately, adopted after kMapConfirm consecutive draws
   uint8_t mapCandN;
