@@ -1037,6 +1037,54 @@ inline float lampOwnAfterGap(float own, float base, float seen) {
   if (own > 0.f && seen - base >= kLampGone * own) return 0.f;
   return own < base ? own : base;
 }
+
+// ---- the lamps' own word (milestone 36) --------------------------------------------------
+// The light map only lets a lamp's state be INFERRED. The game's scripts know it exactly, and
+// the lamp reporter (sims3/scriptmod: a script mod) hands it over: for every lamp near the
+// camera its position, whether it is on, its colour and its intensity, written a few times a
+// second into a block of memory the hook finds by its signature (the block's head carries the
+// block's own address, so nothing else in the process passes for it). Where the reporter
+// speaks, its word is the lamp's state; the maps decide only lamps it does not name.
+inline bool lampReporter() { static int s = -1; if (s < 0) s = hookOption("lampReporter", 1) != 0 ? 1 : 0; return s == 1; }
+inline constexpr uint32_t kLampMagic0 = 0x58523353u, kLampMagic1 = 0x504D414Cu, kLampMagic2 = 0x31303076u;   // 'S3RX' 'LAMP' 'v001'
+inline constexpr uint32_t kLampHead = 64, kLampFloats = 12, kLampCapacity = 512;
+// The block's head, checked: the signature, the block's own address, the version, the record
+// size, a lamp count within the capacity. head = its first 64 bytes as read.
+inline bool lampReportHead(const uint8_t* head, uint32_t address, uint32_t& lamps, uint32_t& sequence, bool& world) {
+  uint32_t h[16]; std::memcpy(h, head, sizeof h);
+  if (h[0] != kLampMagic0 || h[1] != kLampMagic1 || h[2] != kLampMagic2 || h[3] != address) return false;
+  if (h[4] != 1u || h[7] != kLampFloats || h[8] > kLampCapacity || h[6] > h[8]) return false;
+  lamps = h[6]; sequence = h[5]; world = h[10] != 0;
+  return true;
+}
+// The record of the lamp whose object stands at `anchor`: the nearest within half a unit in the
+// ground plane and a unit and a half in height. records = the lamps' records (12 floats each).
+inline const float* lampReportFind(const float* records, uint32_t lamps, const float* anchor) {
+  const float* best = nullptr; float bestD = 0.5f * 0.5f;
+  for (uint32_t k = 0; k < lamps; ++k) {
+    const float* r = records + (size_t) k * kLampFloats;
+    const float dx = r[0] - anchor[0], dy = r[1] - anchor[1], dz = r[2] - anchor[2];
+    if (dy > 1.5f || dy < -1.5f) continue;
+    const float d = dx * dx + dz * dz;
+    if (d <= bestD) { bestD = d; best = r; }
+  }
+  return best;
+}
+// A record's word for a lamp: on or off, and the colour to send -- the player's colour (a preset's
+// or a custom one; the definition's own when the lamp is left at its default, preset 13) times the
+// definition's intensity times the level the player set, relative to the game's normal level.
+struct LampWord { bool on; float col[3]; float level; };
+inline LampWord lampWordFromRecord(const float* r, const float* defCol, float defIntensity, float normalLevel) {
+  LampWord w;
+  w.on = r[8] > 0.5f;   // the game's IsLightOn(); the engine's dimmer and EmitsLight ride along in the record for the log
+  float c[3] = { r[3], r[4], r[5] };
+  if ((int) (r[9] + 0.5f) == 13) { c[0] = defCol[0]; c[1] = defCol[1]; c[2] = defCol[2]; }
+  else if (c[0] > 1.5f || c[1] > 1.5f || c[2] > 1.5f) { c[0] /= 255.f; c[1] /= 255.f; c[2] /= 255.f; }
+  w.level = (normalLevel > 1e-4f && r[6] > 0.f) ? r[6] / normalLevel : 1.f;
+  if (w.level > 4.f) w.level = 4.f;
+  for (int q = 0; q < 3; ++q) w.col[q] = c[q] * defIntensity / 100.f * w.level;
+  return w;
+}
 inline float lampShadeGlow() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampShadeGlow", 1000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
 
 // layerPass: every draw is a layer pass. lotFamily: a lot's ground and its paint composite --
@@ -1722,6 +1770,9 @@ struct Lamp {
   float own[4];        // its own part of the light at its base, per light map slot (milestone 33; map units 0..255)
   uint8_t ownInit;     // the slots that have read it once
   float seen[4];       // its base at its last reading, per slot (milestone 35)
+  float def[3];        // the definition's colour and intensity (milestone 36: what the reporter's word scales)
+  float defIntensity;
+  bool reported;       // the lamp reporter names it: its state and colour are the game's own word
   void* map;           // the light map texture its draws carry (milestone 29; a diagnostic since milestone 31)
   void* mapCand;       // another map its draws have carried lately, adopted after kMapConfirm consecutive draws
   uint8_t mapCandN;
@@ -1864,6 +1915,8 @@ struct LampSolver {
     std::memset(&L, 0, sizeof L);
     for (int q = 0; q < 3; ++q) { L.anchor[q] = anchor[q]; L.pos[q] = pos[q]; L.col[q] = col[q] * intensity / 100.f; }
     L.base = luminance(col) * intensity / 100.f;
+    for (int q = 0; q < 3; ++q) L.def[q] = col[q];
+    L.defIntensity = intensity;
     L.id = id; L.light = light; L.kind = kind; L.drawn = true; L.state = state;
     ++created;
   }
@@ -1913,7 +1966,8 @@ struct LampSolver {
         L.missing = 0;
         if (L.age < 100000u) ++L.age;
         // the hue: the witnesses' rays (the player's colour choice); the brightness the game's
-        if (luminance(sum) > 1e-6f) { const float hl = luminance(sum); const float sc = L.age <= 1 ? 1.f : 0.2f; for (int q = 0; q < 3; ++q) L.col[q] += sc * (sum[q] / hl * L.base - L.col[q]); }
+        // (a lamp the reporter names has its colour from the game's own word, milestone 36)
+        if (!L.reported && luminance(sum) > 1e-6f) { const float hl = luminance(sum); const float sc = L.age <= 1 ? 1.f : 0.2f; for (int q = 0; q < 3; ++q) L.col[q] += sc * (sum[q] / hl * L.base - L.col[q]); }
         if (L.age == kConfirmFrames) { ++lit; record(1, L, pointing); }
       } else if (verdict == 0) {
         if (L.age > 0) {

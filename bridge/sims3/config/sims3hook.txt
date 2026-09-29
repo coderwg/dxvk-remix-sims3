@@ -36,6 +36,9 @@ lampRadiance = 40000
 # lampOwnOn       the own part from which a lamp is on, in map units
 # lampRing        the radius of the ring of points taken as the lamp's surroundings, in thousandths of a unit
 # lampNightLevel  the sun level, in thousandths, below which a map is read outright (no daylight in it)
+# lampReporter    1 = take the lamps' state, colour and level from the lamp reporter script mod (Sims3RtxLamps.package in
+#                 Mods\Packages) wherever it names a lamp; the light map decides only the lamps it does not name. 0 = the map alone
+lampReporter = 1
 lampJump = 15
 lampOwnOn = 25
 lampRing = 2500

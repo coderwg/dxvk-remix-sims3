@@ -33,6 +33,8 @@
 #include "d3d9_texture.h"
 #include "sims3_camera_hook.h"
 #include "sims3_walls.h"
+#include <atomic>
+#include <thread>
 // The Sims 3 camera hook (milestone 17): the runtime identifies textures by the XXH3 of their
 // level-0 bytes; with xxhash.h next to this file the hook computes its marker textures' hashes
 // and sets the runtime's terrain options itself, otherwise the markers are tagged in the menu.
@@ -121,6 +123,9 @@ namespace {
     uint64_t ibHash[512] = {};   // the hash per cached index buffer (milestone 29: the mark dump names meshes the light table does not know)
     uint32_t loggedShapes = 0;   // light types whose first shaped lamp has been logged (milestone 32)
     uint32_t lampFlipsLogged = 0;   // lamps' switches by the maps written to the log (milestone 33, bounded)
+    // the lamp reporter's block (milestone 36): this frame's records, as read
+    std::vector<float> lampRecords; uint32_t lampReported = 0, lampReportSeq = 0, lampReportReads = 0, lampReportStale = 0, lampReportFails = 0, lampReportMatched = 0, lampReportScanFrame = 0, lampWordsLogged = 0;
+    bool lampReportLive = false, lampReportWorld = false, lampReportAnnounced = false;
     uint32_t lampNightFrames = 0; bool lampNight = false;   // consecutive frames of a sun level under the night level with the maps live; night once it has lasted (milestone 34)
     bool objWorldValid = false;          // ...and whether it has been uploaded since the shader was bound
     float rig[32] = {};                  // c0..c7 of the bound rig pixel shader (directions, colours)
@@ -297,6 +302,11 @@ namespace {
     struct AltCam { float fovY, nearZ, farZ, aspect, p33, p43, pos[3], fwdY; uint64_t vs; uint32_t count; bool first; };
     AltCam frameAlts[4] = {}; uint32_t frameAltCount = 0;
   } g_sims3;
+
+  // the lamp reporter's block (milestone 36): where it was found, and the search for it
+  std::atomic<const uint8_t*> g_sims3LampBlock { nullptr };
+  std::atomic<bool> g_sims3LampScanBusy { false };
+  std::atomic<uint32_t> g_sims3LampScans { 0 };
 
   // The Sims 3 camera hook (milestone 29): an object-shader draw notes the A8R8G8B8 texture it carries at s2 -- one of
   // the lot's light maps -- with its projection rows (y-free: a top-down map) and whether a second object has carried
@@ -1889,6 +1899,10 @@ static void sims3LogStats(bool withTable) {
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   light maps: %s; %u versions decoded, %u judgements, %u decode failures; lamps: %u of %u without a map, %u beyond theirs (%u fell beyond), %u changed map",
            mn ? maps : "none noted", h.lightMapDecodes, h.lightMapVerdicts, h.lightMapFails, unmapped, h.lamps.nLamps, unjudged, h.lightMapOutside, h.lightMapSwitches);
   Logger::info(msg);
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   lamp reporter: %s; %u lamps reported, %u of the hook's %u lamps named by it; %u readings (%u while it was writing), %u searches",
+           !sims3cam::lampReporter() ? "switched off (lampReporter = 0)" : (h.lampReportLive ? "live" : (g_sims3LampBlock.load() ? "found, no world loaded" : "not found (the script mod is not installed, or no world has loaded yet)")),
+           h.lampReported, h.lampReportMatched, h.lamps.nLamps, h.lampReportReads, h.lampReportStale, g_sims3LampScans.load());
+  Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   api lights: %s; %u calls, sun %s, %u lamp handles; the game's light table: %s",
            GlobalOptions::getExposeRemixApi() ? "on" : "off (no lights: exposeRemixApi is not set)", h.apiLightCalls, h.sunApi ? "live" : "none", lampHandles,
            sims3cam::liteTable().n ? format_string("%u models read from sims3lights.txt, %u meshes matched", sims3cam::liteTable().n, h.liteMatches).c_str() : "no sims3lights.txt next to the DLL (no lamps; run sims3/tools/lite_table.py --hook)");
@@ -2005,6 +2019,52 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
     auto& h = g_sims3;
     const bool api = GlobalOptions::getExposeRemixApi();
     const uint32_t raysThisFrame = h.lamps.nRays;
+    // The lamps' own word (milestone 36): the lamp reporter's block, found once and read every frame.
+    // A lamp it names takes its state, its colour and its level from it; the maps below decide the rest.
+    if (sims3cam::lampReporter()) {
+      const uint8_t* block = g_sims3LampBlock.load();
+      if (!block && !g_sims3LampScanBusy.load() && (h.lampReportScanFrame == 0 || h.frames - h.lampReportScanFrame > (g_sims3LampScans.load() < 12u ? 600u : 3600u))) {
+        h.lampReportScanFrame = h.frames ? h.frames : 1;
+        g_sims3LampScanBusy = true;
+        std::thread(sims3LampScan).detach();
+      }
+      h.lampReportLive = false;
+      if (block) {
+        if (h.lampRecords.size() < (size_t) (sims3cam::kLampCapacity + 1) * sims3cam::kLampFloats) h.lampRecords.resize((size_t) (sims3cam::kLampCapacity + 1) * sims3cam::kLampFloats);
+        static std::vector<float> fresh; if (fresh.size() < h.lampRecords.size()) fresh.resize(h.lampRecords.size());
+        uint32_t lamps = 0, seq = 0; bool world = false;
+        const int r = sims3LampRead(block, fresh.data(), lamps, seq, world);
+        if (r == 0) { h.lampRecords.swap(fresh); h.lampReported = lamps; h.lampReportSeq = seq; h.lampReportWorld = world; ++h.lampReportReads; h.lampReportFails = 0; }
+        else if (r == 1) ++h.lampReportStale;   // being written: the last whole reading stands
+        else if (++h.lampReportFails > 300u) { g_sims3LampBlock = nullptr; h.lampReported = 0; h.lampReportWorld = false; h.lampReportFails = 0; Logger::info("Sims 3 camera hook: the lamp reporter's block is gone; searching again"); }
+        h.lampReportLive = h.lampReportReads > 0 && h.lampReportWorld;
+        if (h.lampReportLive && !h.lampReportAnnounced) {
+          h.lampReportAnnounced = true;
+          const float* f0 = h.lampRecords.data();
+          char msg[300];
+          snprintf(msg, sizeof msg, "Sims 3 camera hook: the lamp reporter found at %p after %u searches, frame %u: %u lamps within %.0f units of the camera target (%.1f, %.1f, %.1f); the game's intensity levels dim %.2f, normal %.2f, bright %.2f",
+                   (const void*) block, g_sims3LampScans.load(), h.frames, h.lampReported, f0[3], f0[0], f0[1], f0[2], f0[4], f0[5], f0[6]);
+          Logger::info(msg);
+        }
+      }
+      h.lampReportMatched = 0;
+      for (uint32_t k = 0; k < h.lamps.nLamps; ++k) {
+        sims3cam::Lamp& L = h.lamps.lamps[k];
+        const float* rec = h.lampReportLive ? sims3cam::lampReportFind(h.lampRecords.data() + sims3cam::kLampFloats, h.lampReported, L.anchor) : nullptr;
+        if (!rec) { L.reported = false; continue; }
+        const sims3cam::LampWord w = sims3cam::lampWordFromRecord(rec, L.def, L.defIntensity, h.lampRecords[5]);
+        const bool was = L.reported && L.state == 1;
+        L.reported = true; ++h.lampReportMatched;
+        L.state = w.on ? (int8_t) 1 : (int8_t) 0;
+        for (int q = 0; q < 3; ++q) L.col[q] = w.col[q];
+        if (was != w.on && h.lampWordsLogged < 600u) {
+          ++h.lampWordsLogged; char msg[300];
+          snprintf(msg, sizeof msg, "Sims 3 camera hook: lamp at (%.1f, %.1f, %.1f) %s by the game's own word at frame %u: colour preset %d (%.2f, %.2f, %.2f), intensity %.2f (level x%.2f), the engine's dimmer %.2f; sent colour %.2f, %.2f, %.2f",
+                   L.anchor[0], L.anchor[1], L.anchor[2], w.on ? "ON" : "off", h.frames, (int) (rec[9] + 0.5f), rec[3], rec[4], rec[5], rec[6], w.level, rec[7], w.col[0], w.col[1], w.col[2]);
+          Logger::info(msg);
+        }
+      }
+    }
     // Every light map carried this frame is decoded anew when its content changed (milestone 29) and
     // then judges the lamps that sample it, drawn this frame or not; a lamp its map has not judged yet
     // is judged as soon as it can be. A map no draw has carried for ten seconds is forgotten (its lamps
@@ -2040,6 +2100,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
     const float jump = sims3cam::lampJump(), onLevel = sims3cam::lampOwnOn(), ring = sims3cam::lampRing();
     for (uint32_t k = 0; k < h.lamps.nLamps; ++k) {
       sims3cam::Lamp& L = h.lamps.lamps[k];
+      if (L.reported) continue;   // the game's own word stands (milestone 36)
       bool covered = false, wentOut = false, cameOn = false; float best = 0.f;
       for (int j = 0; j < 4; ++j) {
         const Sims3Hook::LightMapEntry& e = h.lightMaps[j];
@@ -2321,6 +2382,50 @@ void Direct3DDevice9Ex_LSS<EnableSync>::GetGammaRamp(UINT iSwapChain, D3DGAMMARA
     ClientMessage c(Commands::IDirect3DDevice9Ex_GetGammaRamp, getId());
     c.send_data(iSwapChain);
   }
+}
+
+// The Sims 3 camera hook (milestone 36): the lamp reporter's block. A script mod allocates it,
+// marks its head and rewrites the lamps near the camera a few times a second; it sits somewhere
+// in the process's private memory. It is searched for on a thread of its own (the search reads
+// through the whole process, a second's work) and read every frame; every read of it is
+// guarded, the memory being the game's.
+static const uint8_t* sims3LampScanRegion(const uint8_t* base, size_t size) {
+  __try {
+    if (size < 64) return nullptr;
+    const uint32_t* q = (const uint32_t*) base;
+    const uint32_t* end = (const uint32_t*) (base + (size & ~(size_t) 3)) - 16;
+    for (; q <= end; ++q)
+      if (q[0] == sims3cam::kLampMagic0 && q[1] == sims3cam::kLampMagic1 && q[2] == sims3cam::kLampMagic2 && q[3] == (uint32_t) (uintptr_t) q) return (const uint8_t*) q;
+  } __except (EXCEPTION_EXECUTE_HANDLER) { }
+  return nullptr;
+}
+static void sims3LampScan() {
+  const uint8_t* a = (const uint8_t*) 0x10000; const uint8_t* found = nullptr;
+  MEMORY_BASIC_INFORMATION mbi;
+  while (!found && VirtualQuery(a, &mbi, sizeof mbi) == sizeof mbi) {
+    if (mbi.State == MEM_COMMIT && mbi.Type == MEM_PRIVATE && mbi.Protect == PAGE_READWRITE && mbi.RegionSize <= ((size_t) 256 << 20))
+      found = sims3LampScanRegion((const uint8_t*) mbi.BaseAddress, mbi.RegionSize);
+    const uint8_t* next = (const uint8_t*) mbi.BaseAddress + mbi.RegionSize;
+    if (next <= a) break;
+    a = next;
+  }
+  if (found) g_sims3LampBlock = found;
+  ++g_sims3LampScans;
+  g_sims3LampScanBusy = false;
+}
+// The block read whole: its head checked, its records copied, and its sequence the same before and
+// after (an odd one means the reporter is writing). 0 read, 1 being written, 2 not the block any more.
+static int sims3LampRead(const uint8_t* block, float* out, uint32_t& lamps, uint32_t& sequence, bool& world) {
+  __try {
+    MEMORY_BASIC_INFORMATION mbi;
+    if (VirtualQuery(block, &mbi, sizeof mbi) != sizeof mbi || mbi.State != MEM_COMMIT || (mbi.Protect & 0xFF) != PAGE_READWRITE) return 2;
+    uint8_t head[64]; memcpy(head, block, sizeof head);
+    if (!sims3cam::lampReportHead(head, (uint32_t) (uintptr_t) block, lamps, sequence, world)) return 2;
+    if (sequence & 1u) return 1;
+    memcpy(out, block + sims3cam::kLampHead, (size_t) (lamps + 1) * sims3cam::kLampFloats * sizeof(float));
+    uint32_t after; memcpy(&after, block + 20, sizeof after);
+    return after == sequence ? 0 : 1;
+  } __except (EXCEPTION_EXECUTE_HANDLER) { return 2; }
 }
 
 // The Sims 3 camera hook (milestones 27-29): the lot's light maps. A map noted by the draws
@@ -4487,6 +4592,12 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
             size_t n_ = (size_t) snprintf(msg_, sizeof msg_, "Sims 3 camera hook: lamp object at the mark, frame %u, object at (%.1f, %.1f, %.1f) model %016llx: s2 %p%s; its draws' map %p, standing word %d;",
                                           g_sims3.frames + 1, g_sims3.objWorld[0], g_sims3.objWorld[1], g_sims3.objWorld[2], (unsigned long long) m_.inst, (void*) g_sims3.boundTex[2],
                                           e_ ? (e_->shared ? " (a shared map)" : " (seen on this object only)") : " (not a noted map)", Lm_ ? Lm_->map : nullptr, Lm_ ? (int) Lm_->state : -2);
+            {
+              const float* rec_ = g_sims3.lampReportLive ? sims3cam::lampReportFind(g_sims3.lampRecords.data() + sims3cam::kLampFloats, g_sims3.lampReported, g_sims3.objWorld) : nullptr;
+              if (rec_ && n_ < sizeof msg_ - 160) n_ += (size_t) snprintf(msg_ + n_, sizeof msg_ - n_, " the game's own word: %s, colour preset %d (%.2f, %.2f, %.2f), intensity %.2f, dimmer %.2f, at (%.1f, %.1f, %.1f);",
+                                                                          rec_[8] > 0.5f ? "ON" : "off", (int) (rec_[9] + 0.5f), rec_[3], rec_[4], rec_[5], rec_[6], rec_[7], rec_[0], rec_[1], rec_[2]);
+              else if (n_ < sizeof msg_ - 60) n_ += (size_t) snprintf(msg_ + n_, sizeof msg_ - n_, " the game's own word: none (%s);", g_sims3.lampReportLive ? "the reporter does not name it" : "no reporter");
+            }
             if (n_ < sizeof msg_ - 60) n_ += (size_t) snprintf(msg_ + n_, sizeof msg_ - n_, " sun level %.2f, maps read %s;", g_sims3.skyLevel, g_sims3.lampNight ? "as they are (night)" : "by their changes (day)");
             for (int k_ = 0; k_ < 4 && n_ < sizeof msg_ - 140; ++k_) {
               const Sims3Hook::LightMapEntry& em_ = g_sims3.lightMaps[k_];

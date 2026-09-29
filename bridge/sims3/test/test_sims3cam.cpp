@@ -531,6 +531,28 @@ int main() {
           CHECK(lampOwnDay(160.f, 200.f, -60.f, 0.f, 15.f) == 100.f, "lamps: a lesser fall dims it (160 to 100)");
           CHECK(lampOwnAfterGap(255.f, 78.f, 255.f) == 0.f && lampOwnAfterGap(160.f, 150.f, 160.f) == 150.f && lampOwnAfterGap(0.f, 90.f, 20.f) == 0.f,
                 "lamps: a map unseen for a while compares the base with the lamp's record of it: gone, standing, never lit");
+          {
+            // milestone 36: the lamp reporter's block
+            uint32_t head[16] = { kLampMagic0, kLampMagic1, kLampMagic2, 0x12345678u, 1u, 40u, 2u, kLampFloats, kLampCapacity, 7u, 1u, 0u, 0u, 0u, 0u, 0u };
+            uint32_t lamps = 0, seq = 0; bool world = false;
+            CHECK(lampReportHead((const uint8_t*) head, 0x12345678u, lamps, seq, world) && lamps == 2 && seq == 40 && world, "reporter: a whole head is taken: 2 lamps, sequence 40, a world loaded");
+            CHECK(!lampReportHead((const uint8_t*) head, 0x12345679u, lamps, seq, world), "reporter: a head that does not carry its own address is not the block (a copy of the signature elsewhere)");
+            head[6] = kLampCapacity + 1u;
+            CHECK(!lampReportHead((const uint8_t*) head, 0x12345678u, lamps, seq, world), "reporter: more lamps than the capacity is not a head to trust");
+            //                      x      y      z     r    g    b   intens dimmer on  preset emits level
+            const float recs[24] = { 10.f, 45.9f, 20.f, 0.f, 0.f, 1.f, 0.5f, 0.5f, 1.f, 3.f,  1.f, 0.f,
+                                     14.f, 46.7f, 22.f, 1.f, 1.f, 1.f, 1.f,  0.f,  0.f, 13.f, 1.f, 0.f };
+            const float here[3] = { 10.2f, 45.9f, 20.1f }, table[3] = { 14.f, 45.9f, 22.f }, away[3] = { 12.f, 45.9f, 21.f }, above[3] = { 10.f, 49.f, 20.f };
+            CHECK(lampReportFind(recs, 2, here) == recs && lampReportFind(recs, 2, table) == recs + 12 && lampReportFind(recs, 2, away) == nullptr && lampReportFind(recs, 2, above) == nullptr,
+                  "reporter: a lamp's record is the one at its object: within half a unit on the ground, a floor apart is another lamp");
+            const float defCol[3] = { 1.f, 0.9f, 0.8f };
+            const LampWord blue = lampWordFromRecord(recs, defCol, 60.f, 1.f), off = lampWordFromRecord(recs + 12, defCol, 60.f, 1.f);
+            CHECK(blue.on && nearf(blue.level, 0.5f) && blue.col[0] == 0.f && nearf(blue.col[2], 0.3f), "reporter: a blue lamp at the dim level: on, blue, the definition's 60 at half (%.2f %.2f %.2f)", blue.col[0], blue.col[1], blue.col[2]);
+            CHECK(!off.on && nearf(off.col[0], 0.6f) && nearf(off.col[2], 0.48f), "reporter: a lamp left at its default colour takes the definition's; switched off, it is off");
+            const float custom[12] = { 0.f, 0.f, 0.f, 255.f, 128.f, 0.f, 1.f, 1.f, 1.f, 9.f, 1.f, 0.f };
+            const LampWord c = lampWordFromRecord(custom, defCol, 100.f, 1.f);
+            CHECK(c.on && nearf(c.col[0], 1.f) && nearf(c.col[1], 128.f / 255.f), "reporter: a custom colour given in 0..255 is scaled to 0..1");
+          }
         }
       }
             CHECK(findWorldReg(0x0ba6ddb9aa01913cull) == 12 && findWorldReg(0x7d1bc3ce6acbd715ull) == 16 && findWorldReg(0x1234ull) == -1, "lamps: World rows per object shader (c12 / c16); unknown -> none");
