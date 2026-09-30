@@ -17,9 +17,11 @@ markKey = 220
 # sunAngle      the sun's and the moon's angular diameter in thousandths of a degree
 # sunRadiance   their radiance per unit of the game's colour, thousandths
 # moonLight     the moon's share of the game's moonlight in percent (100 = the game's own; 0 = none, the night stays dark)
-# dawnMinutes   the sun's rise eased over this many game minutes after sunrise (the game's own rise is over in twelve); 0 = as the game has it
-# duskMinutes   the sun's afterglow: held when its light falls below duskLevel during dusk, faded out over this many game minutes; 0 = none
-# duskLevel     the level of full sunlight, in thousandths, below which the afterglow begins (the game's own dusk drops from red to nothing in twelve minutes)
+# Dusk and dawn are cross-fades of the two lights in equal parts, the hook's own (the game's own changes are over in twelve minutes):
+# dawnMinutes   from sunrise, over this many game minutes, the moon fades from its floor to nothing while the sun rises to the game's own light; 0 = as the game has it
+# duskMinutes   from the moment the game's light becomes the moon's (an hour after sunset), over this many game minutes, the sun's afterglow fades
+#               to nothing while the moon rises to its floor; 0 = as the game has it
+# duskLevel     the level of full sunlight, in thousandths, below which the sun is held as the afterglow until the moon comes
 # lampRadius    the lamps' sphere radius in thousandths of a unit
 # lampRadiance  the lamps' radiance per unit of colour, thousandths
 skyFromSun = 1
@@ -31,7 +33,7 @@ sunAngle = 2000
 sunRadiance = 1000
 moonLight = 2
 dawnMinutes = 60
-duskMinutes = 40
+duskMinutes = 60
 duskLevel = 100
 lampRadius = 150
 lampRadiance = 40000

@@ -548,41 +548,46 @@ int main() {
       CHECK(nearf(dawnEase(clockAt(6.f), 1.f), 0.f) && nearf(dawnEase(clockAt(6.5f), 1.f), 0.5f) && nearf(dawnEase(clockAt(7.f), 1.f), 1.f) && nearf(dawnEase(clockAt(5.9f), 1.f), 1.f) && nearf(dawnEase(clockAt(12.f), 1.f), 1.f),
             "dawn: eased over an hour after sunrise, nothing at sunrise, half at half past, the game's own from seven; untouched before sunrise and by day");
       CHECK(nearf(dawnEase(clockAt(6.5f), 0.f), 1.f) && nearf(dawnEase(unknownClock, 1.f), 1.f) && nearf(dawnEase(clockAt(6.5f), 2.f), 0.25f), "dawn: no ease without minutes or without the clock; two hours ease a quarter at half past six");
+      CHECK(duskFade(clockAt(18.5f), 1.f) < 0.f && nearf(duskFade(clockAt(19.f), 1.f), 0.f) && nearf(duskFade(clockAt(19.5f), 1.f), 0.5f) && nearf(duskFade(clockAt(20.f), 1.f), 1.f) && nearf(duskFade(clockAt(1.f), 1.f), 1.f) && nearf(duskFade(clockAt(19.5f), 0.f), 1.f) && nearf(duskFade(unknownClock, 1.f), 1.f),
+            "dusk: before the light is the moon's the fade is not begun; from an hour after sunset it rises over the hours given; past it, without hours or without the clock it is done");
       CHECK(clockDusk(clockAt(18.f)) && clockDusk(clockAt(19.9f)) && !clockDusk(clockAt(20.f)) && !clockDusk(clockAt(4.f)) && !clockDusk(clockAt(12.f)) && !clockDusk(unknownClock), "clock: dusk is the two hours from sunset");
       {
-        // a game day from noon: the sun's afterglow over 40 minutes from a tenth of full, the moon at a twentieth
+        // a game day from noon: the moon at a twentieth, the cross-fades an hour each: at dusk the afterglow (from a tenth
+        // of full) against the rising moon, at dawn the moon against the eased sun
         SkyLights sky; int begins = 0, ends = 0;
-        bool noonSun = false, glowBrighter = false, duskBoth = false, glowGone = false, nightMoon = false, moonMoves = false, dawnSunAlone = false, morningSun = false, sunriseKept = false; float glowAt = 0.f, endAt = 0.f, lowest = 9.f, lowestAt = 0.f;
+        bool noonSun = false, glowHeld = false, duskBoth = false, glowGone = false, nightMoon = false, moonMoves = false, dawnSunAlone = false, morningSun = false, sunriseKept = false, dawnBoth = false; float glowAt = 0.f, endAt = 0.f, lowest = 9.f, lowestAt = 0.f;
         for (int i = 0; i <= 2000; ++i) {   // to eight the next morning, a hundredth of an hour a step
           const float t = 12.f + 0.01f * (float) i, hour = t >= 24.f ? t - 24.f : t;
           const GameClock c = clockAt(hour);
-          const Sun g = gameLight(hour);
-          const int what = sky.step(g, clockMoonTime(c), 0.05f, hour, clockDusk(c), 0.1f, 40.f / 60.f);
+          const float kDawn = clockMoonTime(c) ? 1.f : dawnEase(c, 1.f);
+          Sun g = gameLight(hour); if (kDawn < 1.f) for (int q = 0; q < 3; ++q) g.col[q] *= kDawn;   // as the device eases the sun
+          const int what = sky.step(g, clockMoonTime(c), 0.05f, duskFade(c, 1.f), kDawn, clockDusk(c), 0.1f);
           if (what == 1) { ++begins; glowAt = hour; } if (what == 2) { ++ends; endAt = hour; }
-          if (t >= 19.f && t <= 30.02f && sky.level() < lowest) { lowest = sky.level(); lowestAt = hour; }
+          if (t >= 19.f && t <= 31.f && sky.level() < lowest) { lowest = sky.level(); lowestAt = hour; }
           if (i == 0) noonSun = sky.showing[0] && !sky.showing[1] && nearf(luminance(sky.shown[0].col), 1.f);
-          if (nearf(t, 18.97f)) glowBrighter = sky.glowing && sky.showing[0] && luminance(sky.shown[0].col) > luminance(g.col) && luminance(sky.shown[0].col) < 0.1f && sky.shown[0].dir[0] < 0.f;
-          if (nearf(t, 19.2f)) duskBoth = sky.showing[0] && sky.showing[1] && sky.glowing && sky.glowFade > 0.5f && sky.glowFade < 0.7f && sky.shown[0].dir[0] < 0.f && sky.shown[1].dir[0] > 0.f && nearf(luminance(sky.shown[1].col), 0.05f * 0.1556f);   // the moon at its floor while the game still raises it
-          if (nearf(t, 19.7f)) glowGone = !sky.showing[0] && sky.showing[1] && !sky.glowing && nearf(luminance(sky.shown[1].col), 0.05f * 0.1556f);   // the moon at its floor while the game still raises it
-          if (nearf(t, 25.f)) nightMoon = !sky.showing[0] && sky.showing[1] && nearf(luminance(sky.shown[1].col), 0.05f * luminance(g.col));
-          if (nearf(t, 29.5f)) moonMoves = sky.showing[1] && !sky.showing[0] && sky.shown[1].dir[0] > 0.f && nearf(luminance(sky.shown[1].col), 0.05f * 0.1613f) && luminance(g.col) * 0.05f < 0.003f;   // on the side the game has it at 5.5 h, at its floor while the game fades it
-          if (nearf(t, 30.f)) sunriseKept = sky.showing[0] && sky.showing[1] && sky.keeping && nearf(luminance(sky.shown[1].col), 0.05f * 0.1613f) && sky.shown[1].dir[0] > 0.f;   // at sunrise the sun is nothing yet and the moon is kept
-          if (nearf(t, 30.05f)) dawnSunAlone = sky.showing[0] && !sky.showing[1] && !sky.glowing && !sky.keeping && nearf(luminance(sky.shown[0].col), luminance(g.col));
+          if (nearf(t, 18.97f)) glowHeld = sky.glowing && sky.showing[0] && !sky.showing[1] && nearf(luminance(sky.shown[0].col), 0.1f) && sky.shown[0].dir[0] < 0.f;   // held at a tenth until the moon comes
+          if (nearf(t, 19.5f)) duskBoth = sky.showing[0] && sky.showing[1] && sky.glowing && nearf(sky.glowFade, 0.5f) && nearf(luminance(sky.shown[0].col), 0.05f) && nearf(luminance(sky.shown[1].col), 0.5f * 0.05f * 0.1556f) && sky.shown[0].dir[0] < 0.f && sky.shown[1].dir[0] > 0.f;   // half way: half the afterglow, half the floor
+          if (nearf(t, 20.1f)) glowGone = !sky.showing[0] && sky.showing[1] && !sky.glowing && nearf(luminance(sky.shown[1].col), 0.05f * 0.1556f);
+          if (nearf(t, 25.f)) nightMoon = !sky.showing[0] && sky.showing[1] && nearf(luminance(sky.shown[1].col), 0.05f * luminance(gameLight(1.f).col));
+          if (nearf(t, 29.5f)) moonMoves = sky.showing[1] && !sky.showing[0] && sky.shown[1].dir[0] > 0.f && nearf(luminance(sky.shown[1].col), 0.05f * 0.1613f);   // on the side the game has it at 5.5 h, at its floor while the game fades it
+          if (nearf(t, 30.f)) sunriseKept = sky.showing[0] && sky.showing[1] && sky.keeping && nearf(luminance(sky.shown[1].col), 0.05f * 0.1613f) && nearf(luminance(sky.shown[0].col), 0.f);   // at sunrise the sun is nothing yet, the moon whole
+          if (nearf(t, 30.5f)) dawnBoth = sky.showing[0] && sky.showing[1] && sky.keeping && nearf(sky.keepFade, 0.5f) && nearf(luminance(sky.shown[1].col), 0.5f * 0.05f * 0.1613f) && nearf(luminance(sky.shown[0].col), 0.5f * luminance(gameLight(6.5f).col));   // half way: half the moon, half the sun
+          if (nearf(t, 31.f)) dawnSunAlone = sky.showing[0] && !sky.showing[1] && !sky.keeping && nearf(luminance(sky.shown[0].col), luminance(gameLight(7.f).col));
           if (nearf(t, 31.5f)) morningSun = sky.showing[0] && !sky.showing[1];
         }
-        CHECK(noonSun && glowBrighter && duskBoth && glowGone && nightMoon && moonMoves && sunriseKept && dawnSunAlone && morningSun && begins == 1 && ends == 1,
-              "sky: the sun alone at noon; the afterglow from %.2f h brighter than the game's fading sun, from the west; at 19.2 h afterglow and the moon from the east; gone by %.2f h; the moon alone by night at its share, at its floor while the game fades it, on the game's side before dawn; kept at sunrise; the sun alone once past it", glowAt, endAt);
-        CHECK(lowest > 0.05f * 0.1556f - 0.0005f, "sky: from 19 h to sunrise the light of the sky never falls below the moon's floor (lowest %.4f at %.2f h)", lowest, lowestAt);
-        CHECK(glowAt > 18.9f && glowAt < 18.95f && endAt > 19.55f && endAt < 19.65f, "sky: the afterglow begins when the sun falls below a tenth (%.2f h) and ends forty minutes later (%.2f h)", glowAt, endAt);
+        CHECK(noonSun && glowHeld && duskBoth && glowGone && nightMoon && moonMoves && sunriseKept && dawnBoth && dawnSunAlone && morningSun && begins == 1 && ends == 1,
+              "sky: the sun alone at noon; the afterglow held at a tenth from %.2f h until the moon comes; at 19.5 h half the afterglow from the west and half the floor from the east; the moon alone from %.2f h, at its share by night, at its floor while the game fades it; at sunrise the moon whole and the sun nothing; at 6.5 h half of each; the sun alone from 7 h", glowAt, endAt);
+        CHECK(lowest > 0.05f * 0.1556f - 0.0005f, "sky: from 19 h to the morning the light of the sky never falls below the moon's floor (lowest %.4f at %.2f h)", lowest, lowestAt);
+        CHECK(glowAt > 18.9f && glowAt < 18.95f && endAt > 19.95f && endAt < 20.05f, "sky: the afterglow begins when the sun falls below a tenth (%.2f h) and is gone an hour after the moon came (%.2f h)", glowAt, endAt);
         SkyLights plain; const Sun g = gameLight(19.5f);
-        plain.step(g, false, 0.5f, 19.5f, false, 0.1f, 40.f / 60.f);
+        plain.step(g, false, 0.5f, 1.f, 1.f, false, 0.1f);
         CHECK(plain.showing[0] && !plain.showing[1] && !plain.glowing && nearf(luminance(plain.shown[0].col), luminance(g.col)), "sky: without the clock the light goes out as the game has it");
         SkyLights late; const Sun d = gameLight(18.95f);   // the hook comes into the dusk: no light of the sun seen at the level
-        const int what = late.step(d, false, 0.5f, 18.95f, true, 0.1f, 40.f / 60.f);
+        const int what = late.step(d, false, 0.5f, -1.f, 1.f, true, 0.1f);
         CHECK(what == 0 && !late.glowing && late.showing[0] && nearf(luminance(late.shown[0].col), luminance(d.col)), "sky: coming into a dusk under way there is nothing to hold; the game's light as it is");
-        SkyLights none; none.step(gameLight(12.f), false, 0.5f, 12.f, false, 0.1f, 0.f); none.step(gameLight(18.95f), false, 0.5f, 18.95f, true, 0.1f, 0.f);
-        CHECK(!none.glowing && nearf(luminance(none.shown[0].col), luminance(gameLight(18.95f).col)), "sky: with no minutes there is no afterglow");
-        SkyLights dark; dark.step(gameLight(23.f), true, 0.f, 23.f, false, 0.1f, 0.f); dark.step(gameLight(6.02f), false, 0.f, 6.02f, false, 0.1f, 0.f);
+        SkyLights none; none.step(gameLight(12.f), false, 0.5f, -1.f, 1.f, false, 0.1f); none.step(gameLight(18.95f), false, 0.5f, -1.f, 1.f, true, 0.1f); none.step(gameLight(19.1f), true, 0.5f, 1.f, 1.f, true, 0.1f);
+        CHECK(!none.glowing && !none.showing[0] && none.showing[1] && nearf(luminance(none.shown[1].col), 0.5f * 0.1556f), "sky: with no minutes the afterglow is gone the moment the moon comes, and the moon stands at its floor at once");
+        SkyLights dark; dark.step(gameLight(23.f), true, 0.f, 1.f, 1.f, false, 0.1f); dark.step(gameLight(6.02f), false, 0.f, -1.f, 0.02f, false, 0.1f);
         CHECK(!dark.keeping && !dark.showing[1] && dark.showing[0], "sky: with no share for the moon there is no floor and nothing is kept");
       }
     }

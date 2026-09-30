@@ -996,7 +996,7 @@ inline float dawnHours() { static float s = -1.f; if (s < 0.f) { int v = hookOpt
 // duskMinutes, duskLevel = the sun's afterglow: when its light falls below duskLevel (thousandths of full) during dusk it
 // is held and faded out over duskMinutes by the game's clock (the game's own dusk ends with a drop from red to nothing in
 // twelve minutes); 0 minutes = no afterglow.
-inline float duskHours() { static float s = -1.f; if (s < 0.f) { int v = hookOption("duskMinutes", 40); if (v < 0) v = 0; if (v > 360) v = 360; s = (float) v / 60.f; } return s; }
+inline float duskHours() { static float s = -1.f; if (s < 0.f) { int v = hookOption("duskMinutes", 60); if (v < 0) v = 0; if (v > 360) v = 360; s = (float) v / 60.f; } return s; }
 inline float duskLevel() { static float s = -1.f; if (s < 0.f) { int v = hookOption("duskLevel", 100); if (v < 1) v = 1; if (v > 1000) v = 1000; s = (float) v / 1000.f; } return s; }
 inline float sunRadiance() { static float s = -1.f; if (s < 0.f) { int v = hookOption("sunRadiance", 1000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
 inline float lampRadius() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampRadius", 150); if (v < 20) v = 20; s = (float) v / 1000.f; } return s; }
@@ -1054,6 +1054,16 @@ inline bool clockDusk(const GameClock& c) { return c.known && c.hour >= c.sunset
 inline float dawnEase(const GameClock& c, float hours) {
   if (!c.known || hours <= 0.f || c.hour < c.sunrise || c.hour >= c.sunrise + hours) return 1.f;
   return (c.hour - c.sunrise) / hours;
+}
+// The dusk's cross-fade (milestone 46): -1 while the game's light is still the sun's, then, from
+// the moment it becomes the moon's (an hour after sunset), rising from 0 to 1 over `hours`; 1
+// once past, or without hours, or without the clock.
+inline float duskFade(const GameClock& c, float hours) {
+  if (!c.known) return 1.f;
+  if (!clockMoonTime(c)) return -1.f;
+  if (hours <= 0.f) return 1.f;
+  float since = c.hour - (c.sunset + 1.f); if (since < 0.f) since += 24.f;
+  return since / hours > 1.f ? 1.f : since / hours;
 }
 inline uint64_t lampId64(const int32_t* lowHigh) { return (uint64_t) (uint32_t) lowHigh[0] | ((uint64_t) (uint32_t) lowHigh[1] << 32); }
 // A record's word for one light of a lamp: on or off, and the colour to send -- the player's colour
@@ -1333,41 +1343,39 @@ inline bool sameSun(const Sun& a, const Sun& b) {
   return dot3(a.dir, b.dir) > 0.999994f && std::fabs(a.col[0] - b.col[0]) < 0.005f && std::fabs(a.col[1] - b.col[1]) < 0.005f && std::fabs(a.col[2] - b.col[2]) < 0.005f;
 }
 
-// ---- the two lights of the sky, and the sun's afterglow at dusk (milestones 42, 44) ---------
+// ---- the two lights of the sky: sun and moon cross-fading at dusk and at dawn (milestones 42 to 46)
 // The game's one directional light is the sun's or the moon's by the game's clock (clockMoonTime);
 // the hook sends them as two lights, the moon's scaled by the user's share (moonLight). The game's
-// dusk ends with a drop from red to nothing in twelve minutes (18.8 to 19 h); at the user's wish
-// ("a little longer") the sun's light is HELD when it falls below duskLevel during dusk and faded
-// out by the clock over duskMinutes, its direction following the game's sun for as long as the
-// game still has one. The moon moves as the game moves it, always (milestone 42 held the moon
-// before dawn with its direction frozen; the user: "the moon and sun should never freeze"), but
-// its light never falls below its full share (milestone 45): the game raises it over the hour
-// after 19 h and fades it to nothing over the two hours before 6 h, and with the sun's light
-// zero at both ends the sky was left without any light for a moment (run 157: "we lost all
-// moon/sun light"). From the moment the game's light is the moon's until the sun has risen past
-// the floor, the moon gives at least its full share; after sunrise it fades as the sun rises.
-// Without the clock, or outside dusk, the light goes out as the game has it.
+// own changes are abrupt: at dusk a drop from red to nothing in twelve minutes (18.8 to 19 h), at
+// dawn nothing at 6 h and orange twelve minutes later, and the moon raised over the hour after
+// 19 h and faded to nothing over the two hours before 6 h. At the user's wish the two lights are
+// pulled into each other in equal parts, the same way at both ends:
+//   - DUSK: the sun's light, once below duskLevel, is held as an AFTERGLOW until the game's light
+//     becomes the moon's; from that moment, over duskMinutes, the afterglow fades from its level
+//     to nothing while the moon rises from nothing to its floor (its full share);
+//   - NIGHT: the moon's light never falls below its floor, in the direction the game has it,
+//     moving as the game moves it;
+//   - DAWN: from sunrise, over dawnMinutes, the moon fades from its floor to nothing while the sun
+//     rises from nothing to the game's own light (the caller eases the sun by dawnEase).
+// Every colour and direction is one the game gave; the cross-fades are the hook's own. Without the
+// clock, or without minutes, the light goes out as the game has it.
 struct SkyLights {
   Sun shown[2] = {}; bool showing[2] = { false, false };   // what goes out: 0 the sun, 1 the moon
   Sun strong = {}; bool haveStrong = false;                // the sun's light when it last stood at the dusk level or above
-  Sun glow = {}; bool glowing = false; float glowHour = 0.f, glowFade = 0.f;   // the afterglow: begun at glowHour, at glowFade of its light
+  Sun glow = {}; bool glowing = false; float glowFade = 0.f;   // the afterglow, and how much of it is left
   float moonFull[3] = { 0.137f, 0.137f, 0.392f };          // the moon's colour at its full: the game's 35, 35, 100 of 255 until a brighter moon has been seen
-  bool keeping = false; float keepFade = 0.f;              // the moon kept at its floor after sunrise, fading as the sun rises
+  bool keeping = false; float keepFade = 0.f;              // the moon kept past sunrise, and how much of it is left
   int body = 0;                                            // whose the game's light is
   float level() const { return (showing[0] ? luminance(shown[0].col) : 0.f) + (showing[1] ? luminance(shown[1].col) : 0.f); }
-  // game: the light as the game hands it over; hour: the game's clock. Returns 1 when the
-  // afterglow begins, 2 when it ends, 0 otherwise.
-  int step(const Sun& game, bool moonTime, float share, float hour, bool dusk, float level, float hours) {
+  // game: the light as the game hands it over, the sun's already eased for the dawn; kDusk: duskFade;
+  // kDawn: dawnEase; dusk: clockDusk; level: duskLevel. Returns 1 when the afterglow begins, 2 when
+  // it ends, 0 otherwise.
+  int step(const Sun& game, bool moonTime, float share, float kDusk, float kDawn, bool dusk, float level) {
     int what = 0;
     body = moonTime ? 1 : 0;
     Sun live = game;
     if (body == 1) for (int q = 0; q < 3; ++q) live.col[q] *= share;
     showing[0] = showing[1] = false;
-    if (glowing) {
-      float since = hour - glowHour; if (since < 0.f) since += 24.f;
-      glowFade = hours > 0.f ? 1.f - since / hours : 0.f;
-      if (glowFade <= 0.f || !dusk) { glowing = false; glowFade = 0.f; what = 2; }
-    }
     const float floorLum = share * luminance(moonFull);
     if (body == 0) {
       const float lum = luminance(live.col);
@@ -1376,32 +1384,37 @@ struct SkyLights {
         if (glowing) { glowing = false; glowFade = 0.f; what = 2; }
         shown[0] = live;
       } else {
-        if (!glowing && dusk && haveStrong && hours > 0.f) { glow = strong; glowing = true; glowHour = hour; glowFade = 1.f; what = 1; }
+        if (!glowing && dusk && kDusk < 0.f && haveStrong) { glow = strong; glowing = true; glowFade = 1.f; what = 1; }
         if (glowing) {
           for (int q = 0; q < 3; ++q) glow.dir[q] = live.dir[q];   // the game's sun still moves: the afterglow follows it
-          shown[0] = glow; for (int q = 0; q < 3; ++q) shown[0].col[q] *= glowFade;
-          if (luminance(shown[0].col) < lum) shown[0] = live;       // never darker than the game has it
+          shown[0] = glow;                                          // held at its level until the moon comes
         } else shown[0] = live;
       }
       showing[0] = true;
-      // the moon kept at its floor past sunrise, fading as the sun rises past it
+      // the dawn: the moon fades from its floor as the sun rises, in equal parts
       if (keeping) {
-        keepFade = floorLum > 0.f ? 1.f - luminance(shown[0].col) / floorLum : 0.f;
+        keepFade = 1.f - kDawn;
         if (keepFade <= 0.f) { keeping = false; keepFade = 0.f; }
         else { for (int q = 0; q < 3; ++q) { shown[1].col[q] = moonFull[q] * share * keepFade; shown[1].dir[q] = live.dir[q]; } showing[1] = true; }
       }
     } else {
       if (luminance(game.col) > luminance(moonFull)) for (int q = 0; q < 3; ++q) moonFull[q] = game.col[q];
+      // the dusk: the moon rises to its floor as the afterglow fades, in equal parts; by night the floor stands
+      const float k = kDusk < 0.f ? 0.f : kDusk;
       shown[1] = live;
-      if (luminance(live.col) < floorLum) for (int q = 0; q < 3; ++q) shown[1].col[q] = moonFull[q] * share;   // the floor, in the game's direction
+      if (luminance(live.col) < floorLum * k) for (int q = 0; q < 3; ++q) shown[1].col[q] = moonFull[q] * share * k;   // in the game's direction
       showing[1] = true; keeping = share > 0.f; keepFade = 1.f;
-      if (glowing) { shown[0] = glow; for (int q = 0; q < 3; ++q) shown[0].col[q] *= glowFade; showing[0] = true; }
+      if (glowing) {
+        glowFade = 1.f - k;
+        if (glowFade <= 0.f) { glowing = false; glowFade = 0.f; what = 2; }
+        else { shown[0] = glow; for (int q = 0; q < 3; ++q) shown[0].col[q] *= glowFade; showing[0] = true; }
+      }
     }
     return what;
   }
 };
 
-// ---- what a pixel shader does with its samplers, read from its bytecode (milestone 7) ------// ---- what a pixel shader does with its samplers, read from its bytecode (milestone 7) ------
+// ---- what a pixel shader does with its samplers, read from its bytecode (milestone 7) ------// ---- what a pixel shader does with its samplers, read from its bytecode (milestone 7) ------// ---- what a pixel shader does with its samplers, read from its bytecode (milestone 7) ------
 // The hand tables above answer two questions per shader: which sampler is the albedo, and
 // which texture coordinate feeds it. Every untabled permutation the game compiles (a new lot,
 // a new outfit type, a detail setting) rendered grey until it was read by hand. This reads the

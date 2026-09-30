@@ -2138,8 +2138,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
 
   // The Sims 3 camera hook: the lights of the sky. The game's one directional light, as the lit
   // terrain shaders were handed it in this frame, is the sun's or the moon's by the game's clock;
-  // the moon's is scaled by the user's share, the dawn is eased, and at dusk the sun leaves an
-  // afterglow (sims3cam::SkyLights, milestones 42 to 44). A frame without a lit terrain draw
+  // the moon's is scaled by the user's share, and at dusk and at dawn the two are cross-faded in
+  // equal parts (sims3cam::SkyLights, milestones 42 to 46). A frame without a lit terrain draw
   // keeps the lights the runtime holds.
   if (sims3cam::enabled()) {
     auto& h = g_sims3;
@@ -2161,7 +2161,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
       sims3cam::Sun eased = game;
       const float ease = sims3cam::clockMoonTime(h.clock) ? 1.f : sims3cam::dawnEase(h.clock, sims3cam::dawnHours());
       if (ease < 1.f) for (int q = 0; q < 3; ++q) eased.col[q] *= ease;
-      const int what = h.sky.step(eased, sims3cam::clockMoonTime(h.clock), sims3cam::moonShare(), h.clock.known ? h.clock.hour : 0.f, sims3cam::clockDusk(h.clock), sims3cam::duskLevel(), sims3cam::duskHours());
+      const int what = h.sky.step(eased, sims3cam::clockMoonTime(h.clock), sims3cam::moonShare(), sims3cam::duskFade(h.clock, sims3cam::duskHours()), ease, sims3cam::clockDusk(h.clock), sims3cam::duskLevel());
       h.skySet = true; h.gameLight = game;
       if (!h.loggedSun) {
         h.loggedSun = true; char msg[400];
@@ -2172,7 +2172,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
       if (what != 0 && h.twilightLogged < 60u) {
         ++h.twilightLogged; char msg[400];
         if (what == 1)
-          snprintf(msg, sizeof msg, "Sims 3 camera hook: dusk at frame %u, clock %.2f h: the sun's AFTERGLOW begins at colour %.3f, %.3f, %.3f (luminance %.3f) toward %.3f, %.3f, %.3f, to fade over %.0f minutes",
+          snprintf(msg, sizeof msg, "Sims 3 camera hook: dusk at frame %u, clock %.2f h: the sun's AFTERGLOW begins at colour %.3f, %.3f, %.3f (luminance %.3f) toward %.3f, %.3f, %.3f, held until the moon comes, then fading over %.0f minutes as the moon rises",
                    h.frames, h.clock.hour, h.sky.glow.col[0], h.sky.glow.col[1], h.sky.glow.col[2], sims3cam::luminance(h.sky.glow.col), h.sky.glow.dir[0], h.sky.glow.dir[1], h.sky.glow.dir[2], sims3cam::duskHours() * 60.f);
         else
           snprintf(msg, sizeof msg, "Sims 3 camera hook: dusk at frame %u, clock %.2f h: the sun's afterglow ENDS; the game's light is the %s's at %.3f",
