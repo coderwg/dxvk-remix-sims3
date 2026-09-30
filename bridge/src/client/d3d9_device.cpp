@@ -1829,7 +1829,7 @@ static void sims3LogStats(bool withTable) {
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   sky: the game's light is the %s's, luminance %.3f; sun %s luminance %.3f toward %.3f, %.3f, %.3f; moon %s luminance %.3f toward %.3f, %.3f, %.3f (share %.2f); the sun's afterglow %s; %u light updates, %u terrain draws in the last frame, %u frames without one, %u refused",
            h.sky.body ? "moon" : "sun", sims3cam::luminance(h.gameLight.col),
            h.sky.showing[0] ? (h.sky.glowing ? "its afterglow," : "sent,") : "none,", h.sky.showing[0] ? sims3cam::luminance(h.sky.shown[0].col) : 0.f, h.sky.shown[0].dir[0], h.sky.shown[0].dir[1], h.sky.shown[0].dir[2],
-           h.sky.showing[1] ? "sent," : "none,", h.sky.showing[1] ? sims3cam::luminance(h.sky.shown[1].col) : 0.f, h.sky.shown[1].dir[0], h.sky.shown[1].dir[1], h.sky.shown[1].dir[2], sims3cam::moonShare(),
+           h.sky.showing[1] ? (h.sky.body == 0 ? "kept," : "sent,") : "none,", h.sky.showing[1] ? sims3cam::luminance(h.sky.shown[1].col) : 0.f, h.sky.shown[1].dir[0], h.sky.shown[1].dir[1], h.sky.shown[1].dir[2], sims3cam::moonShare(),
            h.sky.glowing ? format_string("at x%.2f", h.sky.glowFade).c_str() : "none", h.sunChanges, h.terrainSunDrawsLast, h.framesNoTerrainSun, h.sunRefused);
   Logger::info(msg);
   {
@@ -2209,7 +2209,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
         snprintf(msg, sizeof msg, "Sims 3 camera hook: sky at frame %u, clock %.2f h%s: the game's light is the %s's, colour %.3f, %.3f, %.3f (luminance %.3f), the dawn's ease x%.2f; SUN %s colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f; MOON %s colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f; the light of the sky %.3f, the afterglow x%.2f; sky level %.3f",
                  h.frames, h.clock.known ? h.clock.hour : -1.f, !h.clock.known ? " (unknown)" : (h.clock.night ? " night" : " day"), kBody[h.sky.body], game.col[0], game.col[1], game.col[2], sims3cam::luminance(game.col), ease,
                  !h.sky.showing[0] ? "none," : (h.sky.glowing ? "its afterglow," : "as the game's,"), h.sky.showing[0] ? s0.col[0] : 0.f, h.sky.showing[0] ? s0.col[1] : 0.f, h.sky.showing[0] ? s0.col[2] : 0.f, s0.dir[0], s0.dir[1], s0.dir[2],
-                 !h.sky.showing[1] ? "none," : "the game's by its share,", h.sky.showing[1] ? s1.col[0] : 0.f, h.sky.showing[1] ? s1.col[1] : 0.f, h.sky.showing[1] ? s1.col[2] : 0.f, s1.dir[0], s1.dir[1], s1.dir[2],
+                 !h.sky.showing[1] ? "none," : (h.sky.body == 0 ? "kept past sunrise," : "the game's by its share, at least its floor,"), h.sky.showing[1] ? s1.col[0] : 0.f, h.sky.showing[1] ? s1.col[1] : 0.f, h.sky.showing[1] ? s1.col[2] : 0.f, s1.dir[0], s1.dir[1], s1.dir[2],
                  lum, h.sky.glowFade, h.skyLevel);
         Logger::info(msg);
       }

@@ -1339,13 +1339,20 @@ inline bool sameSun(const Sun& a, const Sun& b) {
 // dusk ends with a drop from red to nothing in twelve minutes (18.8 to 19 h); at the user's wish
 // ("a little longer") the sun's light is HELD when it falls below duskLevel during dusk and faded
 // out by the clock over duskMinutes, its direction following the game's sun for as long as the
-// game still has one. The moon goes out as the game has it, always (milestone 42 held the moon
-// before dawn with its direction frozen; the user: "the moon and sun should never freeze").
+// game still has one. The moon moves as the game moves it, always (milestone 42 held the moon
+// before dawn with its direction frozen; the user: "the moon and sun should never freeze"), but
+// its light never falls below its full share (milestone 45): the game raises it over the hour
+// after 19 h and fades it to nothing over the two hours before 6 h, and with the sun's light
+// zero at both ends the sky was left without any light for a moment (run 157: "we lost all
+// moon/sun light"). From the moment the game's light is the moon's until the sun has risen past
+// the floor, the moon gives at least its full share; after sunrise it fades as the sun rises.
 // Without the clock, or outside dusk, the light goes out as the game has it.
 struct SkyLights {
   Sun shown[2] = {}; bool showing[2] = { false, false };   // what goes out: 0 the sun, 1 the moon
   Sun strong = {}; bool haveStrong = false;                // the sun's light when it last stood at the dusk level or above
   Sun glow = {}; bool glowing = false; float glowHour = 0.f, glowFade = 0.f;   // the afterglow: begun at glowHour, at glowFade of its light
+  float moonFull[3] = { 0.137f, 0.137f, 0.392f };          // the moon's colour at its full: the game's 35, 35, 100 of 255 until a brighter moon has been seen
+  bool keeping = false; float keepFade = 0.f;              // the moon kept at its floor after sunrise, fading as the sun rises
   int body = 0;                                            // whose the game's light is
   float level() const { return (showing[0] ? luminance(shown[0].col) : 0.f) + (showing[1] ? luminance(shown[1].col) : 0.f); }
   // game: the light as the game hands it over; hour: the game's clock. Returns 1 when the
@@ -1361,6 +1368,7 @@ struct SkyLights {
       glowFade = hours > 0.f ? 1.f - since / hours : 0.f;
       if (glowFade <= 0.f || !dusk) { glowing = false; glowFade = 0.f; what = 2; }
     }
+    const float floorLum = share * luminance(moonFull);
     if (body == 0) {
       const float lum = luminance(live.col);
       if (lum >= level) {
@@ -1376,8 +1384,17 @@ struct SkyLights {
         } else shown[0] = live;
       }
       showing[0] = true;
+      // the moon kept at its floor past sunrise, fading as the sun rises past it
+      if (keeping) {
+        keepFade = floorLum > 0.f ? 1.f - luminance(shown[0].col) / floorLum : 0.f;
+        if (keepFade <= 0.f) { keeping = false; keepFade = 0.f; }
+        else { for (int q = 0; q < 3; ++q) { shown[1].col[q] = moonFull[q] * share * keepFade; shown[1].dir[q] = live.dir[q]; } showing[1] = true; }
+      }
     } else {
-      shown[1] = live; showing[1] = true;
+      if (luminance(game.col) > luminance(moonFull)) for (int q = 0; q < 3; ++q) moonFull[q] = game.col[q];
+      shown[1] = live;
+      if (luminance(live.col) < floorLum) for (int q = 0; q < 3; ++q) shown[1].col[q] = moonFull[q] * share;   // the floor, in the game's direction
+      showing[1] = true; keeping = share > 0.f; keepFade = 1.f;
       if (glowing) { shown[0] = glow; for (int q = 0; q < 3; ++q) shown[0].col[q] *= glowFade; showing[0] = true; }
     }
     return what;
