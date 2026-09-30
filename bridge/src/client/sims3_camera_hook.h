@@ -42,6 +42,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <unordered_map>
 #include <vector>
 #include <d3d9.h>
@@ -1414,7 +1415,101 @@ struct SkyLights {
   }
 };
 
-// ---- what a pixel shader does with its samplers, read from its bytecode (milestone 7) ------// ---- what a pixel shader does with its samplers, read from its bytecode (milestone 7) ------// ---- what a pixel shader does with its samplers, read from its bytecode (milestone 7) ------
+// ---- the game's light by the hour (milestone 47) ---------------------------------------
+// The lit terrain shaders carry the game's light only while the lot's terrain is drawn: in the
+// neighbourhood view, or indoors with no ground in view, there is none, and the light stood still
+// at its last value while the clock ran on, then snapped back on the lot (run 159). The game's
+// light is the same at the same hour every day (run 152: equal to three decimals), so the hook
+// remembers what the terrain gives by the game's clock, one entry per five minutes, and takes the
+// remembered light for the clock's hour when it cannot read. Every entry is one the game gave,
+// overwritten whenever the lot shows that hour again. The table is kept next to the DLL as
+// sims3sky.txt between sessions, with the game's sunrise and sunset: a table made for another day
+// length is not used.
+struct SkyTable {
+  static const int kSlots = 288;                 // one entry per five game minutes
+  Sun slot[kSlots] = {}; float at[kSlots] = {}; bool have[kSlots] = {};   // the light, the hour it was read at
+  float sunrise = 0.f, sunset = 0.f; bool dayKnown = false;
+  uint32_t filled = 0; bool dirty = false; int format = 0;
+  static int slotOf(float hour) { int k = (int) std::floor(hour * 12.f) % kSlots; if (k < 0) k += kSlots; return k; }
+  static float ahead(float from, float to) { float d = to - from; while (d < 0.f) d += 24.f; while (d >= 24.f) d -= 24.f; return d; }   // hours forward from one hour of the clock to another
+  // The game's day: a table made for another is cleared. True when a table with entries was cleared.
+  bool setDay(float rise, float set) {
+    if (dayKnown && std::fabs(rise - sunrise) < 0.01f && std::fabs(set - sunset) < 0.01f) return false;
+    const bool cleared = filled > 0;
+    for (int k = 0; k < kSlots; ++k) have[k] = false;
+    filled = 0; sunrise = rise; sunset = set; dayKnown = true; dirty = cleared;
+    return cleared;
+  }
+  void learn(float hour, const Sun& s) {
+    const int k = slotOf(hour);
+    if (!have[k]) { have[k] = true; ++filled; }
+    slot[k] = s; at[k] = hour; dirty = true;
+  }
+  // The light for an hour: between the readings just before and just after it (in this entry and its
+  // neighbours, within half an hour), or the nearer of the two where the light changed sides between
+  // them. False when no reading lies near the hour.
+  bool recall(float hour, Sun& out) const {
+    const int k = slotOf(hour);
+    const int cand[3] = { (k + kSlots - 1) % kSlots, k, (k + 1) % kSlots };
+    int a = -1, b = -1; float back = 1e9f, fwd = 1e9f;
+    for (int c : cand) {
+      if (!have[c]) continue;
+      const float bk = ahead(at[c], hour), fw = ahead(hour, at[c]);
+      if (bk < 0.5f && bk < back) { back = bk; a = c; }
+      if (fw > 0.f && fw < 0.5f && fw < fwd) { fwd = fw; b = c; }
+    }
+    if (a < 0 && b < 0) return false;
+    if (a < 0) { out = slot[b]; return true; }
+    if (b < 0) { out = slot[a]; return true; }
+    if (dot3(slot[a].dir, slot[b].dir) < 0.9f) { out = back <= fwd ? slot[a] : slot[b]; return true; }
+    const float t = back / (back + fwd);
+    for (int q = 0; q < 3; ++q) { out.col[q] = slot[a].col[q] + t * (slot[b].col[q] - slot[a].col[q]); out.dir[q] = slot[a].dir[q] + t * (slot[b].dir[q] - slot[a].dir[q]); }
+    const float n = len3(out.dir);
+    for (int q = 0; q < 3; ++q) out.dir[q] /= n;
+    return true;
+  }
+};
+// The table as its file holds it.
+inline std::string skyFormat(const SkyTable& t) {
+  std::string s = "# The Sims 3 camera hook: the game's directional light by the hour of its clock, as its lit terrain shaders were\n"
+                  "# handed it; written by the hook (d3d9.dll) when a world is left and when the game closes. Deleting this file only\n"
+                  "# means the hook learns the day again. <entry> <hour read> <r g b> <direction toward the light>\n"
+                  "sims3sky 1\n";
+  char line[160];
+  snprintf(line, sizeof line, "day %.4f %.4f\n", t.sunrise, t.sunset); s += line;
+  for (int k = 0; k < SkyTable::kSlots; ++k) {
+    if (!t.have[k]) continue;
+    snprintf(line, sizeof line, "%d %.4f %.4f %.4f %.4f %.5f %.5f %.5f\n", k, t.at[k], t.slot[k].col[0], t.slot[k].col[1], t.slot[k].col[2], t.slot[k].dir[0], t.slot[k].dir[1], t.slot[k].dir[2]);
+    s += line;
+  }
+  return s;
+}
+// One line of sims3sky.txt. True when it gave the table something; an entry is taken only when its
+// hour lies in its entry and its light is one the terrain could have given.
+inline bool skyParseLine(SkyTable& t, const char* line) {
+  if (!line[0] || line[0] == '#' || line[0] == '\r' || line[0] == '\n') return false;
+  if (!strncmp(line, "sims3sky", 8)) { t.format = (int) strtol(line + 8, nullptr, 10); return true; }
+  if (t.format != 1) return false;
+  char* e = nullptr;
+  if (!strncmp(line, "day ", 4)) {
+    const float rise = strtof(line + 4, &e), set = strtof(e, &e);
+    if (!(rise >= 0.f && set > rise && set < 24.f)) return false;
+    t.sunrise = rise; t.sunset = set; t.dayKnown = true;
+    return true;
+  }
+  const long k = strtol(line, &e, 10);
+  if (e == line || k < 0 || k >= SkyTable::kSlots) return false;
+  float v[7];
+  for (int i = 0; i < 7; ++i) { char* from = e; v[i] = strtof(e, &e); if (e == from) return false; }
+  if (!(v[0] >= (float) k / 12.f - 0.001f && v[0] <= (float) (k + 1) / 12.f + 0.001f)) return false;
+  Sun s = {};
+  if (!sunFromTerrain(v + 1, v + 4, s)) return false;
+  if (!t.have[k]) { t.have[k] = true; ++t.filled; }
+  t.slot[k] = s; t.at[k] = v[0];
+  return true;
+}
+
+// ---- what a pixel shader does with its samplers, read from its bytecode (milestone 7) ------
 // The hand tables above answer two questions per shader: which sampler is the albedo, and
 // which texture coordinate feeds it. Every untabled permutation the game compiles (a new lot,
 // a new outfit type, a detail setting) rendered grey until it was read by hand. This reads the
