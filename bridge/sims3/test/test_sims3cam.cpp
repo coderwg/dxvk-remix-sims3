@@ -526,6 +526,62 @@ int main() {
       Sun turned = noon; turned.dir[0] += 0.01f; { const float n = len3(turned.dir); for (int q = 0; q < 3; ++q) turned.dir[q] /= n; }
       Sun nearly = noon; nearly.col[0] -= 0.002f;
       CHECK(sameSun(noon, noon) && sameSun(noon, nearly) && !sameSun(noon, warmer) && !sameSun(noon, turned), "sun: made anew for a hundredth of colour or half a degree, not for less than half a hundredth");
+      // dusk and dawn: a game day and a half by the game's own timeline (SunMoonLight / 255, linear between the keys),
+      // the light from the east until noon and after 19 h, from the west until 19 h and after midnight until 5 h
+      struct Key { float t, r, g, b; };
+      static const Key keys[] = { { 0.f, 35, 35, 110 }, { 3.f, 35, 35, 120 }, { 4.f, 35, 35, 120 }, { 6.f, 0, 0, 0 }, { 6.2f, 200, 90, 50 }, { 7.f, 255, 255, 180 }, { 12.f, 255, 255, 255 }, { 17.f, 255, 245, 235 },
+                                  { 18.8f, 120, 40, 40 }, { 19.f, 0, 0, 0 }, { 20.f, 35, 35, 100 }, { 21.f, 35, 35, 100 }, { 24.f, 35, 35, 110 } };
+      auto gameLight = [&](float hour) {
+        Sun s = {};
+        for (size_t k = 0; k + 1 < sizeof keys / sizeof keys[0]; ++k) if (hour >= keys[k].t && hour <= keys[k + 1].t) {
+          const float a = (hour - keys[k].t) / (keys[k + 1].t - keys[k].t);
+          s.col[0] = (keys[k].r + a * (keys[k + 1].r - keys[k].r)) / 255.f; s.col[1] = (keys[k].g + a * (keys[k + 1].g - keys[k].g)) / 255.f; s.col[2] = (keys[k].b + a * (keys[k + 1].b - keys[k].b)) / 255.f;
+          break;
+        }
+        const bool east = (hour >= 5.f && hour < 12.f) || hour >= 19.f;
+        s.dir[0] = east ? 0.664f : -0.664f; s.dir[1] = 0.707f; s.dir[2] = 0.242f;
+        return s;
+      };
+      auto clockAt = [](float hour) { GameClock c; c.hour = hour; c.sunrise = 6.f; c.sunset = 18.f; c.night = hour >= 18.f || hour <= 6.f; c.known = true; return c; };
+      CHECK(!clockMoonTime(clockAt(18.5f)) && clockMoonTime(clockAt(19.f)) && clockMoonTime(clockAt(5.9f)) && !clockMoonTime(clockAt(6.f)) && !clockMoonTime(clockAt(12.f)), "clock: the light is the moon's from an hour after sunset until sunrise");
+      CHECK(clockTwilight(clockAt(18.f)) && clockTwilight(clockAt(19.9f)) && !clockTwilight(clockAt(20.f)) && clockTwilight(clockAt(4.f)) && clockTwilight(clockAt(6.9f)) && !clockTwilight(clockAt(7.f)) && !clockTwilight(clockAt(12.f)) && clockCoreNight(clockAt(0.f)) && !clockCoreNight(clockAt(4.5f)),
+            "clock: dusk is the two hours from sunset, dawn from two hours before sunrise until one after; the heart of the night lies between");
+      for (int pass = 0; pass < 2; ++pass) {
+        const float share = pass ? 0.f : 0.5f;
+        Twilight sky; float lowest = 9.f, lowestAt = 0.f; int holds = 0, lets = 0;
+        bool noonSun = false, duskBoth = false, nightMoon = false, dawnMoonHeld = false, sunriseBoth = false, morningSun = false, frozen = true, everHeld = false;
+        for (int i = 0; i <= 2000; ++i) {   // from noon to eight the next morning, a hundredth of an hour a step
+          const float t = 12.f + 0.01f * (float) i, hour = t >= 24.f ? t - 24.f : t;
+          const GameClock c = clockAt(hour);
+          const Sun g = gameLight(hour);
+          const int what = sky.step(g, clockMoonTime(c), clockCoreNight(c), clockTwilight(c), share);
+          if (what == 1) ++holds; if (what == 2) ++lets;
+          if (sky.heldBody >= 0) everHeld = true;
+          const float lv = sky.level();
+          if (t >= 18.f && t <= 31.f && lv - sky.hold < lowest) { lowest = lv - sky.hold; lowestAt = hour; }
+          if (i == 0) noonSun = sky.showing[0] && !sky.showing[1] && nearf(luminance(sky.shown[0].col), 1.f);
+          if (nearf(t, 19.5f)) duskBoth = sky.showing[0] && sky.showing[1] && sky.heldBody == 0 && sky.shown[0].dir[0] < 0.f && sky.shown[1].dir[0] > 0.f && sky.heldFade > 0.2f && sky.heldFade < 0.8f;
+          if (nearf(t, 25.f)) nightMoon = !sky.showing[0] && sky.showing[1] && sky.heldBody < 0 && nearf(luminance(sky.shown[1].col), share * luminance(g.col));
+          if (nearf(t, 29.5f)) { dawnMoonHeld = !sky.showing[0] && sky.showing[1] && sky.heldBody == 1; frozen = sky.shown[1].dir[0] < 0.f; }   // the game's light has changed sides at 5 h; the held moon has not
+          if (nearf(t, 30.02f)) sunriseBoth = sky.showing[0] && sky.showing[1] && sky.heldBody == 1 && sky.shown[0].dir[0] > 0.f;
+          if (nearf(t, 31.5f)) morningSun = sky.showing[0] && !sky.showing[1] && sky.heldBody < 0;
+        }
+        if (pass == 0) {
+          CHECK(noonSun && duskBoth && nightMoon && dawnMoonHeld && frozen && sunriseBoth && morningSun && holds == 2 && lets == 2,
+                "twilight: the sun alone at noon; at 19.5 h the held sun from the west and the rising moon from the east; the moon alone by night at its share; at 5.5 h the moon held where it stood; at 6.02 h moon and sun; the sun alone at 7.5 h (%d holdings, %d lettings go)", holds, lets);
+          CHECK(lowest > -0.004f, "twilight: from sunset to the morning the light of the sky never falls below the hold level (lowest %.4f against it, at %.2f h)", lowest, lowestAt);
+        } else {
+          CHECK(!everHeld && holds == 0 && lowest > -0.0001f && lowest < 0.0001f, "twilight: with no share for the moon nothing is held, and the night is dark (the light of the sky %.4f at its lowest)", lowest);
+        }
+      }
+      {
+        Twilight plain; const Sun g = gameLight(19.5f);
+        plain.step(g, false, false, false, 0.5f);
+        CHECK(plain.showing[0] && !plain.showing[1] && plain.heldBody < 0 && nearf(luminance(plain.shown[0].col), luminance(g.col)), "twilight: without the clock the light goes out as the game has it");
+        Twilight late; const Sun d = gameLight(18.95f);   // the hook comes into the dusk: no light of the sun seen at the level
+        const int what = late.step(d, false, false, true, 0.5f);
+        CHECK(what == 1 && late.heldBody == 0 && nearf(late.level(), late.hold), "twilight: coming into a dusk under way, the sun is held as it is, at the level (%.3f)", late.level());
+      }
     }
   }
 

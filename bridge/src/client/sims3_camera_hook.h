@@ -988,6 +988,8 @@ inline float nightEvMax() { static float s = -99.f; if (s < -98.f) { int v = hoo
 // unit of rig colour, thousandths; lampRadius = the lamps' sphere radius in thousandths of a
 // unit; lampRadiance = radiance per unit of colour, thousandths.
 inline float sunAngle() { static float s = -1.f; if (s < 0.f) { int v = hookOption("sunAngle", 2000); if (v < 100) v = 100; if (v > 90000) v = 90000; s = (float) v / 1000.f; } return s; }
+// moonLight = the moon's share of the game's moonlight, in percent (100 = the game's own; 0 = none, the night stays dark).
+inline float moonShare() { static float s = -1.f; if (s < 0.f) { int v = hookOption("moonLight", 100); if (v < 0) v = 0; if (v > 200) v = 200; s = (float) v / 100.f; } return s; }
 inline float sunRadiance() { static float s = -1.f; if (s < 0.f) { int v = hookOption("sunRadiance", 1000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
 inline float lampRadius() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampRadius", 150); if (v < 20) v = 20; s = (float) v / 1000.f; } return s; }
 // lampMax = the most lamps lit at once (the nearest to the camera's target first); lampWorldLights =
@@ -1034,6 +1036,13 @@ inline GameClock clockFromRecord(const float* frame) {
   c.known = c.hour >= 0.f && c.hour < 24.f && c.sunset > c.sunrise;
   return c;
 }
+// The hours of the game's one directional light (run 152): it is the sun's from sunrise until
+// an hour after sunset, where it has faded to nothing, and the moon's from there until sunrise.
+inline bool clockMoonTime(const GameClock& c) { return c.known && (c.hour >= c.sunset + 1.f || c.hour < c.sunrise); }
+// The heart of the night, the moon at its full: from two hours after sunset until two before sunrise.
+inline bool clockCoreNight(const GameClock& c) { return c.known && (c.hour >= c.sunset + 2.f || c.hour < c.sunrise - 2.f); }
+// The two changes of the light: dusk, the two hours from sunset; dawn, from two hours before sunrise until one after.
+inline bool clockTwilight(const GameClock& c) { return c.known && ((c.hour >= c.sunset && c.hour < c.sunset + 2.f) || (c.hour >= c.sunrise - 2.f && c.hour < c.sunrise + 1.f)); }
 inline uint64_t lampId64(const int32_t* lowHigh) { return (uint64_t) (uint32_t) lowHigh[0] | ((uint64_t) (uint32_t) lowHigh[1] << 32); }
 // A record's word for one light of a lamp: on or off, and the colour to send -- the player's colour
 // (a preset's or a custom one; the definition's own when the lamp is left at its default, preset
@@ -1311,6 +1320,66 @@ inline bool sunFromTerrain(const float* c0, const float* c1, Sun& out) {
 inline bool sameSun(const Sun& a, const Sun& b) {
   return dot3(a.dir, b.dir) > 0.999994f && std::fabs(a.col[0] - b.col[0]) < 0.005f && std::fabs(a.col[1] - b.col[1]) < 0.005f && std::fabs(a.col[2] - b.col[2]) < 0.005f;
 }
+
+// ---- dusk and dawn: the sun and the moon overlap (milestone 42) ---------------------------
+// The game has ONE directional light. To change from the sun's side of the sky to the moon's
+// it fades to nothing (19 h, 6 h) and fills the gap with its ambient light. A ray tracer can
+// carry two lights, so the hook keeps the two apart and lets them overlap, at the user's wish
+// (run 153: "so that dark dip never fully happens"):
+//   - the game's light is the sun's or the moon's by the game's clock (clockMoonTime); the
+//     moon's is scaled by the user's share (moonLight);
+//   - the hold level is nine tenths of the moon's light at its full, the share applied: what
+//     the night gives anyway;
+//   - a body whose light falls below the hold level during dusk or dawn is HELD where it last
+//     stood at that level, colour and direction frozen; while the other body's light rises the
+//     held one is faded by what the other has reached, and let go when the other stands at the
+//     hold level. The light of the sky never falls below the hold level.
+// Every colour and direction is one the game gave; the holding is the hook's own. Outside dusk
+// and dawn, or without the clock, the light goes out as the game has it.
+struct Twilight {
+  Sun strong[2] = {}; uint32_t strongAge[2] = { 0xFFFFu, 0xFFFFu };   // per body (0 the sun, 1 the moon): its light when it last stood at the hold level or above, and the steps since
+  Sun held = {}; int heldBody = -1;                                  // the body held through the change, or -1
+  float moonFull = 0.1556f;                                          // the moon's luminance at its full: the game's 35, 35, 100 of 255 until a night has shown its own
+  Sun shown[2] = {}; bool showing[2] = { false, false };             // what goes out
+  float heldFade = 0.f, hold = 0.f;                                  // the held light's factor and the hold level, for the log
+  int body = 0;                                                      // whose the game's light is
+  float level() const { return (showing[0] ? luminance(shown[0].col) : 0.f) + (showing[1] ? luminance(shown[1].col) : 0.f); }
+  // game: the light as the game hands it over. Returns 1 when a body was taken into holding, 2
+  // when the held one was let go, 0 otherwise.
+  int step(const Sun& game, bool moonTime, bool coreNight, bool twilight, float share) {
+    int what = 0;
+    body = moonTime ? 1 : 0;
+    Sun live = game;
+    if (body == 1) {
+      const float full = luminance(game.col);
+      if (coreNight && full > 0.01f) moonFull = full;
+      for (int q = 0; q < 3; ++q) live.col[q] *= share;
+    }
+    hold = 0.9f * share * moonFull;
+    const float lum = luminance(live.col);
+    for (int b = 0; b < 2; ++b) if (strongAge[b] < 0xFFFFu) ++strongAge[b];
+    if (!twilight && heldBody >= 0) { heldBody = -1; what = 2; }
+    showing[0] = showing[1] = false; heldFade = 0.f;
+    if (lum >= hold) {
+      strong[body] = live; strongAge[body] = 0;
+      if (heldBody >= 0) { heldBody = -1; what = 2; }
+      shown[body] = live; showing[body] = true;
+      return what;
+    }
+    if (heldBody < 0 && twilight) {
+      if (strongAge[body] < 600u) { held = strong[body]; heldBody = body; what = 1; }   // where it stood a moment ago
+      else if (lum > 0.005f) { held = live; for (int q = 0; q < 3; ++q) held.col[q] *= hold / lum; heldBody = body; what = 1; }   // the hook came into the change: the light as it is, at the level
+    }
+    if (heldBody == body) { shown[body] = held; showing[body] = true; heldFade = 1.f; }
+    else if (heldBody >= 0) {
+      shown[body] = live; showing[body] = true;
+      heldFade = 1.f - lum / hold;
+      shown[heldBody] = held; for (int q = 0; q < 3; ++q) shown[heldBody].col[q] *= heldFade;
+      showing[heldBody] = true;
+    } else { shown[body] = live; showing[body] = true; }
+    return what;
+  }
+};
 
 // ---- what a pixel shader does with its samplers, read from its bytecode (milestone 7) ------
 // The hand tables above answer two questions per shader: which sampler is the albedo, and

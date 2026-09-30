@@ -85,8 +85,12 @@ namespace {
     bool loggedTint = false;
     // the sun (milestone 41): the directional light the lit terrain shaders were handed, c0 and c1 at the last such draw
     float terrainSunCol[3] = {}, terrainSunDir[3] = {}; uint32_t terrainSunDraws = 0, terrainSunDrawsLast = 0;
-    sims3cam::Sun sun = {};              // the sun the runtime holds
-    bool sunSet = false, loggedSun = false;
+    sims3cam::Sun sun = {}, moon = {};   // the two lights of the sky as the runtime holds them
+    bool sunSet = false, moonSet = false, skySet = false, loggedSun = false;
+    sims3cam::Twilight sky;              // the game's one light as the sun's and the moon's, overlapping at dusk and dawn (milestone 42)
+    sims3cam::Sun gameLight = {};        // the game's light as last handed over
+    void* moonApi = nullptr; uint32_t twilightLogged = 0; float skyLoggedB = -1.f;
+    uint64_t statsTick = 0; uint32_t statsFrame = 0;   // the last statistics, for the frame rate
     uint32_t sunChanges = 0, sunLogged = 0, framesNoTerrainSun = 0, sunRefused = 0; float sunLogLum = -1.f, sunLogDir[3] = {};   // the sun trace (milestone 19d)
     bool rsSet[256] = {};                              // render states the game has set at least once (the array's initial values are not trusted)
     uint32_t invisibleDrawsSkipped = 0, invisibleLogged = 0;   // captured draws whose render states make them invisible in-game (colour writes off, ...)
@@ -1103,7 +1107,7 @@ namespace {
     h.tssOurs = 0; h.uvIndexHidden = false; h.factorOurs = false; h.sentFactor = 0xFFFFFFFFu; h.gameFactor = 0xFFFFFFFFu;
     h.gameTss0[0] = D3DTOP_MODULATE; h.gameTss0[1] = D3DTA_TEXTURE; h.gameTss0[2] = D3DTA_CURRENT; h.gameTss0[3] = 0;
     h.gameXformSet[0] = h.gameXformSet[1] = false;
-    h.sunSet = false; h.terrainSunDraws = 0;
+    h.sunSet = false; h.moonSet = false; h.terrainSunDraws = 0;
     for (uint32_t k = 0; k < h.lamps.n; ++k) { sims3cam::Lamp& Lr = h.lamps.lamps[k]; Lr.sent = false; Lr.api = Lr.api2 = Lr.api3 = nullptr; }   // the runtime's lights are gone with the device; the lamps are re-sent
     for (bool& r : h.rsSet) r = false;
     Logger::info("Sims 3 camera hook: device reset -> the hook's objects released, held state cleared");
@@ -1820,10 +1824,23 @@ static void sims3LogStats(bool withTable) {
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   state: the game's put back %u times; masked writes emulated %u + %u + %u copied (skipped %u, copy failed %u)",
            h.restoreCount, h.maskEmuA, h.maskEmuB, h.maskEmuC, h.maskEmuSkipped, h.copyFailed);
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   lights: %u lamp lights held (lit %u times, put out %u times, %u light calls); sun: the terrain's light, colour %.3f, %.3f, %.3f (luminance %.3f) toward %.3f, %.3f, %.3f; %u updates, %u terrain draws in the last frame, %u frames without one, %u refused",
-           h.lamps.n, h.lamps.lit, h.lamps.out, h.lampEvents, h.sun.col[0], h.sun.col[1], h.sun.col[2], sims3cam::luminance(h.sun.col), h.sun.dir[0], h.sun.dir[1], h.sun.dir[2],
-           h.sunChanges, h.terrainSunDrawsLast, h.framesNoTerrainSun, h.sunRefused);
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   lights: %u lamp lights held (lit %u times, put out %u times, %u light calls)", h.lamps.n, h.lamps.lit, h.lamps.out, h.lampEvents);
   Logger::info(msg);
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   sky: the game's light is the %s's, luminance %.3f; sun %s luminance %.3f toward %.3f, %.3f, %.3f; moon %s luminance %.3f toward %.3f, %.3f, %.3f (share %.2f, its full %.3f); hold level %.3f, held: %s; %u light updates, %u terrain draws in the last frame, %u frames without one, %u refused",
+           h.sky.body ? "moon" : "sun", sims3cam::luminance(h.gameLight.col),
+           h.sky.showing[0] ? "sent," : "none,", h.sky.showing[0] ? sims3cam::luminance(h.sky.shown[0].col) : 0.f, h.sky.shown[0].dir[0], h.sky.shown[0].dir[1], h.sky.shown[0].dir[2],
+           h.sky.showing[1] ? "sent," : "none,", h.sky.showing[1] ? sims3cam::luminance(h.sky.shown[1].col) : 0.f, h.sky.shown[1].dir[0], h.sky.shown[1].dir[1], h.sky.shown[1].dir[2], sims3cam::moonShare(), h.sky.moonFull,
+           h.sky.hold, h.sky.heldBody < 0 ? "none" : (h.sky.heldBody ? "the moon" : "the sun"), h.sunChanges, h.terrainSunDrawsLast, h.framesNoTerrainSun, h.sunRefused);
+  Logger::info(msg);
+  {
+    const uint64_t nowTick = GetTickCount64();
+    if (g_sims3.statsTick != 0 && nowTick > g_sims3.statsTick && h.frames > g_sims3.statsFrame) {
+      snprintf(msg, sizeof msg, "Sims 3 camera hook:   frame rate: %.1f frames a second over the last %u frames",
+               (double) (h.frames - g_sims3.statsFrame) * 1000.0 / (double) (nowTick - g_sims3.statsTick), h.frames - g_sims3.statsFrame);
+      Logger::info(msg);
+    }
+    g_sims3.statsTick = nowTick; g_sims3.statsFrame = h.frames;
+  }
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   night: sun level %.3f (day reference %.3f), sky brightness %.3f and exposure ceiling %.2f EV sent %u times%s",
            h.skyLevel, h.skyDayRef, h.skyBrightnessSent, h.evMaxSent, h.skySends, GlobalOptions::getExposeRemixApi() ? "" : " (Remix API off: nothing sent)");
   Logger::info(msg);
@@ -1837,7 +1854,7 @@ static void sims3LogStats(bool withTable) {
            h.lampReported, h.lampsOn, h.lampsUndefined, h.lampsBeyondBudget, sims3cam::lampMax(), h.lampReportReads, h.lampReportStale, g_sims3LampScans.load(), g_sims3LampScanRegions.load(), g_sims3LampScanMegabytes.load());
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   api lights: %s; %u calls, sun %s, %u lamp handles; the game's light table: %s",
-           GlobalOptions::getExposeRemixApi() ? "on" : "off (no lights: exposeRemixApi is not set)", h.apiLightCalls, h.sunApi ? "live" : "none", lampHandles,
+           GlobalOptions::getExposeRemixApi() ? "on" : "off (no lights: exposeRemixApi is not set)", h.apiLightCalls, (h.sunApi || h.moonApi) ? (h.sunApi && h.moonApi ? "and moon live" : "or moon live") : "and moon none", lampHandles,
            !sims3cam::liteTable().models.empty() ? format_string("%u models and %u objects read from sims3lights.txt", (unsigned) sims3cam::liteTable().models.size(), (unsigned) sims3cam::liteTable().objects.size()).c_str()
              : (sims3cam::liteTable().lines ? "sims3lights.txt is of an older format (no lamps; run sims3/tools/lite_table.py)" : "no sims3lights.txt next to the DLL (no lamps; run sims3/tools/lite_table.py)"));
   Logger::info(msg);
@@ -2119,15 +2136,18 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
     }
   }
 
-  // The Sims 3 camera hook: the sun, or the moon: the directional light the lit terrain shaders
-  // were handed in this frame, forwarded as it is (milestone 41). A frame without such a draw
-  // keeps the light the runtime holds.
+  // The Sims 3 camera hook: the lights of the sky. The game's one directional light, as the lit
+  // terrain shaders were handed it in this frame, is the sun's or the moon's by the game's clock;
+  // the moon's is scaled by the user's share, and through dusk and dawn the outgoing one is held
+  // so that the two overlap (sims3cam::Twilight, milestone 42). A frame without a lit terrain
+  // draw keeps the lights the runtime holds.
   if (sims3cam::enabled()) {
     auto& h = g_sims3;
-    sims3cam::Sun now = {};
+    static const char* const kBody[2] = { "sun", "moon" };
+    sims3cam::Sun game = {};
     bool fresh = false;
     if (h.terrainSunDraws > 0) {
-      fresh = sims3cam::sunFromTerrain(h.terrainSunCol, h.terrainSunDir, now);
+      fresh = sims3cam::sunFromTerrain(h.terrainSunCol, h.terrainSunDir, game);
       if (!fresh && ++h.sunRefused <= 20u) {
         char msg[260];
         snprintf(msg, sizeof msg, "Sims 3 camera hook: sun: the terrain's constants at frame %u are not a light's and are left aside: c0 %.3f, %.3f, %.3f, c1 %.3f, %.3f, %.3f (%u draws)",
@@ -2136,50 +2156,74 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
       }
     }
     if (!fresh) ++h.framesNoTerrainSun;
-    if (fresh && (!h.sunSet || !sims3cam::sameSun(now, h.sun))) {
-      if (GlobalOptions::getExposeRemixApi()) {   // milestones 20b, 23: the API or nothing
-        h.sunApi = sims3ApiSun(h.sunApi, now); ++h.apiLightCalls;
-        if (!h.loggedApiLights) {
-          h.loggedApiLights = true; char msg[240];
-          snprintf(msg, sizeof msg, "Sims 3 camera hook: the sun goes out as a Remix API distant light (angular diameter %.2f degrees, radiance x%.2f per unit of colour), the lamps as sphere lights (radius %.2f, radiance x%.1f)",
-                   sims3cam::sunAngle(), sims3cam::sunRadiance(), sims3cam::lampRadius(), sims3cam::lampRadiance());
-          Logger::info(msg);
-        }
-      } else if (!h.apiLightsWarned) {
-        h.apiLightsWarned = true;
-        Logger::warn("Sims 3 camera hook: no lights: the Remix API is off (exposeRemixApi = True in .trex\\bridge.conf turns it on for the bridge server)");
-      }
-      h.sun = now; h.sunSet = true;
-      ++h.sunChanges;
-      const float lum = sims3cam::luminance(now.col);
+    if (fresh) {
+      const int heldBefore = h.sky.heldBody;
+      const int what = h.sky.step(game, sims3cam::clockMoonTime(h.clock), sims3cam::clockCoreNight(h.clock), sims3cam::clockTwilight(h.clock), sims3cam::moonShare());
+      h.skySet = true; h.gameLight = game;
       if (!h.loggedSun) {
-        h.loggedSun = true; char msg[260];
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: the sun is the terrain's light: first taken at frame %u from %u terrain draws, colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f",
-                 h.frames, h.terrainSunDraws, now.col[0], now.col[1], now.col[2], now.dir[0], now.dir[1], now.dir[2]);
+        h.loggedSun = true; char msg[340];
+        snprintf(msg, sizeof msg, "Sims 3 camera hook: the lights of the sky are the terrain's light: first taken at frame %u from %u terrain draws, colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f; the moon's share of the game's moonlight %.2f (moonLight)",
+                 h.frames, h.terrainSunDraws, game.col[0], game.col[1], game.col[2], game.dir[0], game.dir[1], game.dir[2], sims3cam::moonShare());
         Logger::info(msg);
       }
-      // the sun trace: every step of a tenth in brightness (or 0.02 near the dark) or of five degrees, with the game's clock
-      const bool moved = h.sunLogLum < 0.f || std::fabs(lum - h.sunLogLum) > (h.sunLogLum > 0.2f ? 0.1f * h.sunLogLum : 0.02f) || sims3cam::dot3(now.dir, h.sunLogDir) < 0.996f;
-      if (moved && h.sunLogged < 400) {
-        ++h.sunLogged; h.sunLogLum = lum; for (int q = 0; q < 3; ++q) h.sunLogDir[q] = now.dir[q];
-        char msg[300];
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: sun at frame %u, clock %.2f h%s: colour %.3f, %.3f, %.3f (luminance %.3f) toward %.3f, %.3f, %.3f; %u terrain draws; sky level %.3f",
-                 h.frames, h.clock.known ? h.clock.hour : -1.f, !h.clock.known ? " (unknown)" : (h.clock.night ? " night" : " day"), now.col[0], now.col[1], now.col[2], lum, now.dir[0], now.dir[1], now.dir[2], h.terrainSunDraws, h.skyLevel);
+      if (what != 0 && h.twilightLogged < 60u) {
+        ++h.twilightLogged; char msg[400];
+        if (what == 1)
+          snprintf(msg, sizeof msg, "Sims 3 camera hook: twilight at frame %u, clock %.2f h: the %s is HELD at colour %.3f, %.3f, %.3f (luminance %.3f) toward %.3f, %.3f, %.3f; the hold level %.3f = 0.9 x the share %.2f x the moon's full %.3f",
+                   h.frames, h.clock.hour, kBody[h.sky.heldBody & 1], h.sky.held.col[0], h.sky.held.col[1], h.sky.held.col[2], sims3cam::luminance(h.sky.held.col), h.sky.held.dir[0], h.sky.held.dir[1], h.sky.held.dir[2], h.sky.hold, sims3cam::moonShare(), h.sky.moonFull);
+        else
+          snprintf(msg, sizeof msg, "Sims 3 camera hook: twilight at frame %u, clock %.2f h: the held %s is LET GO; the %s's light stands at %.3f, the hold level %.3f",
+                   h.frames, h.clock.hour, kBody[heldBefore & 1], kBody[h.sky.body], sims3cam::luminance(h.sky.shown[h.sky.body].col), h.sky.hold);
+        Logger::info(msg);
+      }
+      for (int b = 0; b < 2; ++b) {
+        if (!h.sky.showing[b]) continue;
+        sims3cam::Sun& sent = b ? h.moon : h.sun; bool& set = b ? h.moonSet : h.sunSet; void*& api = b ? h.moonApi : h.sunApi;
+        if (set && sims3cam::sameSun(h.sky.shown[b], sent)) continue;
+        if (GlobalOptions::getExposeRemixApi()) {   // milestones 20b, 23: the API or nothing
+          api = sims3ApiSun(api, h.sky.shown[b], b); ++h.apiLightCalls;
+          if (!h.loggedApiLights) {
+            h.loggedApiLights = true; char msg[260];
+            snprintf(msg, sizeof msg, "Sims 3 camera hook: the sun and the moon go out as Remix API distant lights (angular diameter %.2f degrees, radiance x%.2f per unit of colour), the lamps as sphere lights (radius %.2f, radiance x%.1f)",
+                     sims3cam::sunAngle(), sims3cam::sunRadiance(), sims3cam::lampRadius(), sims3cam::lampRadiance());
+            Logger::info(msg);
+          }
+        } else if (!h.apiLightsWarned) {
+          h.apiLightsWarned = true;
+          Logger::warn("Sims 3 camera hook: no lights: the Remix API is off (exposeRemixApi = True in .trex\\bridge.conf turns it on for the bridge server)");
+        }
+        sent = h.sky.shown[b]; set = true;
+        ++h.sunChanges;
+      }
+      // the trace: every step of a tenth in the sky's light (or 0.02 near the dark), of five degrees, and every holding and letting go
+      const float lum = h.sky.level();
+      const sims3cam::Sun& lead = h.sky.shown[h.sky.body];
+      const bool moved = h.sunLogLum < 0.f || std::fabs(lum - h.sunLogLum) > (h.sunLogLum > 0.2f ? 0.1f * h.sunLogLum : 0.02f) || sims3cam::dot3(lead.dir, h.sunLogDir) < 0.996f || what != 0;
+      if (moved && h.sunLogged < 500) {
+        ++h.sunLogged; h.sunLogLum = lum; for (int q = 0; q < 3; ++q) h.sunLogDir[q] = lead.dir[q];
+        const sims3cam::Sun& s0 = h.sky.shown[0]; const sims3cam::Sun& s1 = h.sky.shown[1];
+        char msg[640];
+        snprintf(msg, sizeof msg, "Sims 3 camera hook: sky at frame %u, clock %.2f h%s: the game's light is the %s's, colour %.3f, %.3f, %.3f (luminance %.3f); SUN %s colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f; MOON %s colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f; the light of the sky %.3f, the hold level %.3f; sky level %.3f",
+                 h.frames, h.clock.known ? h.clock.hour : -1.f, !h.clock.known ? " (unknown)" : (h.clock.night ? " night" : " day"), kBody[h.sky.body], game.col[0], game.col[1], game.col[2], sims3cam::luminance(game.col),
+                 !h.sky.showing[0] ? "none," : (h.sky.heldBody == 0 ? "held," : "as the game's,"), h.sky.showing[0] ? s0.col[0] : 0.f, h.sky.showing[0] ? s0.col[1] : 0.f, h.sky.showing[0] ? s0.col[2] : 0.f, s0.dir[0], s0.dir[1], s0.dir[2],
+                 !h.sky.showing[1] ? "none," : (h.sky.heldBody == 1 ? "held," : "the game's by its share,"), h.sky.showing[1] ? s1.col[0] : 0.f, h.sky.showing[1] ? s1.col[1] : 0.f, h.sky.showing[1] ? s1.col[2] : 0.f, s1.dir[0], s1.dir[1], s1.dir[2],
+                 lum, h.sky.hold, h.skyLevel);
         Logger::info(msg);
       }
     }
     h.terrainSunDrawsLast = h.terrainSunDraws; h.terrainSunDraws = 0;
-    const bool haveSun = h.sunSet;   // for the night below
-    if (h.sunApi && h.sunSet && sims3cam::luminance(h.sun.col) > 0.001f) remixapi::remixapi_DrawLightInstance((remixapi_LightHandle) h.sunApi);   // every frame it gives light (milestone 20b)
-    // Night from the sun (milestone 20d): the luminance of the light the hook holds follows the
-    // game's clock (1 at noon, orange 0.3 at dusk, zero at 19 h, the moon's 0.16 by night, zero
-    // again at 6 h). Relative to full day it sets the runtime's sky brightness -- the sky probe
-    // scaled wherever a ray escapes, ambient and backdrop together -- and the ceiling of the
-    // auto-exposure, which would otherwise brighten the dark scene back up (its default range
-    // reaches +5 EV).
+    const bool haveSky = h.skySet;   // for the night below
+    if (h.sunApi && h.sunSet && h.sky.showing[0] && sims3cam::luminance(h.sun.col) > 0.001f) remixapi::remixapi_DrawLightInstance((remixapi_LightHandle) h.sunApi);   // every frame it gives light (milestone 20b)
+    if (h.moonApi && h.moonSet && h.sky.showing[1] && sims3cam::luminance(h.moon.col) > 0.001f) remixapi::remixapi_DrawLightInstance((remixapi_LightHandle) h.moonApi);
+    // Night from the lights of the sky (milestones 20d, 42): the luminance of the sun's and the
+    // moon's light together, as sent (1 at noon, orange 0.3 at dusk, never below the hold level
+    // through dusk and dawn, the moon's share by night). Relative to full day it sets the
+    // runtime's sky brightness -- the sky probe scaled wherever a ray escapes, ambient and
+    // backdrop together -- and the ceiling of the auto-exposure, which would otherwise brighten
+    // the dark scene back up (its default range reaches +5 EV).
     if (sims3cam::skyFromSun()) {
       float target = -1.f;
-      if (haveSun) target = sims3cam::luminance(h.sun.col);
+      if (haveSky) target = h.sky.level();
       if (target >= 0.f) {
         h.skyLevel = h.skyLevel < 0.f ? target : h.skyLevel + 0.05f * (target - h.skyLevel);
         if (h.skyLevel > h.skyDayRef) h.skyDayRef = h.skyLevel;
@@ -2194,9 +2238,10 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
             char val[32];
             snprintf(val, sizeof val, "%.3f", b); remixapi::remixapi_SetConfigVariable("rtx.skyBrightness", val);
             snprintf(val, sizeof val, "%.2f", ev); remixapi::remixapi_SetConfigVariable("rtx.autoExposure.evMaxValue", val);
-            const bool step = h.skyBrightnessSent < 0.f || std::fabs(b - h.skyBrightnessSent) > 0.1f;
+            const bool step = h.skyLoggedB < 0.f || std::fabs(b - h.skyLoggedB) > 0.05f;   // against the last one logged (a smooth light never steps against the last one sent)
             h.skyBrightnessSent = b; h.evMaxSent = ev; h.skySendFrame = h.frames; ++h.skySends;
-            if (step && h.skyBrightLogged < 100) {
+            if (step && h.skyBrightLogged < 200) {
+              h.skyLoggedB = b;
               ++h.skyBrightLogged; char msg[220];
               snprintf(msg, sizeof msg, "Sims 3 camera hook: sky brightness %.3f and exposure ceiling %.2f EV sent at frame %u (sun level %.3f, day reference %.3f; clock %.2f h)",
                        b, ev, h.frames, h.skyLevel, dayRef, h.clock.known ? h.clock.hour : -1.f);
@@ -2330,21 +2375,21 @@ static int sims3LampRead(const uint8_t* block, float* floats, int32_t* ints, sim
 // its light should exist. Radiance and size are explicit here, where the fixed-function path
 // left them to the runtime's conversion (a 2-degree disc at intensity 1 per unit of colour for
 // the sun; a 4-unit sphere for every lamp).
-static const uint64_t kSims3SunHash = 0x53494D5333535541ull, kSims3LampHash = 0x53494D53334C4D00ull;
+static const uint64_t kSims3SunHash = 0x53494D5333535541ull, kSims3MoonHash = 0x53494D53334D4F4Full, kSims3LampHash = 0x53494D53334C4D00ull;
 static void* sims3ApiLightReplace(void* old, const remixapi_LightInfo& info) {
   if (old) remixapi::remixapi_DestroyLight((remixapi_LightHandle) old);
   remixapi_LightHandle h = nullptr;
   if (remixapi::remixapi_CreateLight(&info, &h) != REMIXAPI_ERROR_CODE_SUCCESS) return nullptr;
   return (void*) h;
 }
-static void* sims3ApiSun(void* old, const sims3cam::Sun& s) {
+static void* sims3ApiSun(void* old, const sims3cam::Sun& s, int body) {   // body: 0 the sun, 1 the moon
   remixapi_LightInfoDistantEXT d = {};
   d.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_DISTANT_EXT;
   d.direction.x = -s.dir[0]; d.direction.y = -s.dir[1]; d.direction.z = -s.dir[2];   // the direction the light travels
   d.angularDiameterDegrees = sims3cam::sunAngle();
   d.volumetricRadianceScale = 1.f;
   remixapi_LightInfo info = {};
-  info.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO; info.pNext = &d; info.hash = kSims3SunHash;
+  info.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO; info.pNext = &d; info.hash = body ? kSims3MoonHash : kSims3SunHash;
   const float k = sims3cam::sunRadiance();
   info.radiance.x = s.col[0] > 0.f ? s.col[0] * k : 0.f; info.radiance.y = s.col[1] > 0.f ? s.col[1] * k : 0.f; info.radiance.z = s.col[2] > 0.f ? s.col[2] * k : 0.f;
   return sims3ApiLightReplace(old, info);
