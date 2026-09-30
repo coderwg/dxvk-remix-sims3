@@ -6,7 +6,7 @@
 #               auto-exposure (rtx.autoExposure.evMaxValue) follow the luminance of the sun and the moon as sent; needs exposeRemixApi = True
 # skyDayLevel   the sun luminance of full day, in thousandths (the reference; a higher one seen in the run raises it)
 # skyMinBrightness  the darkest sky brightness, in thousandths
-# dayEvMax / nightEvMax  the auto-exposure ceiling in hundredths of an EV at full day and at the floor (runtime default 500)
+# dayEvMax / nightEvMax  the auto-exposure ceiling in hundredths of an EV at full day and at the floor (runtime default 500; 0 at the floor since 2026-09-30: no brightening of the night)
 terrain = 1
 ringTrace = 0
 markKey = 220
@@ -23,7 +23,7 @@ skyFromSun = 1
 skyDayLevel = 900
 skyMinBrightness = 30
 dayEvMax = 500
-nightEvMax = 100
+nightEvMax = 0
 sunAngle = 2000
 sunRadiance = 1000
 moonLight = 50
