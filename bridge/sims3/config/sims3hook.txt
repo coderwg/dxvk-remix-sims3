@@ -12,23 +12,27 @@ ringTrace = 0
 markKey = 220
 # The lights go to the runtime through the Remix API (exposeRemixApi = True in .trex\bridge.conf). The lamps are the
 # game's own: their lights and shapes from sims3lights.txt next to the DLL (sims3/tools/lite_table.py writes it).
-# The sun and the moon are the game's one directional light, as its terrain shaders are handed it; at dusk and dawn the
-# outgoing one is held so that the two overlap and the light never falls below the night's.
+# The sun and the moon are the game's one directional light, as its terrain shaders are handed it, told apart by the
+# game's clock; the moon by its share, the dawn eased, the sun with an afterglow at dusk.
 # sunAngle      the sun's and the moon's angular diameter in thousandths of a degree
 # sunRadiance   their radiance per unit of the game's colour, thousandths
 # moonLight     the moon's share of the game's moonlight in percent (100 = the game's own; 0 = none, the night stays dark)
 # dawnMinutes   the sun's rise eased over this many game minutes after sunrise (the game's own rise is over in twelve); 0 = as the game has it
+# duskMinutes   the sun's afterglow: held when its light falls below duskLevel during dusk, faded out over this many game minutes; 0 = none
+# duskLevel     the level of full sunlight, in thousandths, below which the afterglow begins (the game's own dusk drops from red to nothing in twelve minutes)
 # lampRadius    the lamps' sphere radius in thousandths of a unit
 # lampRadiance  the lamps' radiance per unit of colour, thousandths
 skyFromSun = 1
 skyDayLevel = 900
-skyMinBrightness = 5
+skyMinBrightness = 2
 dayEvMax = 500
 nightEvMax = 0
 sunAngle = 2000
 sunRadiance = 1000
-moonLight = 5
+moonLight = 2
 dawnMinutes = 60
+duskMinutes = 40
+duskLevel = 100
 lampRadius = 150
 lampRadiance = 40000
 # The lamps' shapes come from the game's light definitions (sims3lights.txt, format 2).
