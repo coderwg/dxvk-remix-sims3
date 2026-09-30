@@ -91,7 +91,7 @@ namespace {
     sims3cam::Sun gameLight = {};        // the game's light as last handed over
     void* moonApi = nullptr; uint32_t twilightLogged = 0; float skyLoggedB = -1.f;
     uint64_t statsTick = 0; uint32_t statsFrame = 0;   // the last statistics, for the frame rate
-    uint32_t sunChanges = 0, sunLogged = 0, framesNoTerrainSun = 0, sunRefused = 0; float sunLogLum = -1.f, sunLogDir[3] = {};   // the sun trace (milestone 19d)
+    uint32_t sunChanges = 0, sunLogged = 0, framesNoTerrainSun = 0, sunRefused = 0, sunLogFrame = 0; float sunLogLum = -1.f, sunLogDir[3] = {};   // the sun trace (milestone 19d)
     bool rsSet[256] = {};                              // render states the game has set at least once (the array's initial values are not trusted)
     uint32_t invisibleDrawsSkipped = 0, invisibleLogged = 0;   // captured draws whose render states make them invisible in-game (colour writes off, ...)
     bool vsCapturedUv = false;           // bound vertex shader's draws sample with its captured TEXCOORD0 output
@@ -2158,12 +2158,16 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
     if (!fresh) ++h.framesNoTerrainSun;
     if (fresh) {
       const int heldBefore = h.sky.heldBody;
-      const int what = h.sky.step(game, sims3cam::clockMoonTime(h.clock), sims3cam::clockCoreNight(h.clock), sims3cam::clockTwilight(h.clock), sims3cam::moonShare());
+      // the dawn eased (milestone 43): the game's sunrise is steep, so for dawnMinutes after sunrise the sun's light is scaled up from nothing
+      sims3cam::Sun eased = game;
+      const float ease = sims3cam::clockMoonTime(h.clock) ? 1.f : sims3cam::dawnEase(h.clock, sims3cam::dawnHours());
+      if (ease < 1.f) for (int q = 0; q < 3; ++q) eased.col[q] *= ease;
+      const int what = h.sky.step(eased, sims3cam::clockMoonTime(h.clock), sims3cam::clockCoreNight(h.clock), sims3cam::clockTwilight(h.clock), sims3cam::moonShare());
       h.skySet = true; h.gameLight = game;
       if (!h.loggedSun) {
         h.loggedSun = true; char msg[340];
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: the lights of the sky are the terrain's light: first taken at frame %u from %u terrain draws, colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f; the moon's share of the game's moonlight %.2f (moonLight)",
-                 h.frames, h.terrainSunDraws, game.col[0], game.col[1], game.col[2], game.dir[0], game.dir[1], game.dir[2], sims3cam::moonShare());
+        snprintf(msg, sizeof msg, "Sims 3 camera hook: the lights of the sky are the terrain's light: first taken at frame %u from %u terrain draws, colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f; the moon's share of the game's moonlight %.2f (moonLight); the dawn eased over %.0f minutes (dawnMinutes)",
+                 h.frames, h.terrainSunDraws, game.col[0], game.col[1], game.col[2], game.dir[0], game.dir[1], game.dir[2], sims3cam::moonShare(), sims3cam::dawnHours() * 60.f);
         Logger::info(msg);
       }
       if (what != 0 && h.twilightLogged < 60u) {
@@ -2198,13 +2202,13 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
       // the trace: every step of a tenth in the sky's light (or 0.02 near the dark), of five degrees, and every holding and letting go
       const float lum = h.sky.level();
       const sims3cam::Sun& lead = h.sky.shown[h.sky.body];
-      const bool moved = h.sunLogLum < 0.f || std::fabs(lum - h.sunLogLum) > (h.sunLogLum > 0.2f ? 0.1f * h.sunLogLum : 0.02f) || sims3cam::dot3(lead.dir, h.sunLogDir) < 0.996f || what != 0;
+      const bool moved = h.sunLogLum < 0.f || std::fabs(lum - h.sunLogLum) > (h.sunLogLum > 0.2f ? 0.1f * h.sunLogLum : 0.02f) || sims3cam::dot3(lead.dir, h.sunLogDir) < 0.996f || what != 0 || (ease < 1.f && h.frames - h.sunLogFrame >= 120u);
       if (moved && h.sunLogged < 500) {
-        ++h.sunLogged; h.sunLogLum = lum; for (int q = 0; q < 3; ++q) h.sunLogDir[q] = lead.dir[q];
+        ++h.sunLogged; h.sunLogLum = lum; h.sunLogFrame = h.frames; for (int q = 0; q < 3; ++q) h.sunLogDir[q] = lead.dir[q];
         const sims3cam::Sun& s0 = h.sky.shown[0]; const sims3cam::Sun& s1 = h.sky.shown[1];
-        char msg[640];
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: sky at frame %u, clock %.2f h%s: the game's light is the %s's, colour %.3f, %.3f, %.3f (luminance %.3f); SUN %s colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f; MOON %s colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f; the light of the sky %.3f, the hold level %.3f; sky level %.3f",
-                 h.frames, h.clock.known ? h.clock.hour : -1.f, !h.clock.known ? " (unknown)" : (h.clock.night ? " night" : " day"), kBody[h.sky.body], game.col[0], game.col[1], game.col[2], sims3cam::luminance(game.col),
+        char msg[700];
+        snprintf(msg, sizeof msg, "Sims 3 camera hook: sky at frame %u, clock %.2f h%s: the game's light is the %s's, colour %.3f, %.3f, %.3f (luminance %.3f), the dawn's ease x%.2f; SUN %s colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f; MOON %s colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f; the light of the sky %.3f, the hold level %.3f; sky level %.3f",
+                 h.frames, h.clock.known ? h.clock.hour : -1.f, !h.clock.known ? " (unknown)" : (h.clock.night ? " night" : " day"), kBody[h.sky.body], game.col[0], game.col[1], game.col[2], sims3cam::luminance(game.col), ease,
                  !h.sky.showing[0] ? "none," : (h.sky.heldBody == 0 ? "held," : "as the game's,"), h.sky.showing[0] ? s0.col[0] : 0.f, h.sky.showing[0] ? s0.col[1] : 0.f, h.sky.showing[0] ? s0.col[2] : 0.f, s0.dir[0], s0.dir[1], s0.dir[2],
                  !h.sky.showing[1] ? "none," : (h.sky.heldBody == 1 ? "held," : "the game's by its share,"), h.sky.showing[1] ? s1.col[0] : 0.f, h.sky.showing[1] ? s1.col[1] : 0.f, h.sky.showing[1] ? s1.col[2] : 0.f, s1.dir[0], s1.dir[1], s1.dir[2],
                  lum, h.sky.hold, h.skyLevel);

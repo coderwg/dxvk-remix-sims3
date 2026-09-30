@@ -17,16 +17,18 @@ markKey = 220
 # sunAngle      the sun's and the moon's angular diameter in thousandths of a degree
 # sunRadiance   their radiance per unit of the game's colour, thousandths
 # moonLight     the moon's share of the game's moonlight in percent (100 = the game's own; 0 = none, the night stays dark)
+# dawnMinutes   the sun's rise eased over this many game minutes after sunrise (the game's own rise is over in twelve); 0 = as the game has it
 # lampRadius    the lamps' sphere radius in thousandths of a unit
 # lampRadiance  the lamps' radiance per unit of colour, thousandths
 skyFromSun = 1
 skyDayLevel = 900
-skyMinBrightness = 30
+skyMinBrightness = 5
 dayEvMax = 500
 nightEvMax = 0
 sunAngle = 2000
 sunRadiance = 1000
-moonLight = 25
+moonLight = 5
+dawnMinutes = 60
 lampRadius = 150
 lampRadiance = 40000
 # The lamps' shapes come from the game's light definitions (sims3lights.txt, format 2).

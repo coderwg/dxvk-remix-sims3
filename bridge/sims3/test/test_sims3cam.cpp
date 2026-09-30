@@ -544,6 +544,10 @@ int main() {
       };
       auto clockAt = [](float hour) { GameClock c; c.hour = hour; c.sunrise = 6.f; c.sunset = 18.f; c.night = hour >= 18.f || hour <= 6.f; c.known = true; return c; };
       CHECK(!clockMoonTime(clockAt(18.5f)) && clockMoonTime(clockAt(19.f)) && clockMoonTime(clockAt(5.9f)) && !clockMoonTime(clockAt(6.f)) && !clockMoonTime(clockAt(12.f)), "clock: the light is the moon's from an hour after sunset until sunrise");
+      GameClock unknownClock = {};
+      CHECK(nearf(dawnEase(clockAt(6.f), 1.f), 0.f) && nearf(dawnEase(clockAt(6.5f), 1.f), 0.5f) && nearf(dawnEase(clockAt(7.f), 1.f), 1.f) && nearf(dawnEase(clockAt(5.9f), 1.f), 1.f) && nearf(dawnEase(clockAt(12.f), 1.f), 1.f),
+            "dawn: eased over an hour after sunrise, nothing at sunrise, half at half past, the game's own from seven; untouched before sunrise and by day");
+      CHECK(nearf(dawnEase(clockAt(6.5f), 0.f), 1.f) && nearf(dawnEase(unknownClock, 1.f), 1.f) && nearf(dawnEase(clockAt(6.5f), 2.f), 0.25f), "dawn: no ease without minutes or without the clock; two hours ease a quarter at half past six");
       CHECK(clockTwilight(clockAt(18.f)) && clockTwilight(clockAt(19.9f)) && !clockTwilight(clockAt(20.f)) && clockTwilight(clockAt(4.f)) && clockTwilight(clockAt(6.9f)) && !clockTwilight(clockAt(7.f)) && !clockTwilight(clockAt(12.f)) && clockCoreNight(clockAt(0.f)) && !clockCoreNight(clockAt(4.5f)),
             "clock: dusk is the two hours from sunset, dawn from two hours before sunrise until one after; the heart of the night lies between");
       for (int pass = 0; pass < 2; ++pass) {

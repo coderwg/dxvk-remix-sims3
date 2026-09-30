@@ -990,6 +990,9 @@ inline float nightEvMax() { static float s = -99.f; if (s < -98.f) { int v = hoo
 inline float sunAngle() { static float s = -1.f; if (s < 0.f) { int v = hookOption("sunAngle", 2000); if (v < 100) v = 100; if (v > 90000) v = 90000; s = (float) v / 1000.f; } return s; }
 // moonLight = the moon's share of the game's moonlight, in percent (100 = the game's own; 0 = none, the night stays dark).
 inline float moonShare() { static float s = -1.f; if (s < 0.f) { int v = hookOption("moonLight", 100); if (v < 0) v = 0; if (v > 200) v = 200; s = (float) v / 100.f; } return s; }
+// dawnMinutes = the sun's rise eased over this many game minutes after sunrise (the game's own rise is steep: nothing
+// at 6 h, orange at 6.2 h): the game's light times the minutes since sunrise over this; 0 = the game's rise as it is.
+inline float dawnHours() { static float s = -1.f; if (s < 0.f) { int v = hookOption("dawnMinutes", 60); if (v < 0) v = 0; if (v > 360) v = 360; s = (float) v / 60.f; } return s; }
 inline float sunRadiance() { static float s = -1.f; if (s < 0.f) { int v = hookOption("sunRadiance", 1000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
 inline float lampRadius() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampRadius", 150); if (v < 20) v = 20; s = (float) v / 1000.f; } return s; }
 // lampMax = the most lamps lit at once (the nearest to the camera's target first); lampWorldLights =
@@ -1043,6 +1046,12 @@ inline bool clockMoonTime(const GameClock& c) { return c.known && (c.hour >= c.s
 inline bool clockCoreNight(const GameClock& c) { return c.known && (c.hour >= c.sunset + 2.f || c.hour < c.sunrise - 2.f); }
 // The two changes of the light: dusk, the two hours from sunset; dawn, from two hours before sunrise until one after.
 inline bool clockTwilight(const GameClock& c) { return c.known && ((c.hour >= c.sunset && c.hour < c.sunset + 2.f) || (c.hour >= c.sunrise - 2.f && c.hour < c.sunrise + 1.f)); }
+// The dawn's ease (milestone 43, the hook's own): the factor on the sun's light for the first `hours`
+// after sunrise, rising from nothing at sunrise to the game's own light at the end; 1 otherwise.
+inline float dawnEase(const GameClock& c, float hours) {
+  if (!c.known || hours <= 0.f || c.hour < c.sunrise || c.hour >= c.sunrise + hours) return 1.f;
+  return (c.hour - c.sunrise) / hours;
+}
 inline uint64_t lampId64(const int32_t* lowHigh) { return (uint64_t) (uint32_t) lowHigh[0] | ((uint64_t) (uint32_t) lowHigh[1] << 32); }
 // A record's word for one light of a lamp: on or off, and the colour to send -- the player's colour
 // (a preset's or a custom one; the definition's own when the lamp is left at its default, preset
