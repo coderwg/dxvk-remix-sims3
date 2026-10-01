@@ -91,7 +91,7 @@ namespace {
     bool fogReady = false, fogOurs = false, fogBad = false, fogApiWarned = false; DWORD fogSaved[5] = {};   // the game's fog for the runtime (milestone 56)
     float fogBright = 0.f, fogShare = 0.f, fogScaleNow = -1.f, fogScaleLogged = -1.f; uint32_t fogScaleFrame = 0, fogScaleSends = 0;   // its brightness, lit as the scene is lit (milestone 57)
     uint32_t fogColour = 0, fogLoggedColour = 0, fogFrameDraws = 0, fogDraws = 0, gameFogDraws = 0, fogLogged = 0, fogDisagree = 0;
-    float fogStart = 0.f, fogEnd = 0.f, fogCurve = 1.f, fogLoggedEnd = -1.f;
+    float fogStart = 0.f, fogEnd = 0.f, fogCurve = 1.f, fogLoggedEnd = -1.f, fogLoggedCurve = -1.f; uint32_t fogScaleLines = 0;   // the fog's two log lines, each with its own cap (milestone 58)
     sims3cam::Sun sun = {}, moon = {};   // the two lights of the sky as the runtime holds them
     bool sunSet = false, moonSet = false, skySet = false, loggedSun = false;
     sims3cam::SkyLights sky;             // the game's one light as the sun's and the moon's, with the sun's afterglow at dusk (milestones 42, 44)
@@ -2471,8 +2471,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
           remixapi::remixapi_SetConfigVariable("rtx.fogColorScale", val);
           h.fogScaleNow = scale; h.fogScaleFrame = h.frames; ++h.fogScaleSends;
           const bool step = h.fogScaleLogged < 0.f || std::fabs(scale - h.fogScaleLogged) > 0.2f * h.fogScaleLogged;
-          if (step && h.fogLogged < 200u) {
-            h.fogScaleLogged = scale; ++h.fogLogged;
+          if (step && h.fogScaleLines < 200u) {
+            h.fogScaleLogged = scale; ++h.fogScaleLines;
             char msg[300];
             snprintf(msg, sizeof msg, "Sims 3 camera hook: fog brightness %.6f sent at frame %u (the fog colour's brightest channel %.4f x the light sent over the game's %.3f x fogColourScale %.2f; clock %.2f h)",
                      scale, h.frames, h.fogBright, h.fogShare, sims3cam::fogColourScale(), h.clock.known ? h.clock.hour : -1.f);
@@ -2485,9 +2485,11 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
           const int a = (int) ((h.fogColour >> (8 * k)) & 0xFFu), b = (int) ((h.fogLoggedColour >> (8 * k)) & 0xFFu);
           if ((a > b ? a - b : b - a) > moved) moved = a > b ? a - b : b - a;
         }
-        const bool step = h.fogLoggedEnd < 0.f || moved > 2 || std::fabs(h.fogEnd - h.fogLoggedEnd) > 0.05f * h.fogLoggedEnd;
-        if ((step || h.markDump == 2) && h.fogLogged < 200u) {
-          h.fogLoggedColour = h.fogColour; h.fogLoggedEnd = h.fogEnd; ++h.fogLogged;
+        // a line when the hue moves 8 of 255 (run 167: at 2 the dawn's drift used up the cap by 5.7 h), the
+        // end a fifth or the curve a quarter (the zoom moves both), and at every mark whatever the cap
+        const bool step = h.fogLoggedEnd < 0.f || moved > 8 || std::fabs(h.fogEnd - h.fogLoggedEnd) > 0.2f * h.fogLoggedEnd || std::fabs(h.fogCurve - h.fogLoggedCurve) > 0.25f;
+        if ((step && h.fogLogged < 200u) || h.markDump == 2) {
+          h.fogLoggedColour = h.fogColour; h.fogLoggedEnd = h.fogEnd; h.fogLoggedCurve = h.fogCurve; ++h.fogLogged;
           char msg[340];
           snprintf(msg, sizeof msg, "Sims 3 camera hook: the game's fog at frame %u, clock %.2f h: colour %.3f %.3f %.3f, from %.0f to %.0f (curve %.2f) -> the runtime's fog colour %u %u %u of 255 (linear hue), from %.0f to %.0f",
                    h.frames, h.clock.known ? h.clock.hour : -1.f, c2[0], c2[1], c2[2], (1.f - c4[1]) / c4[0], -c4[1] / c4[0], c4[3],
