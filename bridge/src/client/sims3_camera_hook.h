@@ -747,28 +747,28 @@ inline bool appendConstantRead(std::vector<DWORD>& t, uint32_t reg) {
 // s1 and the diffuse blend at s2. The stage below was read from each pixel shader's
 // arithmetic (the sample multiplied by the summed light colour) and is keyed by the pixel
 // shader's bytecode hash; it takes precedence over pickAlbedoStage for captured draws.
-// The object shaders also carry a four-light rig at c0..c7 (rig: a fact about the shader, kept
-// for the record; the sun was read from it until milestone 41) and, the recolourable ones, the
-// Create-A-Style tint at c8 (tint, see packTint).
-struct AlbedoStage { uint64_t hash; const char* name; uint8_t stage; bool rig; bool tint; };
+// The recolourable object shaders also carry the Create-A-Style tint at c8 (tint, see packTint).
+// (Until milestone 52 the table also marked the shaders carrying a four-light rig at c0..c7, the
+// input of the sun's vote, removed in milestone 41.)
+struct AlbedoStage { uint64_t hash; const char* name; uint8_t stage; bool tint; };
 inline constexpr uint8_t kTintRegister = 8;
 
 inline const AlbedoStage kAlbedoStages[] = {
   // objects: s2 the lot's light map (sampled with a world-space projection, rows c15/c16 of the VS; scaled by c12.y), s3 diffuse (TEXCOORD2), s4 specular mask; light rig and tint
-  { 0x0c19795eb80e2e96ull, "object PS 0x10a68900", 3, true, true },
-  { 0x8282d3a0d611b62eull, "object PS 0x10a69440", 3, true, true },
-  { 0x54bea85dc05c7c35ull, "object PS 0x10a694e0", 3, true, true },
-  { 0x470c140c802b7ec0ull, "object PS 0x1118d5e0", 3, true, true },
-  { 0x5aee1186d554dbc4ull, "object PS 0x10a68220 (s2 diffuse, TEXCOORD2; 3 lights)", 2, true, false },
+  { 0x0c19795eb80e2e96ull, "object PS 0x10a68900", 3, true },
+  { 0x8282d3a0d611b62eull, "object PS 0x10a69440", 3, true },
+  { 0x54bea85dc05c7c35ull, "object PS 0x10a694e0", 3, true },
+  { 0x470c140c802b7ec0ull, "object PS 0x1118d5e0", 3, true },
+  { 0x5aee1186d554dbc4ull, "object PS 0x10a68220 (s2 diffuse, TEXCOORD2; 3 lights)", 2, false },
   // lot terrain paint (VS 0x15c787a0; thousands of triangles per draw): s1 normal map,
   // diffuse = mask blend of the paint layers s2/s3/s4 (TEXCOORD0). Not the floor tiles.
   { 0x17eabad58f650687ull, "terrain paint PS 0x13d1dd40", 2 },
   { 0x670dbe0fa52c4650ull, "terrain paint PS 0x13d1d5c0", 2 },
   { 0xd63bf505ec4a44a0ull, "terrain paint PS 0x13d1d8e0", 2 },
   { 0x98062e8d4d12af7dull, "terrain paint PS 0x13d1d980", 2 },
-  // in-game variants (run-15 shader dump); the 0x10a68220 family carries the rig
-  { 0x1458c67a2c009563ull, "object PS variant 1458c67a (s2 diffuse, TEXCOORD2)", 2, true, false },
-  { 0xa3afadeeb6a034c6ull, "object PS variant a3afadee (s2 diffuse, TEXCOORD2)", 2, true, false },
+  // in-game variants (run-15 shader dump)
+  { 0x1458c67a2c009563ull, "object PS variant 1458c67a (s2 diffuse, TEXCOORD2)", 2, false },
+  { 0xa3afadeeb6a034c6ull, "object PS variant a3afadee (s2 diffuse, TEXCOORD2)", 2, false },
   { 0x528502f128e81506ull, "PS 528502f1 (s1 on TEXCOORD2)", 1 },
   { 0xc0b8100612d70879ull, "PS c0b81006 (s1 on TEXCOORD1)", 1 },
   { 0x5e6fbac12103e50bull, "PS 5e6fbac1 (s1 on TEXCOORD1)", 1 },
@@ -969,15 +969,14 @@ inline int markKey() { static int s = -1; if (s < 0) { s = hookOption("markKey",
 // ringTrace = 1 keeps the rolling trace of every draw and event (the last ~300 frames) that the
 // mark key writes to the log (diagnostic; 0 = off).
 inline int ringTrace() { static int s = -1; if (s < 0) s = hookOption("ringTrace", 0) != 0; return s; }
-// Night from the sun (milestone 20d): skyFromSun = 1 drives the runtime's sky brightness
-// (rtx.skyBrightness) and the ceiling of its auto-exposure (rtx.autoExposure.evMaxValue) from
-// the luminance of the sun the hook holds, through the Remix API (the server loads the
-// runtime's API only with exposeRemixApi = True in .trex\bridge.conf). skyDayLevel = the sun
-// luminance of full day in thousandths, the reference (a higher one measured raises it);
-// skyMinBrightness = the sky's floor in thousandths; dayEvMax / nightEvMax = the exposure
-// ceiling in hundredths of an EV at full day and at the floor (the runtime's default is 5.0).
-inline int skyFromSun() { static int s = -1; if (s < 0) s = hookOption("skyFromSun", 1) != 0; return s; }
-inline float skyDayLevel() { static float s = -1.f; if (s < 0.f) { int v = hookOption("skyDayLevel", 900); if (v < 10) v = 10; s = (float) v / 1000.f; } return s; }
+// Night from the lights of the sky (milestones 20d, 52): skyFromLight = 1 drives the runtime's sky
+// brightness (rtx.skyBrightness) and the ceiling of its auto-exposure (rtx.autoExposure.evMaxValue)
+// from the luminance of the sun and the moon as sent, relative to the game's full daylight (1),
+// through the Remix API (the server loads the runtime's API only with exposeRemixApi = True in
+// .trex\bridge.conf). skyMinBrightness = the sky's floor in thousandths; dayEvMax / nightEvMax =
+// the exposure ceiling in hundredths of an EV at full day and at the floor (the runtime's default
+// is 5.0).
+inline int skyFromLight() { static int s = -1; if (s < 0) s = hookOption("skyFromLight", 1) != 0; return s; }
 inline float skyMinBrightness() { static float s = -1.f; if (s < 0.f) { int v = hookOption("skyMinBrightness", 30); if (v < 0) v = 0; if (v > 1000) v = 1000; s = (float) v / 1000.f; } return s; }
 inline float dayEvMax() { static float s = -99.f; if (s < -98.f) { int v = hookOption("dayEvMax", 500); if (v < -1000) v = -1000; if (v > 1000) v = 1000; s = (float) v / 100.f; } return s; }
 inline float nightEvMax() { static float s = -99.f; if (s < -98.f) { int v = hookOption("nightEvMax", 100); if (v < -1000) v = -1000; if (v > 1000) v = 1000; s = (float) v / 100.f; } return s; }
@@ -1130,7 +1129,7 @@ inline bool wantsUnlitPatch(uint64_t psHash) { for (uint64_t h : kUnlitPatches) 
 // c7.x + probe x c8.x, so c0 is the directional light's colour (sun or moon) and c1 the unit
 // direction toward it, as the game hands them over for the draw (read from the disassembly,
 // milestone 40; the terrain is outdoors, so nothing attenuates it as a room does an object's
-// light). The hook's sun is this light (sunFromTerrain, milestone 41).
+// light). The hook's sun is this light (skyLightFrom, milestone 41).
 inline bool isLitTerrainPs(uint64_t psHash) { return wantsUnlitPatch(psHash); }
 // ---- the game's own light in its memory (milestone 49) ----------------------------------
 // The game keeps the light it computes in a record of eight floats: the direction toward the
@@ -1354,9 +1353,10 @@ inline float luminance(const float* c) { return 0.2126f*c[0] + 0.7152f*c[1] + 0.
 // whole sunrise -- while the terrain's direction equalled the shadow map's in every sample.)
 struct Sun { float dir[3]; float col[3]; };   // dir: unit, toward the light; col: the game's colour, 1 = full
 
-// The terrain's two constants as the sun. False when they are not a light's: the direction is
-// not a unit vector from above, or a colour is not a number, negative or beyond any light's.
-inline bool sunFromTerrain(const float* c0, const float* c1, Sun& out) {
+// A colour and a direction toward the light -- the terrain's two constants, or the game's own
+// light record -- as the sky's light. False when they are not a light's: the direction is not a
+// unit vector from above, or a colour is not a number, negative or beyond any light's.
+inline bool skyLightFrom(const float* c0, const float* c1, Sun& out) {
   const float n = len3(c1);
   if (!(n > 0.98f && n < 1.02f) || !(c1[1] > 0.05f)) return false;
   for (int q = 0; q < 3; ++q) if (!(c0[q] >= 0.f && c0[q] <= 16.f)) return false;

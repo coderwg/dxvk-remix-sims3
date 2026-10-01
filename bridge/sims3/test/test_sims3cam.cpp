@@ -527,17 +527,17 @@ int main() {
       // the sun: the terrain's light as the game hands it over (values of run 152)
       const float noonCol[4] = { 1.f, 1.f, 0.995f, 0.f }, noonDir[4] = { 0.019f, 0.946f, 0.324f, 0.f };
       Sun noon = {};
-      CHECK(sunFromTerrain(noonCol, noonDir, noon) && nearf(noon.col[2], 0.995f) && nearf(len3(noon.dir), 1.f) && nearf(noon.dir[1], 0.946f), "sun: the terrain's light at noon, white from high up (%.3f %.3f %.3f)", noon.dir[0], noon.dir[1], noon.dir[2]);
+      CHECK(skyLightFrom(noonCol, noonDir, noon) && nearf(noon.col[2], 0.995f) && nearf(len3(noon.dir), 1.f) && nearf(noon.dir[1], 0.946f), "sun: the terrain's light at noon, white from high up (%.3f %.3f %.3f)", noon.dir[0], noon.dir[1], noon.dir[2]);
       const float darkCol[4] = { 0.f, 0.f, 0.f, 0.f }, moonDir[4] = { 0.645f, 0.723f, 0.247f, 0.f };
       Sun dark = {};
-      CHECK(sunFromTerrain(darkCol, moonDir, dark) && luminance(dark.col) == 0.f, "sun: at 19 h the game's light is zero, and that is taken as it is");
+      CHECK(skyLightFrom(darkCol, moonDir, dark) && luminance(dark.col) == 0.f, "sun: at 19 h the game's light is zero, and that is taken as it is");
       const float moonCol[4] = { 0.137f, 0.137f, 0.392f, 0.f };
       Sun moon = {};
-      CHECK(sunFromTerrain(moonCol, moonDir, moon) && nearf(luminance(moon.col), 0.1554f), "sun: by night it is the moon's blue (luminance %.4f)", luminance(moon.col));
+      CHECK(skyLightFrom(moonCol, moonDir, moon) && nearf(luminance(moon.col), 0.1554f), "sun: by night it is the moon's blue (luminance %.4f)", luminance(moon.col));
       const float noDir[4] = { 0.f, 0.f, 0.f, 0.f }, longDir[4] = { 0.f, 2.f, 0.f, 0.f }, downDir[4] = { 0.f, -1.f, 0.f, 0.f }, badCol[4] = { -0.5f, 1.f, 1.f, 0.f }, hugeCol[4] = { 100.f, 1.f, 1.f, 0.f };
       Sun none = {};
-      CHECK(!sunFromTerrain(noonCol, noDir, none) && !sunFromTerrain(noonCol, longDir, none) && !sunFromTerrain(noonCol, downDir, none), "sun: constants whose direction is not a unit vector from above are not a light's");
-      CHECK(!sunFromTerrain(badCol, noonDir, none) && !sunFromTerrain(hugeCol, noonDir, none), "sun: a negative colour or one beyond any light's is not a light's");
+      CHECK(!skyLightFrom(noonCol, noDir, none) && !skyLightFrom(noonCol, longDir, none) && !skyLightFrom(noonCol, downDir, none), "sun: constants whose direction is not a unit vector from above are not a light's");
+      CHECK(!skyLightFrom(badCol, noonDir, none) && !skyLightFrom(hugeCol, noonDir, none), "sun: a negative colour or one beyond any light's is not a light's");
       Sun warmer = noon; warmer.col[1] -= 0.01f;
       Sun turned = noon; turned.dir[0] += 0.01f; { const float n = len3(turned.dir); for (int q = 0; q < 3; ++q) turned.dir[q] /= n; }
       Sun nearly = noon; nearly.col[0] -= 0.002f;

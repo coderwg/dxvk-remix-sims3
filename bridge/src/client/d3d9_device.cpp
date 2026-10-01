@@ -122,7 +122,7 @@ namespace {
     sims3cam::Lamps lamps;               // the game's own lamps, forwarded as Remix API lights
     uint32_t lampEvents = 0;             // API light creations and destructions made for lamps
     // night from the sun (milestone 20d): the sun's luminance smoothed, the day reference, what was sent
-    float skyLevel = -1.f, skyDayRef = 0.f, skyBrightnessSent = -1.f, evMaxSent = -99.f; uint32_t skySends = 0, skySendFrame = 0, skyBrightLogged = 0; bool skyApiWarned = false;
+    float skyLevel = -1.f, skyBrightnessSent = -1.f, evMaxSent = -99.f; uint32_t skySends = 0, skySendFrame = 0, skyBrightLogged = 0; bool skyApiWarned = false;
     // lights through the Remix API (milestone 20b): the handles of the sun and of each lamp slot (remixapi_LightHandle, declared later in this file)
     void* sunApi = nullptr; uint32_t apiLightCalls = 0; bool loggedApiLights = false, apiLightsWarned = false;   // the lamps' handles live in the solver's lamps
     uint32_t lampEventsLogged = 0;       // lamp creations and drops written to the log (milestone 21c, bounded)
@@ -1855,8 +1855,8 @@ static void sims3LogStats(bool withTable) {
     }
     g_sims3.statsTick = nowTick; g_sims3.statsFrame = h.frames;
   }
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   night: sun level %.3f (day reference %.3f), sky brightness %.3f and exposure ceiling %.2f EV sent %u times%s",
-           h.skyLevel, h.skyDayRef, h.skyBrightnessSent, h.evMaxSent, h.skySends, GlobalOptions::getExposeRemixApi() ? "" : " (Remix API off: nothing sent)");
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   night: the light of the sky %.3f, sky brightness %.3f and exposure ceiling %.2f EV sent %u times%s",
+           h.skyLevel, h.skyBrightnessSent, h.evMaxSent, h.skySends, GlobalOptions::getExposeRemixApi() ? "" : " (Remix API off: nothing sent)");
   Logger::info(msg);
   uint32_t lampHandles = 0;
   for (uint32_t k = 0; k < h.lamps.n; ++k) { const sims3cam::Lamp& Lh = h.lamps.lamps[k]; lampHandles += (Lh.api ? 1u : 0u) + (Lh.api2 ? 1u : 0u) + (Lh.api3 ? 1u : 0u); }
@@ -2168,7 +2168,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
     sims3cam::Sun game = {};
     bool fresh = false;
     if (h.terrainSunDraws > 0) {
-      fresh = sims3cam::sunFromTerrain(h.terrainSunCol, h.terrainSunDir, game);
+      fresh = sims3cam::skyLightFrom(h.terrainSunCol, h.terrainSunDir, game);
       if (!fresh && ++h.sunRefused <= 20u) {
         char msg[260];
         snprintf(msg, sizeof msg, "Sims 3 camera hook: sun: the terrain's constants at frame %u are not a light's and are left aside: c0 %.3f, %.3f, %.3f, c1 %.3f, %.3f, %.3f (%u draws)",
@@ -2323,18 +2323,15 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
     if (h.moonApi && h.moonSet && h.sky.showing[1] && sims3cam::luminance(h.moon.col) > 0.001f) remixapi::remixapi_DrawLightInstance((remixapi_LightHandle) h.moonApi);
     // Night from the lights of the sky (milestones 20d, 42): the luminance of the sun's and the
     // moon's light together, as sent (1 at noon, orange 0.3 at dusk, never below the hold level
-    // through dusk and dawn, the moon's share by night). Relative to full day it sets the
+    // through dusk and dawn, the moon's share by night). Relative to the game's full daylight (1,
+    // milestone 52: the game's light is exact, nothing to learn or smooth) it sets the
     // runtime's sky brightness -- the sky probe scaled wherever a ray escapes, ambient and
     // backdrop together -- and the ceiling of the auto-exposure, which would otherwise brighten
     // the dark scene back up (its default range reaches +5 EV).
-    if (sims3cam::skyFromSun()) {
-      float target = -1.f;
-      if (haveSky) target = h.sky.level();
-      if (target >= 0.f) {
-        h.skyLevel = h.skyLevel < 0.f ? target : h.skyLevel + 0.05f * (target - h.skyLevel);
-        if (h.skyLevel > h.skyDayRef) h.skyDayRef = h.skyLevel;
-        const float dayRef = h.skyDayRef > sims3cam::skyDayLevel() ? h.skyDayRef : sims3cam::skyDayLevel();
-        float b = h.skyLevel / dayRef;
+    if (sims3cam::skyFromLight()) {
+      if (haveSky) {
+        h.skyLevel = h.sky.level();
+        float b = h.skyLevel;
         if (b > 1.f) b = 1.f;
         if (b < sims3cam::skyMinBrightness()) b = sims3cam::skyMinBrightness();
         const float ev = sims3cam::nightEvMax() + (sims3cam::dayEvMax() - sims3cam::nightEvMax()) * b;
@@ -2351,8 +2348,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
             if (step && h.skyBrightLogged < 200) {
               h.skyLoggedB = b;
               ++h.skyBrightLogged; char msg[220];
-              snprintf(msg, sizeof msg, "Sims 3 camera hook: sky brightness %.3f and exposure ceiling %.2f EV sent at frame %u (sun level %.3f, day reference %.3f; clock %.2f h)",
-                       b, ev, h.frames, h.skyLevel, dayRef, h.clock.known ? h.clock.hour : -1.f);
+              snprintf(msg, sizeof msg, "Sims 3 camera hook: sky brightness %.3f and exposure ceiling %.2f EV sent at frame %u (the light of the sky %.3f; clock %.2f h)",
+                       b, ev, h.frames, h.skyLevel, h.clock.known ? h.clock.hour : -1.f);
               Logger::info(msg);
             }
           } else if (!h.skyApiWarned) {
@@ -2514,7 +2511,7 @@ static bool sims3LightRead(const float* p, float* out, int n) {
 static bool sims3ReadGameLight(const float* p, sims3cam::Sun& out) {
   float v[8];
   if (!sims3LightRead(p, v, 8) || !sims3cam::finiteFloats(v, 8) || !sims3cam::floatBits(v + 3, 0u) || !sims3cam::floatBits(v + 7, 0x3f800000u)) return false;
-  return sims3cam::sunFromTerrain(v + 4, v, out);
+  return sims3cam::skyLightFrom(v + 4, v, out);
 }
 // What a place in memory belongs to: a module and the offset into it, or the kind of memory.
 static void sims3DescribeAddress(const void* p, char* out, size_t cap) {
@@ -5449,7 +5446,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreatePixelShader(CONST DWORD* pFunct
       pLssPixelShader->sims3AlbedoStage = a->stage;
       pLssPixelShader->sims3TintReg = a->tint ? sims3cam::kTintRegister : -1;
       char msg[224];
-      snprintf(msg, sizeof msg, "Sims 3 camera hook: albedo is texture stage %u for %s%s%s", (unsigned) a->stage, a->name, a->rig ? "; carries the light rig" : "", a->tint ? "; tint constant c8 forwarded as texture factor" : "");
+      snprintf(msg, sizeof msg, "Sims 3 camera hook: albedo is texture stage %u for %s%s", (unsigned) a->stage, a->name, a->tint ? "; tint constant c8 forwarded as texture factor" : "");
       Logger::info(msg);
     }
     // what the bytecode says about its samplers: the albedo choice for untabled shaders, the
