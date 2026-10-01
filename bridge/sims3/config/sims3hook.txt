@@ -42,7 +42,7 @@ lampRadiance = 40000
 # Which objects are lamps, where they stand, whether they are on, in which colour and at which level comes from the
 # lamp reporter, a script mod (Sims3RtxLamps.package in Mods\Packages; sims3/scriptmod). Without it no lamp gives light.
 # lampMax           the most lamps lit at once, the nearest to the camera's target first (1..96)
-# lampWorldLights   1 = the world lights too (a street lamp's), while the game's own night switch is on; 0 = they stay dark
+# lampWorldLights   1 = the world lights too (a street lamp's), faded in and out by the game's own night switch; 0 = they stay dark
 lampMax = 96
 lampWorldLights = 1
 lampShapes = 1

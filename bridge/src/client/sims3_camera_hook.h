@@ -999,8 +999,8 @@ inline float duskLevel() { static float s = -1.f; if (s < 0.f) { int v = hookOpt
 inline float sunRadiance() { static float s = -1.f; if (s < 0.f) { int v = hookOption("sunRadiance", 1000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
 inline float lampRadius() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampRadius", 150); if (v < 20) v = 20; s = (float) v / 1000.f; } return s; }
 // lampMax = the most lamps lit at once (the nearest to the camera's target first); lampWorldLights =
-// 1 to light the world lights too (a street lamp's, while the game's own night switch is on), 0 to
-// leave them dark.
+// 1 to light the world lights too (a street lamp's, faded in and out by the game's own night
+// switch), 0 to leave them dark.
 inline uint32_t lampMax() { static int s = -1; if (s < 0) { s = hookOption("lampMax", 48); if (s < 1) s = 1; if (s > 96) s = 96; } return (uint32_t) s; }
 inline bool lampWorldLights() { static int s = -1; if (s < 0) s = hookOption("lampWorldLights", 1) != 0 ? 1 : 0; return s == 1; }
 inline float lampRadiance() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampRadiance", 40000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
@@ -1156,6 +1156,16 @@ inline bool lightRecord(const float* q, const float* dir, const float* col, floa
   if (!finiteFloats(q, 8) || !floatBits(q + 3, 0u) || !floatBits(q + 7, 0x3f800000u)) return false;
   if (tripletMatch(q, dir, tol) != 1) return false;
   for (int k = 0; k < 3; ++k) if (!(std::fabs(q[4 + k] - col[k]) < tol)) return false;
+  return true;
+}
+
+// The game's night switch (runs 163, 164): the float 28 before its light record, 0 by day and 1 at
+// night, taking about eight game minutes to change at either end (19 h and 5 h in Sunset Valley);
+// handed to the lit terrain as c7.x, the scale of its lamp light map. A value outside 0..1, or not
+// a number, is not the switch (nothing is written then).
+inline bool nightSwitchValue(const float* q, float* out) {
+  if (!finiteFloats(q, 1) || !(*q >= 0.f && *q <= 1.f)) return false;
+  *out = *q;
   return true;
 }
 

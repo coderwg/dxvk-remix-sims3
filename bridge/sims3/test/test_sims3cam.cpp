@@ -494,6 +494,13 @@ int main() {
           CHECK(!lightRecord(moved, dir, col, 0.001f) && lightRecord(moved, dir, col, 0.02f), "the game's light record: a light that moved while the search ran is found within 0.02, and confirmed only within 0.001");
           float nan8[8]; std::memcpy(nan8, rec, sizeof rec); nan8[5] = std::nanf("");
           CHECK(!lightRecord(nan8, dir, col, 0.02f) && tripletMatch(opposite, dir, 0.02f) == -1, "the game's light record: a float that is not a number is no record; the opposite direction matches with sign -1");
+          float v = -1.f;
+          const float sw[5] = { 0.f, 1.f, 0.43f, 1.5f, -0.25f }; const float nanSw = std::nanf("");
+          CHECK(nightSwitchValue(sw + 0, &v) && v == 0.f && nightSwitchValue(sw + 1, &v) && v == 1.f && nightSwitchValue(sw + 2, &v) && v == 0.43f,
+                "the game's night switch: off, on, and part way through its fade");
+          v = 7.f;
+          CHECK(!nightSwitchValue(sw + 3, &v) && !nightSwitchValue(sw + 4, &v) && !nightSwitchValue(&nanSw, &v) && v == 7.f,
+                "the game's night switch: outside 0..1 or not a number is not the switch, and nothing is written");
         }
         const int32_t ids[2] = { (int32_t) 0x55667788u, (int32_t) 0x11223344u };
         CHECK(lampId64(ids) == 0x1122334455667788ull, "reporter: an id from its low and high halves");

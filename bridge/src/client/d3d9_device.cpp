@@ -120,6 +120,7 @@ namespace {
     bool lampReportLive = false, lampReportWorld = false, lampReportAnnounced = false;
     // the game's clock (milestone 40), and the world lights it keeps dark by day
     sims3cam::GameClock clock = {}; bool clockSaid = false, clockNight = false; uint32_t clockLogged = 0, lampsWorldDark = 0;
+    float worldFade = 0.f; bool worldBySwitch = false;   // the street lamps' fade, 0..1, and whether it is the game's night switch (milestone 55)
     uint32_t markDump = 0;               // frames left to log after the mark key
     sims3cam::Lamps lamps;               // the game's own lamps, forwarded as Remix API lights
     uint32_t lampEvents = 0;             // API light creations and destructions made for lamps
@@ -1862,8 +1863,9 @@ static void sims3LogStats(bool withTable) {
   Logger::info(msg);
   uint32_t lampHandles = 0;
   for (uint32_t k = 0; k < h.lamps.n; ++k) { const sims3cam::Lamp& Lh = h.lamps.lamps[k]; lampHandles += (Lh.api ? 1u : 0u) + (Lh.api2 ? 1u : 0u) + (Lh.api3 ? 1u : 0u); }
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   clock: %s %.2f h, sunrise %.2f, sunset %.2f; %u lit lamps of world lights alone left dark by day",
-           !h.clock.known ? "unknown," : (h.clock.night ? "night," : "day,"), h.clock.hour, h.clock.sunrise, h.clock.sunset, h.lampsWorldDark);
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   clock: %s %.2f h, sunrise %.2f, sunset %.2f; the street lamps at %.3f by %s; %u lit lamps of world lights alone left dark",
+           !h.clock.known ? "unknown," : (h.clock.night ? "night," : "day,"), h.clock.hour, h.clock.sunrise, h.clock.sunset, h.worldFade,
+           h.worldBySwitch ? "the game's night switch" : "the game's word for night", h.lampsWorldDark);
   Logger::info(msg);
   {
     static const char* const kLightState[5] = { "not searched yet", "searching", "confirming against the terrain", "found", "none found (searched again later)" };
@@ -2020,16 +2022,21 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
       }
     }
     // the game's clock; the world lights (a street lamp's) are reported on around the clock (run 151).
-    // They are lit while the game's own night switch is on (milestone 54: the flag the game turns its
-    // lamp glow on the ground on by, kept next to its light record, run 163); until the record is
-    // found, while the game's word for night holds
+    // Their light is scaled by the game's own night switch (milestones 54, 55: the fade the game
+    // shows its lamp glow on the ground by, kept next to its light record, run 163; it takes about
+    // eight game minutes, run 164); until the record is found they are on while the game's word for
+    // night holds
     h.clock = h.lampReportLive ? sims3cam::clockFromRecord(h.lampRecords.data()) : sims3cam::GameClock {};
-    int nightSwitch = -1;   // the game's night switch: -1 not read, 0 off, 1 on
+    float worldFade = -1.f;   // the game's night switch, 0..1; -1 not read
     if (h.lightState == 3 && !h.nightSwitchBad) {
       float sw = -1.f;
-      if (sims3LightRead(h.lightPlaces[h.lightUse].p - 28, &sw, 1) && (sims3cam::floatBits(&sw, 0u) || sims3cam::floatBits(&sw, 0x3f800000u))) nightSwitch = sw > 0.5f ? 1 : 0;
+      if (sims3LightRead(h.lightPlaces[h.lightUse].p - 28, &sw, 1)) sims3cam::nightSwitchValue(&sw, &worldFade);
     }
-    const bool worldLights = sims3cam::lampWorldLights() && (nightSwitch >= 0 ? nightSwitch == 1 : (h.clock.known && h.clock.night));
+    const bool bySwitch = worldFade >= 0.f;
+    if (!bySwitch) worldFade = h.clock.known && h.clock.night ? 1.f : 0.f;
+    if (!sims3cam::lampWorldLights()) worldFade = 0.f;
+    const bool worldLights = worldFade > 0.f;
+    h.worldFade = worldFade; h.worldBySwitch = bySwitch;
     if (h.clock.known && (!h.clockSaid || h.clock.night != h.clockNight) && h.clockLogged < 80u) {
       h.clockSaid = true; h.clockNight = h.clock.night; ++h.clockLogged;
       char msg[200];
@@ -2038,13 +2045,13 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
       Logger::info(msg);
     }
     {
-      const int street = (worldLights ? 1 : 0) + (nightSwitch >= 0 ? 2 : 0);
-      if ((h.clock.known || nightSwitch >= 0) && street != h.streetSaid && h.streetLogged < 80u) {
+      const int street = (worldFade <= 0.f ? 0 : (worldFade < 1.f ? 1 : 2)) + (bySwitch ? 3 : 0);
+      if ((h.clock.known || bySwitch) && street != h.streetSaid && h.streetLogged < 120u) {
         h.streetSaid = street; ++h.streetLogged;
-        char msg[260];
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: the street lamps are %s from frame %u, clock %.2f h, by %s",
-                 worldLights ? "LIT" : (sims3cam::lampWorldLights() ? "dark" : "dark (lampWorldLights 0)"), h.frames, h.clock.known ? h.clock.hour : -1.f,
-                 nightSwitch >= 0 ? "the game's own night switch" : "the game's word for night (its night switch not found yet)");
+        char msg[280];
+        snprintf(msg, sizeof msg, "Sims 3 camera hook: the street lamps are %s (%.3f) from frame %u, clock %.2f h, by %s",
+                 !sims3cam::lampWorldLights() ? "dark (lampWorldLights 0)" : (worldFade <= 0.f ? "dark" : (worldFade < 1.f ? "FADING" : "LIT")), worldFade, h.frames, h.clock.known ? h.clock.hour : -1.f,
+                 bySwitch ? "the game's own night switch" : "the game's word for night (its night switch not found yet)");
         Logger::info(msg);
       }
     }
@@ -2122,7 +2129,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
           for (int q = 0; q < 3; ++q) L->shade[q] = shaded ? def.d[3 + q] : 0.f;
           L->tube = def.type == 6 ? def.d[0] : 0.f;
           const sims3cam::LampWord w = sims3cam::lampWordFromRecord(rec, def.col, def.intensity, frame[5]);
-          for (int q = 0; q < 3; ++q) L->col[q] = w.col[q];
+          for (int q = 0; q < 3; ++q) L->col[q] = def.type == 11 ? w.col[q] * worldFade : w.col[q];   // a world light, by the game's night switch
           if ((fresh && h.lampWordsLogged < 600u) || (mark && marked < 60u)) {
             if (fresh) ++h.lampWordsLogged;
             if (mark) ++marked;
