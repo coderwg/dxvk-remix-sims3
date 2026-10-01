@@ -7,6 +7,8 @@
 #               surface there); 1 = captured as an ordinary object (milestone 63)
 # terrainLotPlate  1 = a low-detail lot's ground plate (the only ground under the lot: the town ground has a hole there) goes to the
 #               terrain baker with its own picture, so it takes the terrain's material and light; 0 = the low-detail model as one object (milestone 69)
+# lotGlow       1 = a low-detail lot's windows glow at night as the game lights them (its glow atlas, by the game's own switch), as
+#               light through the runtime's emissive blend; 0 = no glow (milestone 70)
 # ringTrace     1 = keep a rolling trace of every draw and event of the last ~300 frames; the mark key writes it to the log (diagnostic; 0 = off)
 # markKey       virtual-key code of the mark key (F9 and backtick always work); 45 = Insert, 220 = backslash, 36 = Home, 35 = End, 19 = Pause, 145 = Scroll Lock
 # exposureFromLight  1 = the runtime's sky brightness stays 1 (the sky the game draws lights the scene as it is) and the ceiling of
@@ -21,6 +23,7 @@ terrain = 1
 terrainMerge = 1
 terrainLotPicture = 0
 terrainLotPlate = 1
+lotGlow = 1
 ringTrace = 0
 markKey = 220
 # The lights go to the runtime through the Remix API (exposeRemixApi = True in .trex\bridge.conf). The lamps are the

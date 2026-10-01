@@ -274,6 +274,25 @@ int main() {
     }
   }
 
+  // --- the low-detail lot's window glow (milestone 70): decoding the glow atlas, picking the glowing triangles
+  {
+    // one DXT1 block 4x4: c0 = white, c1 = black, the first row index 0 (white), the rest index 1 (black)
+    const uint8_t blk[8] = { 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55 };
+    std::vector<uint8_t> lv;
+    CHECK(decodeMaxChannel((uint32_t) D3DFMT_DXT1, blk, sizeof blk, 4, 4, lv) && lv.size() == 16 && lv[0] == 255 && lv[3] == 255 && lv[4] == 0 && lv[15] == 0,
+          "glow: a DXT1 block decodes to its brightest channel (row 0 white, the rest black)");
+    // a DXT5 block (alpha part ignored): colour c0 = pure red (0xF800), c1 = black, all index 2 -> 2/3 red = 170
+    const uint8_t blk5[16] = { 0, 0, 0, 0, 0, 0, 0, 0,  0x00, 0xF8, 0x00, 0x00, 0xAA, 0xAA, 0xAA, 0xAA };
+    CHECK(decodeMaxChannel((uint32_t) D3DFMT_DXT5, blk5, sizeof blk5, 4, 4, lv) && lv[0] == 170 && lv[15] == 170, "glow: DXT5 takes the colour block, 4-colour mode (2/3 red = %u)", (unsigned) lv[0]);
+    // 4x4 texture: only texel (1, 1) bright (centre 1.5, 1.5 in texels); a triangle covering that centre is kept, one far from it is not, a tiny one inside the texel is kept by its centre
+    std::vector<uint8_t> gl(16, 0); gl[1 * 4 + 1] = 200;
+    const std::vector<float> uv = { 0.f, 0.f,  1.f, 0.f,  0.f, 1.f,   0.75f, 0.75f,  1.f, 0.75f,  0.75f, 1.f,   0.30f, 0.30f,  0.32f, 0.30f,  0.30f, 0.32f };
+    const std::vector<uint32_t> tris = { 0, 1, 2,   3, 4, 5,   6, 7, 8 };
+    std::vector<uint32_t> out;
+    selectGlowTriangles(uv, tris, gl, 4, 4, kLotGlowThreshold, out);
+    CHECK(out.size() == 6 && out[0] == 0 && out[3] == 6, "glow: the triangle over the bright texel and the tiny one inside it glow; the far one does not (%zu indices)", out.size());
+  }
+
   // --- the low-detail lot's plate (milestone 69): its flat class-1 triangles, and the plate shader
   {
     // a slab: top (4 triangles around the centre, y = 1, class 1), one side triangle (class 1, vertical), a house triangle (class 0)

@@ -1167,6 +1167,80 @@ inline void splitLotPlate(const std::vector<float>& pos, const std::vector<uint8
     if (top) ++st.plate; else ++st.house;
   }
 }
+// The low-detail lot model's window glow (milestone 70): its pixel shader (9c84a6b7) adds s3.rgb -- a
+// glow atlas on the same coordinates, stored linear -- times c3.x, the game's switch (0 by day, 1 at
+// night). The hook draws the model's glowing triangles once more with s3 at stage 0, blended ONE / ONE
+// (the runtime's emissive blend: s3 times the texture factor as light) and the factor set to c3.x.
+// lotGlow 0 = no glow pass.
+inline constexpr uint64_t kLotImpostorPs = 0x9c84a6b7017f33fcull;
+inline constexpr int kLotGlowStage = 3, kLotGlowScaleReg = 3;
+inline constexpr uint8_t kLotGlowThreshold = 40;   // a texel glows above 40 / 255 (run 176: 14% of the house texels, mean 174, 165, 125)
+inline bool lotGlow() { static int s = -1; if (s < 0) s = hookOption("lotGlow", 1) != 0 ? 1 : 0; return s == 1; }
+// The brightest of r, g, b of every level-0 texel (DXT1, DXT3 / DXT5 colour blocks, A8R8G8B8, X8R8G8B8).
+inline bool decodeMaxChannel(uint32_t format, const uint8_t* data, size_t size, uint32_t w, uint32_t hgt, std::vector<uint8_t>& out) {
+  if (!data || w == 0 || hgt == 0 || w > 4096 || hgt > 4096) return false;
+  const bool dxt1 = format == (uint32_t) D3DFMT_DXT1, dxt35 = format == (uint32_t) D3DFMT_DXT3 || format == (uint32_t) D3DFMT_DXT5;
+  out.assign((size_t) w * hgt, 0);
+  if (dxt1 || dxt35) {
+    const uint32_t bw = (w + 3) / 4, bh = (hgt + 3) / 4, bs = dxt1 ? 8u : 16u;
+    if (size < (size_t) bw * bh * bs) return false;
+    for (uint32_t by = 0; by < bh; ++by) for (uint32_t bx = 0; bx < bw; ++bx) {
+      const uint8_t* b = data + ((size_t) by * bw + bx) * bs + (dxt1 ? 0u : 8u);
+      const uint32_t c0 = b[0] | ((uint32_t) b[1] << 8), c1 = b[2] | ((uint32_t) b[3] << 8);
+      const uint32_t bits = b[4] | ((uint32_t) b[5] << 8) | ((uint32_t) b[6] << 16) | ((uint32_t) b[7] << 24);
+      int rgb[4][3];
+      for (int k = 0; k < 2; ++k) { const uint32_t c = k ? c1 : c0; rgb[k][0] = (int) (((c >> 11) & 31u) * 255u / 31u); rgb[k][1] = (int) (((c >> 5) & 63u) * 255u / 63u); rgb[k][2] = (int) ((c & 31u) * 255u / 31u); }
+      const bool four = !dxt1 || c0 > c1;
+      for (int q = 0; q < 3; ++q) {
+        rgb[2][q] = four ? (2 * rgb[0][q] + rgb[1][q]) / 3 : (rgb[0][q] + rgb[1][q]) / 2;
+        rgb[3][q] = four ? (rgb[0][q] + 2 * rgb[1][q]) / 3 : 0;
+      }
+      uint8_t pal[4];
+      for (int k = 0; k < 4; ++k) pal[k] = (uint8_t) (std::max)(rgb[k][0], (std::max)(rgb[k][1], rgb[k][2]));
+      for (uint32_t py = 0; py < 4; ++py) for (uint32_t px = 0; px < 4; ++px) {
+        const uint32_t x = bx * 4 + px, y = by * 4 + py;
+        if (x < w && y < hgt) out[(size_t) y * w + x] = pal[(bits >> (2 * (py * 4 + px))) & 3u];
+      }
+    }
+    return true;
+  }
+  if (format == (uint32_t) D3DFMT_A8R8G8B8 || format == (uint32_t) D3DFMT_X8R8G8B8) {
+    if (size < (size_t) w * hgt * 4) return false;
+    for (size_t i = 0; i < (size_t) w * hgt; ++i) out[i] = (std::max)(data[i * 4], (std::max)(data[i * 4 + 1], data[i * 4 + 2]));
+    return true;
+  }
+  return false;
+}
+// The triangles (vertex numbers) that cover a texel of the glow texture brighter than the threshold:
+// every texel centre inside the triangle in texture space, or the texel under its centre when it covers none.
+inline void selectGlowTriangles(const std::vector<float>& uv, const std::vector<uint32_t>& tris, const std::vector<uint8_t>& glow, uint32_t w, uint32_t hgt,
+                                uint8_t threshold, std::vector<uint32_t>& out) {
+  if (glow.size() < (size_t) w * hgt || w == 0 || hgt == 0) return;
+  const size_t n = uv.size() / 2;
+  for (size_t t = 0; t + 2 < tris.size(); t += 3) {
+    const uint32_t i0 = tris[t], i1 = tris[t + 1], i2 = tris[t + 2];
+    if (i0 >= n || i1 >= n || i2 >= n) continue;
+    const float x0 = uv[2 * i0] * w, y0 = uv[2 * i0 + 1] * hgt, x1 = uv[2 * i1] * w, y1 = uv[2 * i1 + 1] * hgt, x2 = uv[2 * i2] * w, y2 = uv[2 * i2 + 1] * hgt;
+    const float den = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2);
+    bool lit = false, covered = false;
+    if (std::fabs(den) > 1e-9f) {
+      const int xa = (std::max)(0, (int) std::floor((std::min)(x0, (std::min)(x1, x2)))), xb = (std::min)((int) w - 1, (int) std::ceil((std::max)(x0, (std::max)(x1, x2))));
+      const int ya = (std::max)(0, (int) std::floor((std::min)(y0, (std::min)(y1, y2)))), yb = (std::min)((int) hgt - 1, (int) std::ceil((std::max)(y0, (std::max)(y1, y2))));
+      for (int y = ya; y <= yb && !lit; ++y) for (int x = xa; x <= xb && !lit; ++x) {
+        const float px = x + 0.5f, py = y + 0.5f;
+        const float a = ((y1 - y2) * (px - x2) + (x2 - x1) * (py - y2)) / den, b = ((y2 - y0) * (px - x2) + (x0 - x2) * (py - y2)) / den, c = 1.f - a - b;
+        if (a < -1e-4f || b < -1e-4f || c < -1e-4f) continue;
+        covered = true;
+        if (glow[(size_t) y * w + x] > threshold) lit = true;
+      }
+    }
+    if (!covered) {
+      const int x = (std::min)((int) w - 1, (std::max)(0, (int) ((x0 + x1 + x2) / 3.f))), y = (std::min)((int) hgt - 1, (std::max)(0, (int) ((y0 + y1 + y2) / 3.f)));
+      lit = glow[(size_t) y * w + x] > threshold;
+    }
+    if (lit) { out.push_back(i0); out.push_back(i1); out.push_back(i2); }
+  }
+}
 // The plate's pixel shader (ps_3_0): texld r0, v0 (TEXCOORD0), s2 -- the model's colour atlas, stored
 // linear and sampled raw as the game does -- then rgb ^ (1 / 2.2) into oC0.rgb and 1 into oC0.a.
 inline constexpr DWORD kLotPlatePs[] = {
