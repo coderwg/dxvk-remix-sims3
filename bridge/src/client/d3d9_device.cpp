@@ -127,6 +127,8 @@ namespace {
     sims3cam::GameClock clock = {}; bool clockSaid = false, clockNight = false; uint32_t clockLogged = 0, lampsWorldDark = 0;
     float worldFade = 0.f; bool worldBySwitch = false;   // the street lamps' fade, 0..1, and whether it is the game's night switch (milestone 55)
     uint32_t markDump = 0;               // frames left to log after the mark key
+    uint32_t censusMark = 0, censusDraws = 0, censusTerrain = 0, censusFiles = 0; uint64_t censusBytes = 0;   // the terrain census (milestone 59, a diagnostic)
+    bool censusPending = false; char censusLine[900] = {};
     sims3cam::Lamps lamps;               // the game's own lamps, forwarded as Remix API lights
     uint32_t lampEvents = 0;             // API light creations and destructions made for lamps
     // night from the sun (milestone 20d): the sun's luminance smoothed, the day reference, what was sent
@@ -1360,6 +1362,159 @@ namespace {
 #define GET_PRES_PARAM() (m_pSwapchain->getPresentationParameters())
 
 namespace {
+  // ---- the terrain census (milestone 59, a diagnostic: removed once it has answered) ----------
+  // For the one frame after each of the first eight marks: a line for every draw -- what the game
+  // drew and what the hook made of it -- and, for every draw of a terrain vertex shader, a file with
+  // all it takes to rebuild the draw offline: the call, the game's render states, the vertex
+  // declaration, the vertex shader constants c0..c31, the pixel shader constants c0..c15, the
+  // textures the game bound (with the runtime's hash), the vertices of the draw's range (streams 0
+  // and 1) and its indices. Files in <exe dir>\rtx-remix\logs\sims3-terrain-census\census<M>_d<N>.bin
+  // (sims3/tools/terrain_census.py reads them).
+#pragma pack(push, 1)
+  struct Sims3CensusTex { uint32_t kind, fmt, w, h; uint64_t hash; };
+  struct Sims3CensusHeader {
+    char magic[4]; uint32_t version, mark, frame, draw, indexed, primType; int32_t baseVertex; uint32_t minIndex, numVertices, startIndex, primCount;
+    uint64_t vsHash, psHash;
+    uint32_t rs[16];
+    uint32_t streamOffset[2], streamStride[2], vbSize[2], ibFormat, ibSize;
+    uint32_t declCount; D3DVERTEXELEMENT9 decl[24];
+    float vsConst[32][4], psConst[16][4];
+    Sims3CensusTex tex[16];
+    uint32_t vbFirst[2], vbBytes[2], ibFirst, ibBytes;   // where in the buffers the bytes that follow the header come from: stream 0, stream 1, indices
+  };
+#pragma pack(pop)
+  constexpr D3DRENDERSTATETYPE kSims3CensusRs[16] = { D3DRS_ZENABLE, D3DRS_ZWRITEENABLE, D3DRS_ZFUNC, D3DRS_ALPHABLENDENABLE, D3DRS_SRCBLEND, D3DRS_DESTBLEND, D3DRS_BLENDOP, D3DRS_CULLMODE,
+                                                      D3DRS_COLORWRITEENABLE, D3DRS_ALPHATESTENABLE, D3DRS_ALPHAFUNC, D3DRS_ALPHAREF, D3DRS_STENCILENABLE, D3DRS_DEPTHBIAS, D3DRS_SLOPESCALEDEPTHBIAS, D3DRS_SRGBWRITEENABLE };
+  inline const char* sims3CensusDir() {
+    static char base[MAX_PATH] = {};
+    if (!base[0]) {
+      GetModuleFileNameA(nullptr, base, MAX_PATH);
+      char* p = strrchr(base, '\\'); if (p) *p = 0;
+      strncat_s(base, "\\rtx-remix\\logs\\sims3-terrain-census", _TRUNCATE);
+      CreateDirectoryA(base, nullptr);
+    }
+    return base;
+  }
+  inline uint32_t sims3IndexCount(D3DPRIMITIVETYPE t, uint32_t prims) {
+    switch (t) {
+      case D3DPT_TRIANGLELIST: return prims * 3;
+      case D3DPT_TRIANGLESTRIP: case D3DPT_TRIANGLEFAN: return prims + 2;
+      case D3DPT_LINELIST: return prims * 2;
+      case D3DPT_LINESTRIP: return prims + 1;
+      default: return prims;
+    }
+  }
+  inline void sims3CensusFlush(Sims3Hook& h, const char* tail) {
+    if (!h.censusPending) return;
+    h.censusPending = false;
+    const size_t n = strlen(h.censusLine);
+    snprintf(h.censusLine + n, sizeof h.censusLine - n, "%s", tail);
+    Logger::info(h.censusLine);
+  }
+  inline void sims3CensusStart(Sims3Hook& h) {
+    sims3CensusFlush(h, "hook: (census over)");
+    ++h.censusMark; h.censusDraws = h.censusTerrain = h.censusFiles = 0; h.censusBytes = 0;
+    if (h.censusMark > 8u) return;
+    const sims3cam::Camera& c = h.frameCam;
+    char msg[480];
+    snprintf(msg, sizeof msg, "Sims 3 camera hook: census %u begins with frame %u: camera eye %.2f %.2f %.2f, looking %.3f %.3f %.3f, fov %.1f, near %.3f; clock %.2f h; terrain draws to %s\\census%u_d<draw>.bin",
+             h.censusMark, h.frames + 1, c.pos[0], c.pos[1], c.pos[2], c.fwd[0], c.fwd[1], c.fwd[2], c.fovY * 57.2958f, c.nearZ, h.clock.known ? h.clock.hour : -1.f, sims3CensusDir(), h.censusMark);
+    Logger::info(msg);
+  }
+  inline void sims3CensusEnd(Sims3Hook& h) {
+    sims3CensusFlush(h, "hook: (census over)");
+    if (h.censusMark == 0 || h.censusMark > 8u) return;
+    char msg[240];
+    snprintf(msg, sizeof msg, "Sims 3 camera hook: census %u ended: %u draws, %u of them of terrain vertex shaders, %u files (%llu KB)",
+             h.censusMark, h.censusDraws, h.censusTerrain, h.censusFiles, (unsigned long long) (h.censusBytes / 1024));
+    Logger::info(msg);
+  }
+  // Before the hook touches the draw: the game's own state (St: the device's state).
+  template<typename St>
+  void sims3CensusBefore(Sims3Hook& h, const St& st, const char* call, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT numVertices, UINT start, UINT prims, bool indexed) {
+    sims3CensusFlush(h, "hook: not sent (a reflection pass's draw)");
+    const uint32_t d = h.censusDraws++;
+    if (d >= 4000u) return;
+    const DWORD* rs = st.renderStates.data();
+    char file[48] = "-";
+    if (h.vsTerrain && h.censusFiles < 600u) {
+      ++h.censusTerrain;
+      Sims3CensusHeader hd; std::memset(&hd, 0, sizeof hd);
+      std::memcpy(hd.magic, "S3TC", 4); hd.version = 1; hd.mark = h.censusMark; hd.frame = h.frames + 1; hd.draw = d; hd.indexed = indexed ? 1u : 0u;
+      hd.primType = (uint32_t) type; hd.baseVertex = base; hd.minIndex = minIndex; hd.numVertices = numVertices; hd.startIndex = start; hd.primCount = prims;
+      hd.vsHash = h.vsHash; hd.psHash = h.psHash;
+      for (int i = 0; i < 16; ++i) hd.rs[i] = rs[kSims3CensusRs[i]];
+      bool uses[2] = { false, false };
+      auto* decl = *st.vertexDecl ? bridge_cast<Direct3DVertexDeclaration9_LSS*>(*st.vertexDecl) : nullptr;
+      if (decl && decl->sims3Elements()) {
+        const D3DVERTEXELEMENT9* e = decl->sims3Elements();
+        for (uint32_t i = 0; i < 24 && e[i].Stream != 0xFF; ++i) { hd.decl[i] = e[i]; hd.declCount = i + 1; if (e[i].Stream < 2) uses[e[i].Stream] = true; }
+      }
+      Direct3DVertexBuffer9_LSS* vb[2] = {};
+      const uint32_t firstVertex = indexed ? (uint32_t) (base + (INT) minIndex) : (uint32_t) start;
+      const uint32_t vertexCount = indexed ? (uint32_t) numVertices : sims3IndexCount(type, prims);
+      for (int s = 0; s < 2; ++s) {
+        hd.streamOffset[s] = st.streamOffsets[s]; hd.streamStride[s] = st.streamStrides[s];
+        if (!uses[s] || !*st.streams[s]) continue;
+        vb[s] = bridge_cast<Direct3DVertexBuffer9_LSS*>(*st.streams[s]);
+        if (!vb[s] || !vb[s]->sims3Data()) { vb[s] = nullptr; continue; }
+        hd.vbSize[s] = vb[s]->sims3Size();
+        const uint64_t from = (uint64_t) st.streamOffsets[s] + (uint64_t) firstVertex * st.streamStrides[s];
+        uint64_t bytes = (uint64_t) vertexCount * st.streamStrides[s];
+        if (from >= hd.vbSize[s]) continue;
+        if (from + bytes > hd.vbSize[s]) bytes = hd.vbSize[s] - from;
+        hd.vbFirst[s] = (uint32_t) from; hd.vbBytes[s] = (uint32_t) bytes;
+      }
+      Direct3DIndexBuffer9_LSS* ib = (indexed && *st.indices) ? bridge_cast<Direct3DIndexBuffer9_LSS*>(*st.indices) : nullptr;
+      if (ib && ib->sims3Data()) {
+        hd.ibFormat = (uint32_t) ib->getDesc().Format; hd.ibSize = ib->sims3Size();
+        const uint32_t isz = hd.ibFormat == D3DFMT_INDEX32 ? 4u : 2u;
+        const uint64_t from = (uint64_t) start * isz;
+        uint64_t bytes = (uint64_t) sims3IndexCount(type, prims) * isz;
+        if (from < hd.ibSize) { if (from + bytes > hd.ibSize) bytes = hd.ibSize - from; hd.ibFirst = (uint32_t) from; hd.ibBytes = (uint32_t) bytes; }
+      }
+      std::memcpy(hd.vsConst, &st.vertexConstants.fConsts[0], sizeof hd.vsConst);
+      std::memcpy(hd.psConst, &st.pixelConstants.fConsts[0], sizeof hd.psConst);
+      for (int s = 0; s < 16; ++s) {
+        hd.tex[s].kind = h.boundKind[s]; hd.tex[s].fmt = h.boundFmt[s]; hd.tex[s].w = h.boundW[s]; hd.tex[s].h = h.boundH[s];
+        if (h.boundTex[s] && (h.boundKind[s] & 0x7F) == 1) hd.tex[s].hash = bridge_cast<Direct3DTexture9_LSS*>(h.boundTex[s])->sims3Level0Hash();
+      }
+      snprintf(file, sizeof file, "census%u_d%04u.bin", h.censusMark, d);
+      char path[MAX_PATH + 64];
+      snprintf(path, sizeof path, "%s\\%s", sims3CensusDir(), file);
+      FILE* f = nullptr;
+      if (fopen_s(&f, path, "wb") == 0 && f) {
+        fwrite(&hd, sizeof hd, 1, f);
+        for (int s = 0; s < 2; ++s) if (hd.vbBytes[s]) fwrite(vb[s]->sims3Data() + hd.vbFirst[s], 1, hd.vbBytes[s], f);
+        if (hd.ibBytes) fwrite(ib->sims3Data() + hd.ibFirst, 1, hd.ibBytes, f);
+        fclose(f);
+        ++h.censusFiles; h.censusBytes += sizeof hd + hd.vbBytes[0] + hd.vbBytes[1] + hd.ibBytes;
+      } else {
+        snprintf(file, sizeof file, "(not written)");
+      }
+    }
+    uint64_t t0 = 0;
+    if (h.boundTex[0] && (h.boundKind[0] & 0x7F) == 1) t0 = bridge_cast<Direct3DTexture9_LSS*>(h.boundTex[0])->sims3Level0Hash();
+    char fb[16];
+    const char* t0kind = (h.boundKind[0] & 0x7F) == 1 ? sims3FormatName(h.boundFmt[0], fb, sizeof fb) : ((h.boundKind[0] & 0x7F) == 2 ? "cube" : "none");
+    const int n = snprintf(h.censusLine, sizeof h.censusLine,
+      "Sims 3 camera hook: census %u d%u %s %u prims %u verts (base %d min %u start %u) | VS %016llx%s%s PS %016llx | z%lu w%lu f%lu b%lu %lu/%lu cull%lu cw%lx at%lu bias %08lx/%08lx | t0 %s %ux%u %016llx | file %s | ",
+      h.censusMark, d, call, (unsigned) prims, indexed ? (unsigned) numVertices : sims3IndexCount(type, prims), (int) base, (unsigned) minIndex, (unsigned) start,
+      (unsigned long long) h.vsHash, h.vsTerrain ? " " : "", h.vsTerrain ? h.vsTerrain->name : "", (unsigned long long) h.psHash,
+      rs[D3DRS_ZENABLE], rs[D3DRS_ZWRITEENABLE], rs[D3DRS_ZFUNC], rs[D3DRS_ALPHABLENDENABLE], rs[D3DRS_SRCBLEND], rs[D3DRS_DESTBLEND], rs[D3DRS_CULLMODE], rs[D3DRS_COLORWRITEENABLE], rs[D3DRS_ALPHATESTENABLE],
+      rs[D3DRS_DEPTHBIAS], rs[D3DRS_SLOPESCALEDEPTHBIAS], t0kind, (unsigned) h.boundW[0], (unsigned) h.boundH[0], (unsigned long long) t0, file);
+    h.censusPending = n > 0;
+  }
+  // After the hook's decision for the draw.
+  inline void sims3CensusAfter(Sims3Hook& h) {
+    if (!h.censusPending) return;
+    const char what = h.reissue ? 'R' : h.drawDropped ? 'D' : h.drawCaptured ? 'C' : 'U';
+    const char* kind = !h.drawCaptured ? "" : (h.lastKind == 1 ? " kind 1 (terrain, ray-traced)" : (h.lastKind == 2 ? " kind 2 (terrain, baked and hidden)" : ""));
+    char t[160];
+    snprintf(t, sizeof t, "hook: %c%s, camera %d%s", what, kind, (int) h.held.kind, h.camMirrored ? " mirrored" : "");
+    sims3CensusFlush(h, t);
+  }
+
   // The hook's facts about the bound objects (milestone 17w): what the setters recorded inline before.
   void sims3NoteVertexShader(Sims3Hook& h, IDirect3DVertexShader9* pShader) {
     auto* const pLssVertexShader = bridge_cast<Direct3DVertexShader9_LSS*>(pShader);
@@ -2007,8 +2162,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
       sims3RingPush(h, t);
       h.fCaptured = h.fUncaptured = h.fDropped = h.fHeld = h.fReplayed = h.fTerrainWorld = h.fTerrainLot = h.fCamAdopt = h.fCamAlt = h.fCamMirror = 0;
       const bool f9 = ((GetAsyncKeyState(VK_F9) | GetAsyncKeyState(sims3cam::markKey()) | GetAsyncKeyState(VK_OEM_3)) & 0x8000) != 0;   // F9, the configured key (sims3hook.txt markKey) or backtick
-      if (f9 && !h.f9Down) { sims3RingDump(h, "F9 pressed"); h.markDump = 2; }   // and the lit lamps, once
-      else if (h.markDump) --h.markDump;
+      if (f9 && !h.f9Down) { sims3RingDump(h, "F9 pressed"); h.markDump = 2; sims3CensusStart(h); }   // and the lit lamps, once; the terrain census of the next frame (milestone 59)
+      else if (h.markDump) { if (h.markDump == 2) sims3CensusEnd(h); --h.markDump; }
       h.f9Down = f9;
     }
     h.frameDraws = 0;
@@ -4602,7 +4757,10 @@ template<bool EnableSync>
 HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawPrimitive(D3DPRIMITIVETYPE PrimitiveType, UINT StartVertex, UINT PrimitiveCount) {
   ZoneScoped;
   LogFunctionCall();
+  const bool census_ = sims3cam::enabled() && !g_sims3.ourDraw && g_sims3.markDump == 2 && g_sims3.censusMark >= 1u && g_sims3.censusMark <= 8u;   // the terrain census (milestone 59)
+  if (census_) sims3CensusBefore(g_sims3, m_state, "DP", PrimitiveType, 0, 0, 0, StartVertex, PrimitiveCount, false);
   SIMS3_BEGIN_DRAW();
+  if (census_) sims3CensusAfter(g_sims3);
   UID currentUID = 0;
   if (sims3cam::enabled() && g_sims3.splitDraw && PrimitiveType == D3DPT_TRIANGLELIST && PrimitiveCount >= 2) {   // a lot's re-submission as two half draws (milestone 17r)
     const UINT half_ = PrimitiveCount / 2;
@@ -4623,7 +4781,10 @@ template<bool EnableSync>
 HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE Type, INT BaseVertexIndex, UINT MinVertexIndex, UINT NumVertices, UINT startIndex, UINT primCount) {
   ZoneScoped;
   LogFunctionCall();
+  const bool census_ = sims3cam::enabled() && !g_sims3.ourDraw && g_sims3.markDump == 2 && g_sims3.censusMark >= 1u && g_sims3.censusMark <= 8u;   // the terrain census (milestone 59)
+  if (census_) sims3CensusBefore(g_sims3, m_state, "DIP", Type, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount, true);
   SIMS3_BEGIN_DRAW();
+  if (census_) sims3CensusAfter(g_sims3);
   // The Sims 3 camera hook: the directional light a lit terrain shader is handed for this draw, c0
   // its colour and c1 the direction toward it: the sun, or the moon (milestone 41). Present
   // forwards what the frame's last such draw was given.
