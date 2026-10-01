@@ -21,7 +21,7 @@ RS_NAMES = ['zenable', 'zwrite', 'zfunc', 'blend', 'src', 'dst', 'blendop', 'cul
 DECLTYPE = {0: ('f', 1), 1: ('f', 2), 2: ('f', 3), 3: ('f', 4), 4: ('B', 4), 5: ('B', 4), 6: ('h', 2), 7: ('h', 4), 8: ('B', 4), 9: ('h', 2), 10: ('h', 4),
             11: ('H', 2), 12: ('H', 4), 15: ('e', 2), 16: ('e', 4)}
 USAGE = ['position', 'blendweight', 'blendindices', 'normal', 'psize', 'texcoord', 'tangent', 'binormal', 'tessfactor', 'positiont', 'color', 'fog', 'depth', 'sample']
-VS_NAMES = {0x55c99586fb17cd1c: 'lot-area', 0xdfaf82cf9ec175b0: 'world', 0x976b73dbd59842cd: 'lot', 0x0344bbc366f10954: 'composite'}
+VS_NAMES = {0x55c99586fb17cd1c: 'lot-area', 0xdfaf82cf9ec175b0: 'world', 0x976b73dbd59842cd: 'lot', 0x0344bbc366f10954: 'composite', 0x2a57449ad7d2c7ee: 'coarse'}
 
 class Draw:
     pass
@@ -92,6 +92,10 @@ def world_vertex(d, v):
         m = min(max(m, 0.0), 1.0)
         p = [r0[0], r0[1] + m * r0[3], r0[2], 1.0]
         return (dp4(p, rows[0]), dp4(p, rows[1]), dp4(p, rows[2]), m, True)
+    if d.name == 'coarse':
+        s = c[16]
+        p = [v[0] * s[0] + s[2], v[1] * s[1] + s[3], v[2] * s[0] + s[2], 1.0]
+        return (dp4(p, c[8]), dp4(p, c[9]), dp4(p, c[10]), None, True)
     if d.name == 'lot':
         y = v[2] / 256.0 + v[3] - 128.0
         p = [v[0] * 0.5, y, v[1] * 0.5, 1.0]

@@ -1106,7 +1106,13 @@ inline const TerrainShader kTerrainShaders[] = {
   { 0xdfaf82cf9ec175b0ull, "world terrain (4 layers + chunk mask; alpha-blended draws = extra layers)", false, false, false },
   { kLotTerrainVs,         "lot terrain (3 layers + chunk mask, clipped per chunk by texkill)", false, false, true },
   { 0x0344bbc366f10954ull, "lot paint composite (unlit 4-layer blend over the lot terrain)", true, false, true },
+  { 0x2a57449ad7d2c7eeull, "the town's coarse ground (the far ground and the neighbourhood view)", false, false, false },
 };
+// The town's coarse ground (milestone 61): one low mesh of the whole town, lit by PS 072c2bbd from a
+// single pre-baked colour map of the town (s3 at v1). The neighbourhood view's only ground; in the
+// household view the game draws it for the distance as well, under and beyond the detailed squares
+// (runs 168, 169). VS: position x c16.xyx + c16.zwz, world rows c8..c10.
+inline constexpr uint64_t kCoarseGroundVs = 0x2a57449ad7d2c7eeull;
 
 // How a terrain variant treats alpha: 0 as the shader writes it (blended layer passes), 1 forced
 // to 1 (base draws), 2 the shader's own coverage, baked with an alpha test (unused, run 77).
@@ -1132,20 +1138,35 @@ inline uint8_t terrainDrawKind(const TerrainShader* t, DWORD alphaBlendEnable, b
 
 // The lit lot-area paint pixel shaders: colour = albedo x light + fog, as one final
 // `mad oC0.xyz, albedo, light, fog`; the unlit variant keeps the albedo (psUnlitOutput).
-inline const uint64_t kUnlitPatches[] = { 0x17eabad58f650687ull, 0x670dbe0fa52c4650ull, 0x98062e8d4d12af7dull, 0xd63bf505ec4a44a0ull };
+inline const uint64_t kUnlitPatches[] = { 0x17eabad58f650687ull, 0x670dbe0fa52c4650ull, 0x98062e8d4d12af7dull, 0xd63bf505ec4a44a0ull,
+                                         0x072c2bbd4fdeb89bull };   // the coarse ground's shader (milestone 61): the same final mad
 inline bool wantsUnlitPatch(uint64_t psHash) { for (uint64_t h : kUnlitPatches) if (h == psHash) return true; return false; }
 // The same four are the lit terrain shaders: light = shadow x dot(normal, c1) x c0 + light map x
 // c7.x + probe x c8.x, so c0 is the directional light's colour (sun or moon) and c1 the unit
 // direction toward it, as the game hands them over for the draw (read from the disassembly,
 // milestone 40; the terrain is outdoors, so nothing attenuates it as a room does an object's
 // light). The hook's sun is this light (skyLightFrom, milestone 41).
-inline bool isLitTerrainPs(uint64_t psHash) { return wantsUnlitPatch(psHash); }
+inline bool isLitTerrainPs(uint64_t psHash) {   // the four only: the coarse ground's c4 is not the fog's (milestone 61)
+  return psHash == 0x17eabad58f650687ull || psHash == 0x670dbe0fa52c4650ull || psHash == 0x98062e8d4d12af7dull || psHash == 0xd63bf505ec4a44a0ull;
+}
 
 // ---- the town ground's squares (milestone 60, design B) ----------------------------------
 // terrainMerge = 1: each 256-unit square of the town ground goes to the ray tracer as ONE shape,
 // the union of the game's opaque pieces without the skirts; the pieces themselves only paint.
 // 0: every opaque piece is traced as it comes, skirts and all (before milestone 60).
 inline bool terrainMerge() { static int s = -1; if (s < 0) s = hookOption("terrainMerge", 1) != 0 ? 1 : 0; return s == 1; }
+// terrainCoarse (milestone 61): where the game draws its coarse town ground while detailed squares are
+// drawn too (the household view), 1 = its triangles lying wholly over the squares are left out (the
+// rest is the far ground), 0 = it is left out altogether. Without squares (the neighbourhood view)
+// it is the whole ground either way.
+inline bool terrainCoarse() { static int s = -1; if (s < 0) s = hookOption("terrainCoarse", 1) != 0 ? 1 : 0; return s == 1; }
+// A corner of the coarse ground lies over a detailed square: squares as their centres (x, z), each
+// 256 units wide; a corner on a square's edge counts as over it.
+inline bool overSquares(float x, float z, const std::vector<float>& centres) {
+  for (size_t i = 0; i + 1 < centres.size(); i += 2)
+    if (std::fabs(x - centres[i]) <= 128.01f && std::fabs(z - centres[i + 1]) <= 128.01f) return true;
+  return false;
+}
 // The ground's triangles of a square: a skirt hangs 2 units down from the ground's edge, so two of
 // its corners stand on the same point of the ground (the same raw x and z: run 168 found every
 // near-vertical triangle of the town ground to be such a 2.0-unit wall); a heightfield's own
