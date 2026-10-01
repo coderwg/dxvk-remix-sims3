@@ -298,6 +298,7 @@ namespace {
       uint32_t kept = 0, skirts = 0, flat = 0, outside = 0;
     };
     uint32_t lotPictureDropped = 0;   // the neighbourhood view's lot picture draws left out (milestone 63)
+    uint32_t alphaCutDraws = 0;       // captured draws given their shader's cut-out as an alpha test (milestone 67)
     std::vector<Square> squares; int mergePending = -1;
     uint32_t terrainPaintDraws = 0, mergedDraws = 0, mergePaintPieces = 0, mergeFallbackPieces = 0, mergeBuilds = 0, mergeBuildFailed = 0, mergeLogged = 0, mergeEvicted = 0, mergeSkipped = 0;
     bool drawIndexed = false; D3DPRIMITIVETYPE drawType = D3DPT_TRIANGLELIST; INT drawBase = 0; UINT drawStart = 0, drawPrims = 0;   // the indexed draw call's arguments, for the squares
@@ -1268,6 +1269,16 @@ namespace {
         // an untabled pixel shader: the albedo from its bytecode (a promoted vertex-shader variant when needed)
         if (h.psAuto && h.psAuto->valid && h.vsBound) k = sims3AutoAlbedo(h);
         if (k < 0) { bool bound[16]; for (int i = 0; i < 16; ++i) bound[i] = h.boundTex[i] != nullptr; k = sims3cam::pickAlbedoStage(bound, h.boundColor2D); }
+      }
+      // a cut-out the runtime must see (milestone 67): the shader's texkill as the D3D alpha test
+      if (const sims3cam::AlphaCut* cut = sims3cam::alphaCutFor(h.psHash)) {
+        if (!rs[D3DRS_ALPHATESTENABLE] && !h.atOurs) {
+          dev->GetRenderState(D3DRS_ALPHATESTENABLE, &h.atSaved[0]); dev->GetRenderState(D3DRS_ALPHAFUNC, &h.atSaved[1]); dev->GetRenderState(D3DRS_ALPHAREF, &h.atSaved[2]);
+          h.atOurs = true; h.ourState = true;
+          dev->SetRenderState(D3DRS_ALPHATESTENABLE, TRUE); dev->SetRenderState(D3DRS_ALPHAFUNC, D3DCMP_GREATEREQUAL); dev->SetRenderState(D3DRS_ALPHAREF, cut->ref);
+          h.ourState = false;
+          ++h.alphaCutDraws;
+        }
       }
       // the vertex shader variant for the draw: the promoted coordinate and/or the world normal as a
       // NORMAL output, and on a hardware-instanced draw (split per instance) a read of c255 for the tag
@@ -2308,6 +2319,8 @@ static void sims3LogStats(bool withTable) {
     Logger::info(msg);
     snprintf(msg, sizeof msg, "Sims 3 camera hook:   the neighbourhood view's lot picture (milestone 63): %s, %u draws left out",
              sims3cam::terrainLotPicture() ? "captured (terrainLotPicture 1)" : "left out", h.lotPictureDropped);
+    Logger::info(msg);
+    snprintf(msg, sizeof msg, "Sims 3 camera hook:   cut-outs (milestone 67): %u captured draws given their shader's texkill as an alpha test", h.alphaCutDraws);
     Logger::info(msg);
   }
   MEMORYSTATUSEX ms = {}; ms.dwLength = sizeof ms; GlobalMemoryStatusEx(&ms);

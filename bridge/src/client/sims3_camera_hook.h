@@ -1135,6 +1135,17 @@ inline bool terrainLotPicture() { static int s = -1; if (s < 0) s = hookOption("
 // window glow (rgb) and the ambient occlusion (alpha). The terrain census writes its draws and textures.
 inline constexpr uint64_t kLotImpostorVs = 0x074cd28fc5260474ull;
 
+// Cut-outs the ray tracer must see (milestone 67): pixel shaders that discard texels by their colour
+// texture's alpha with texkill, which the runtime never sees, so the discarded texels (black in the
+// texture) would be solid surfaces. Their captured draws carry the same test as a D3D alpha test --
+// alpha >= ref -- which the runtime applies with the albedo's alpha; only where the game set none.
+struct AlphaCut { uint64_t psHash; uint8_t ref; const char* name; };
+inline constexpr AlphaCut kAlphaCuts[] = {
+  // texkill (s2.a - 0.5): 25% of the models' area sampled cut texels in run 176 (bushes, fences, edges)
+  { 0x9c84a6b7017f33fcull, 128, "the lots' low-detail models (texkill below colour alpha 0.5)" },
+};
+inline const AlphaCut* alphaCutFor(uint64_t psHash) { for (const AlphaCut& a : kAlphaCuts) if (a.psHash == psHash) return &a; return nullptr; }
+
 // How a terrain variant treats alpha: 0 as the shader writes it (blended layer passes), 1 forced
 // to 1 (base draws), 2 the shader's own coverage, baked with an alpha test (unused, run 77).
 // A lot mesh's further chunk copies and its replays are opaque draws each clipped to its own
