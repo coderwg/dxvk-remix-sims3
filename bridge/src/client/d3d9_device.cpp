@@ -128,6 +128,7 @@ namespace {
     float worldFade = 0.f; bool worldBySwitch = false;   // the street lamps' fade, 0..1, and whether it is the game's night switch (milestone 55)
     uint32_t markDump = 0;               // frames left to log after the mark key
     uint32_t censusMark = 0, censusDraws = 0, censusTerrain = 0, censusFiles = 0; uint64_t censusBytes = 0;   // the terrain census (milestone 59, a diagnostic)
+    uint32_t censusImpostors = 0, censusTexFiles = 0;   // the lots' low-detail models in the census, and their textures written (milestone 66)
     bool censusPending = false; char censusLine[900] = {};
     sims3cam::Lamps lamps;               // the game's own lamps, forwarded as Remix API lights
     uint32_t lampEvents = 0;             // API light creations and destructions made for lamps
@@ -1573,9 +1574,12 @@ namespace {
   // declaration, the vertex shader constants c0..c31, the pixel shader constants c0..c15, the
   // textures the game bound (with the runtime's hash), the vertices of the draw's range (streams 0
   // and 1) and its indices. Files in <exe dir>\rtx-remix\logs\sims3-terrain-census\census<M>_d<N>.bin
-  // (sims3/tools/terrain_census.py reads them).
+  // (sims3/tools/terrain_census.py reads them). Since milestone 66 also every draw of a lot's
+  // low-detail model (sims3cam::kLotImpostorVs), and once each the level 0 of the 2D textures such a
+  // draw samples: tex_<runtime's hash>.bin, a Sims3CensusTexFile then the texel bytes.
 #pragma pack(push, 1)
   struct Sims3CensusTex { uint32_t kind, fmt, w, h; uint64_t hash; };
+  struct Sims3CensusTexFile { char magic[4]; uint32_t version, fmt, w, h, bytes; uint64_t hash; };
   struct Sims3CensusHeader {
     char magic[4]; uint32_t version, mark, frame, draw, indexed, primType; int32_t baseVertex; uint32_t minIndex, numVertices, startIndex, primCount;
     uint64_t vsHash, psHash;
@@ -1617,7 +1621,7 @@ namespace {
   }
   inline void sims3CensusStart(Sims3Hook& h) {
     sims3CensusFlush(h, "hook: (census over)");
-    ++h.censusMark; h.censusDraws = h.censusTerrain = h.censusFiles = 0; h.censusBytes = 0;
+    ++h.censusMark; h.censusDraws = h.censusTerrain = h.censusFiles = h.censusImpostors = h.censusTexFiles = 0; h.censusBytes = 0;
     if (h.censusMark > 8u) return;
     const sims3cam::Camera& c = h.frameCam;
     char msg[480];
@@ -1629,8 +1633,8 @@ namespace {
     sims3CensusFlush(h, "hook: (census over)");
     if (h.censusMark == 0 || h.censusMark > 8u) return;
     char msg[240];
-    snprintf(msg, sizeof msg, "Sims 3 camera hook: census %u ended: %u draws, %u of them of terrain vertex shaders, %u files (%llu KB)",
-             h.censusMark, h.censusDraws, h.censusTerrain, h.censusFiles, (unsigned long long) (h.censusBytes / 1024));
+    snprintf(msg, sizeof msg, "Sims 3 camera hook: census %u ended: %u draws, %u of them of terrain vertex shaders, %u of lots' low-detail models, %u files (%llu KB), %u textures written",
+             h.censusMark, h.censusDraws, h.censusTerrain, h.censusImpostors, h.censusFiles, (unsigned long long) (h.censusBytes / 1024), h.censusTexFiles);
     Logger::info(msg);
   }
   // Before the hook touches the draw: the game's own state (St: the device's state).
@@ -1641,8 +1645,9 @@ namespace {
     if (d >= 4000u) return;
     const DWORD* rs = st.renderStates.data();
     char file[48] = "-";
-    if (h.vsTerrain && h.censusFiles < 600u) {
-      ++h.censusTerrain;
+    const bool impostor = h.vsHash == sims3cam::kLotImpostorVs;
+    if ((h.vsTerrain || impostor) && h.censusFiles < 600u) {
+      if (impostor) ++h.censusImpostors; else ++h.censusTerrain;
       Sims3CensusHeader hd; std::memset(&hd, 0, sizeof hd);
       std::memcpy(hd.magic, "S3TC", 4); hd.version = 1; hd.mark = h.censusMark; hd.frame = h.frames + 1; hd.draw = d; hd.indexed = indexed ? 1u : 0u;
       hd.primType = (uint32_t) type; hd.baseVertex = base; hd.minIndex = minIndex; hd.numVertices = numVertices; hd.startIndex = start; hd.primCount = prims;
@@ -1695,6 +1700,24 @@ namespace {
         ++h.censusFiles; h.censusBytes += sizeof hd + hd.vbBytes[0] + hd.vbBytes[1] + hd.ibBytes;
       } else {
         snprintf(file, sizeof file, "(not written)");
+      }
+      // a low-detail model's textures: level 0 of each 2D texture it samples, once per content
+      for (int s = 0; impostor && s < 16; ++s) {
+        if (!h.boundTex[s] || (h.boundKind[s] & 0x7F) != 1 || hd.tex[s].hash == 0 || h.censusTexFiles >= 400u) continue;
+        auto* tex = bridge_cast<Direct3DTexture9_LSS*>(h.boundTex[s]);
+        const uint8_t* texel = tex->sims3Level0Data();
+        const D3DSURFACE_DESC td = tex->getLevelDesc(0);
+        const size_t bytes = texel ? bridge_util::calcTotalSizeOfRect(td.Width, td.Height, td.Format) : 0;
+        if (!bytes) continue;
+        char tpath[MAX_PATH + 64];
+        snprintf(tpath, sizeof tpath, "%s\\tex_%016llx.bin", sims3CensusDir(), (unsigned long long) hd.tex[s].hash);
+        FILE* tf = nullptr;
+        if (fopen_s(&tf, tpath, "rb") == 0 && tf) { fclose(tf); continue; }   // written already (this run or an earlier one)
+        if (fopen_s(&tf, tpath, "wb") != 0 || !tf) continue;
+        Sims3CensusTexFile th; std::memset(&th, 0, sizeof th);
+        std::memcpy(th.magic, "S3TX", 4); th.version = 1; th.fmt = (uint32_t) td.Format; th.w = td.Width; th.h = td.Height; th.bytes = (uint32_t) bytes; th.hash = hd.tex[s].hash;
+        fwrite(&th, sizeof th, 1, tf); fwrite(texel, 1, bytes, tf); fclose(tf);
+        ++h.censusTexFiles; h.censusBytes += sizeof th + bytes;
       }
     }
     uint64_t t0 = 0;

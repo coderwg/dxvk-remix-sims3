@@ -1130,6 +1130,11 @@ inline constexpr uint64_t kCoarseGroundVs = 0x2a57449ad7d2c7eeull;
 inline constexpr uint64_t kLotPictureVs = 0x92337a1805f17506ull;
 inline bool terrainLotPicture() { static int s = -1; if (s < 0) s = hookOption("terrainLotPicture", 0) != 0 ? 1 : 0; return s == 1; }
 
+// A lot's low-detail model, its impostor (runs 173-175): a simplified house and a flat ground plate,
+// one draw per lot with VS 074cd28f and PS 9c84a6b7; s2 the plain colour (alpha a cut-out), s3 the
+// window glow (rgb) and the ambient occlusion (alpha). The terrain census writes its draws and textures.
+inline constexpr uint64_t kLotImpostorVs = 0x074cd28fc5260474ull;
+
 // How a terrain variant treats alpha: 0 as the shader writes it (blended layer passes), 1 forced
 // to 1 (base draws), 2 the shader's own coverage, baked with an alpha test (unused, run 77).
 // A lot mesh's further chunk copies and its replays are opaque draws each clipped to its own
