@@ -44,6 +44,7 @@ public:
   int sims3AlbedoStage = -1;
   int sims3TintReg = -1;      // pixel constant register holding the Create-A-Style tint, or -1
   uint64_t sims3Hash = 0;     // FNV-1a-64 of the bytecode (diagnostics)
+  uint8_t sims3Major = 0;     // the bytecode's major version (milestone 56: fixed-function fog leaves 3.0 alone)
   sims3cam::PsAnalysis sims3Auto;   // what the bytecode says about its samplers (untabled shaders: the albedo is chosen from this at draw time)
 
   /*** IUnknown methods ***/

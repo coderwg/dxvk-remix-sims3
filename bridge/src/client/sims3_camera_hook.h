@@ -977,6 +977,13 @@ inline int ringTrace() { static int s = -1; if (s < 0) s = hookOption("ringTrace
 // the exposure ceiling in hundredths of an EV at full day and at no light (the runtime's default
 // is 5.0).
 inline int exposureFromLight() { static int s = -1; if (s < 0) s = hookOption("exposureFromLight", 1) != 0; return s; }
+// The game's fog (milestone 56): fogFromGame = 1 hands the game's own fog (its colour and range, read
+// beside its light record) to the runtime as D3D9 linear fog, which the runtime lays over the
+// ray-traced picture (its composite fog, used while rtx.volumetrics.enable is off); fogColourScale =
+// rtx.fogColorScale in thousandths (1000: the game's fog colour as bright as the sky the game draws;
+// the runtime's default is 250), sent once through the Remix API.
+inline int fogFromGame() { static int s = -1; if (s < 0) s = hookOption("fogFromGame", 1) != 0; return s; }
+inline float fogColourScale() { static float s = -1.f; if (s < 0.f) { int v = hookOption("fogColourScale", 1000); if (v < 0) v = 0; if (v > 10000) v = 10000; s = (float) v / 1000.f; } return s; }
 inline float dayEvMax() { static float s = -99.f; if (s < -98.f) { int v = hookOption("dayEvMax", 500); if (v < -1000) v = -1000; if (v > 1000) v = 1000; s = (float) v / 100.f; } return s; }
 inline float nightEvMax() { static float s = -99.f; if (s < -98.f) { int v = hookOption("nightEvMax", 100); if (v < -1000) v = -1000; if (v > 1000) v = 1000; s = (float) v / 100.f; } return s; }
 // The lights go to the runtime through the Remix API (milestones 20b, 23): the sun as a distant
@@ -1166,6 +1173,34 @@ inline bool lightRecord(const float* q, const float* dir, const float* col, floa
 inline bool nightSwitchValue(const float* q, float* out) {
   if (!finiteFloats(q, 1) || !(*q >= 0.f && *q <= 1.f)) return false;
   *out = *q;
+  return true;
+}
+
+// The game's fog (run 163, milestone 56). Its lit terrain shader fogs by distance d with c4 and c2:
+// amount = pow(1 - saturate(d * c4.x + c4.y), c4.w), colour c2 (the fog colour 64 floats before the
+// light record, c4 20 before it). c4.x = -1 / (end - start) and c4.y = end / (end - start): the
+// runtime's D3D9 linear fog with the same start and end. A curve c4.w other than 1 (grey days) is
+// matched at half fog by moving the start, the runtime's fog being linear. False when c4 is no fog.
+inline bool fogRangeFromGame(const float* c4, float* start, float* end) {
+  if (!finiteFloats(c4, 4) || !(c4[0] < 0.f) || !(c4[3] > 0.05f && c4[3] <= 20.f)) return false;
+  const float e = -c4[1] / c4[0], s = (1.f - c4[1]) / c4[0];
+  if (!(e > s) || !(e < 1.0e6f) || !(s > -1.0e6f)) return false;
+  const float half = s + (e - s) * std::pow(0.5f, 1.f / c4[3]);
+  *start = 2.f * half - e;
+  *end = e;
+  return true;
+}
+// The game's fog colour (c2: gamma, as its shaders blend it) in the runtime's linear light, as an
+// opaque D3DCOLOR (the runtime reads it as 0..1 and scales it by rtx.fogColorScale).
+inline bool fogColourFromGame(const float* c2, uint32_t* out) {
+  if (!finiteFloats(c2, 3)) return false;
+  uint32_t v = 0xFF000000u;
+  for (int k = 0; k < 3; ++k) {
+    float x = c2[k] < 0.f ? 0.f : (c2[k] > 1.f ? 1.f : c2[k]);
+    x = x <= 0.04045f ? x / 12.92f : std::pow((x + 0.055f) / 1.055f, 2.4f);
+    v |= (uint32_t) (x * 255.f + 0.5f) << (16 - 8 * k);
+  }
+  *out = v;
   return true;
 }
 

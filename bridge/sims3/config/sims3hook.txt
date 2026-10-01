@@ -6,6 +6,9 @@
 #               its auto-exposure (rtx.autoExposure.evMaxValue) follows the luminance of the sun and the moon as sent, relative to the
 #               game's full daylight; needs exposeRemixApi = True
 # dayEvMax / nightEvMax  the auto-exposure ceiling in hundredths of an EV at full day and at no light (runtime default 500; 0 at no light since 2026-09-30: no brightening of the night)
+# fogFromGame   1 = the game's own fog (its colour and distances, from beside its light record, in every view) goes to the runtime as
+#               D3D9 linear fog, laid over the ray-traced picture (the runtime's depth fog, used while rtx.volumetrics.enable is off)
+# fogColourScale  rtx.fogColorScale in thousandths (1000 = the game's fog colour as bright as the sky it draws; runtime default 250)
 terrain = 1
 ringTrace = 0
 markKey = 220
@@ -24,6 +27,8 @@ markKey = 220
 # lampRadius    the lamps' sphere radius in thousandths of a unit
 # lampRadiance  the lamps' radiance per unit of colour, thousandths
 exposureFromLight = 1
+fogFromGame = 1
+fogColourScale = 1000
 dayEvMax = 500
 nightEvMax = 0
 sunAngle = 2000

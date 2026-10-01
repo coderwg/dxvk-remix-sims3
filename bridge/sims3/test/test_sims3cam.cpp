@@ -501,6 +501,20 @@ int main() {
           v = 7.f;
           CHECK(!nightSwitchValue(sw + 3, &v) && !nightSwitchValue(sw + 4, &v) && !nightSwitchValue(&nanSw, &v) && v == 7.f,
                 "the game's night switch: outside 0..1 or not a number is not the switch, and nothing is written");
+          float fs = 0.f, fe = 0.f;
+          const float dayFog[4] = { -0.00022371f, 1.0067f, 5.f, 1.f }, nightFog[4] = { -0.00033445f, 1.0033f, 5.f, 1.f };
+          CHECK(fogRangeFromGame(dayFog, &fs, &fe) && std::fabs(fs - 30.f) < 0.5f && std::fabs(fe - 4500.f) < 1.f && fogRangeFromGame(nightFog, &fs, &fe) && std::fabs(fs - 10.f) < 0.5f && std::fabs(fe - 3000.f) < 1.f,
+                "the game's fog: the terrain's c4 by day (30 to 4500) and by night (10 to 3000), as run 163 read them");
+          const float greyFog[4] = { -1.f / 850.f, 1000.f / 850.f, 5.f, 0.75f };
+          CHECK(fogRangeFromGame(greyFog, &fs, &fe) && std::fabs(fe - 1000.f) < 0.5f && std::fabs(fs - (-25.4f)) < 1.f,
+                "the game's fog: a grey day's curve 0.75 (150 to 1000) matched at half fog by a linear fog from -25 to 1000");
+          const float noFog[4] = { 0.001f, 1.f, 5.f, 1.f }, noCurve[4] = { -0.001f, 1.f, 5.f, 0.f }, nanFog[4] = { std::nanf(""), 1.f, 5.f, 1.f };
+          CHECK(!fogRangeFromGame(noFog, &fs, &fe) && !fogRangeFromGame(noCurve, &fs, &fe) && !fogRangeFromGame(nanFog, &fs, &fe), "the game's fog: a rising c4.x, no curve or not a number is no fog");
+          uint32_t fc = 0;
+          const float black[3] = { 0.f, 0.f, 0.f }, white[3] = { 1.f, 1.f, 1.f }, grey[3] = { 0.5f, 0.5f, 0.5f }, wild[3] = { 1.5f, -1.f, 0.5f }, nanCol[3] = { 0.5f, std::nanf(""), 0.5f };
+          CHECK(fogColourFromGame(black, &fc) && fc == 0xFF000000u && fogColourFromGame(white, &fc) && fc == 0xFFFFFFFFu && fogColourFromGame(grey, &fc) && fc == 0xFF373737u,
+                "the game's fog colour: gamma 0, 1 and 0.5 in linear light (0.5 -> 55 of 255)");
+          CHECK(fogColourFromGame(wild, &fc) && fc == 0xFFFF0037u && !fogColourFromGame(nanCol, &fc), "the game's fog colour: clamped to 0..1 per channel; not a number is no colour");
         }
         const int32_t ids[2] = { (int32_t) 0x55667788u, (int32_t) 0x11223344u };
         CHECK(lampId64(ids) == 0x1122334455667788ull, "reporter: an id from its low and high halves");

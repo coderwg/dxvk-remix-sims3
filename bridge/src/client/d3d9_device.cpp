@@ -87,6 +87,10 @@ namespace {
     float terrainSunCol[3] = {}, terrainSunDir[3] = {}; uint32_t terrainSunDraws = 0, terrainSunDrawsLast = 0;
     float terrainNightSwitch = 0.f;      // the lit terrain's c7.x: the game's night switch as handed to the terrain (milestone 54)
     uint32_t nightSwitchDisagree = 0, streetLogged = 0; int streetSaid = -1; bool nightSwitchBad = false;   // the night switch next to the light record, checked against it
+    float terrainFog[8] = {};            // the lit terrain's c2 and c4: the game's fog as handed to the terrain (milestone 56)
+    bool fogReady = false, fogOurs = false, fogScaleSent = false, fogBad = false; DWORD fogSaved[5] = {};   // the game's fog for the runtime (milestone 56)
+    uint32_t fogColour = 0, fogLoggedColour = 0, fogFrameDraws = 0, fogDraws = 0, gameFogDraws = 0, fogLogged = 0, fogDisagree = 0;
+    float fogStart = 0.f, fogEnd = 0.f, fogCurve = 1.f, fogLoggedEnd = -1.f;
     sims3cam::Sun sun = {}, moon = {};   // the two lights of the sky as the runtime holds them
     bool sunSet = false, moonSet = false, skySet = false, loggedSun = false;
     sims3cam::SkyLights sky;             // the game's one light as the sun's and the moon's, with the sun's afterglow at dusk (milestones 42, 44)
@@ -132,6 +136,7 @@ namespace {
     // untabled pixel shaders (milestone 7): the albedo chosen from the bytecode at draw time,
     // on a promoted variant of the game's vertex shader when its coordinate is not TEXCOORD0
     const sims3cam::PsAnalysis* psAuto = nullptr;   // bound pixel shader's sampler analysis when it has no table entry
+    uint8_t psMajor = 0;                            // the bound pixel shader's major version (milestone 56)
     IDirect3DVertexShader9* vsBound = nullptr;      // the vertex shader the game bound (for the variant swap)
     bool vsTabled = false;                          // it has a captured-UV or never-capture entry: no auto coordinate, no variants
     struct VsVariant { IDirect3DVertexShader9* base; uint64_t hash; uint8_t texcoord; uint8_t normalOut; bool constRead; IDirect3DVertexShader9* variant; };
@@ -897,6 +902,7 @@ namespace {
   inline constexpr D3DTEXTURESTAGESTATETYPE kSims3Tss[3] = { D3DTSS_COLOROP, D3DTSS_COLORARG1, D3DTSS_COLORARG2 };
   inline constexpr DWORD kSims3TssOurs[3] = { D3DTOP_MODULATE, D3DTA_TEXTURE, D3DTA_TFACTOR };
   // The render states the masked-write emulation saves and restores.
+  inline constexpr D3DRENDERSTATETYPE kSims3FogRs[5] = { D3DRS_FOGENABLE, D3DRS_FOGTABLEMODE, D3DRS_FOGCOLOR, D3DRS_FOGSTART, D3DRS_FOGEND };   // the game's fog for the runtime (milestone 56)
   inline constexpr D3DRENDERSTATETYPE kSims3MaskRs[10] = { D3DRS_COLORWRITEENABLE, D3DRS_ALPHABLENDENABLE, D3DRS_SRCBLEND, D3DRS_DESTBLEND, D3DRS_BLENDOP, D3DRS_BLENDFACTOR, D3DRS_SEPARATEALPHABLENDENABLE, D3DRS_SRCBLENDALPHA, D3DRS_DESTBLENDALPHA, D3DRS_BLENDOPALPHA };
 
   // Before a draw that is not captured: whatever the hook set on the device for captured draws
@@ -1106,7 +1112,7 @@ namespace {
     if (h.freeStageRestore) { h.freeStageRestore->Release(); h.freeStageRestore = nullptr; }
     for (int i = 0; i < sims3cam::kTerrainMarkers; ++i) { if (h.marker[i]) h.marker[i]->Release(); h.marker[i] = nullptr; h.markerHash[i] = 0; }
     h.markerFailed = false; h.markersConfigSent = false; h.terrainFreeStage = -1; h.tblockActive = false; h.tblockStage = -1; h.tblockSet = 0; h.tblockSrgb = 0; h.ourSampler = false; h.psBound = nullptr; h.vsTerrain = nullptr; h.lotFurtherCopy = false; h.swappingPs = false;
-    h.cwOurs = false; h.atOurs = false;
+    h.cwOurs = false; h.atOurs = false; h.fogOurs = false;
     h.compositePass = 0; h.extraActive = false; h.splitDraw = false; h.ourConsts = false; h.reissue = false; h.reissueKind = 0; h.compositeSecond = false;
     for (int i = 0; i < 2; ++i) { if (h.extraRestore[i]) h.extraRestore[i]->Release(); h.extraRestore[i] = nullptr; }
     h.rt0 = nullptr;
@@ -1197,6 +1203,7 @@ namespace {
     }
     int k = -1;
     ++h.capturedDraws;
+    if (rs[D3DRS_FOGENABLE] && (rs[D3DRS_FOGTABLEMODE] != D3DFOG_NONE || rs[D3DRS_FOGVERTEXMODE] != D3DFOG_NONE)) ++h.gameFogDraws;   // a fog state of the game's own (milestone 56: none expected)
     h.autoCapturedUv = false; h.pendingPromote = 0;
     // a terrain draw (milestone 17): handed to the runtime's terrain baker with the marker at
     // stage 0 and the game's pixel shader variant; no albedo stage, no vertex shader variant
@@ -1208,6 +1215,17 @@ namespace {
     // a lot's ground goes out in place (milestone 19): nothing overwrites its paint in the atlas (run 119's paint test)
     const bool terrain = terrainKind != 0 && sims3BeginTerrainDraw(h, dev, terrainKind);
     if (!terrain) sims3TerrainBlockEnd(h, dev);   // a captured non-terrain draw follows the terrain block (milestone 18g)
+    // the game's fog for the runtime (milestone 56): on the frame's first base terrain draws (drawn in
+    // every view; their pixel shaders are 3.0, which fixed-function fog leaves alone, so the bake is
+    // untouched), as D3D9 linear fog; the game's states are put back after the draw (sims3EndDraw)
+    if (terrain && terrainKind == 1 && h.fogReady && h.psMajor >= 3 && h.fogFrameDraws < 4u) {
+      ++h.fogFrameDraws; ++h.fogDraws;
+      DWORD start = 0, end = 0; std::memcpy(&start, &h.fogStart, 4); std::memcpy(&end, &h.fogEnd, 4);
+      const DWORD ours[5] = { TRUE, D3DFOG_LINEAR, h.fogColour, start, end };
+      for (int i = 0; i < 5; ++i) dev->GetRenderState(kSims3FogRs[i], &h.fogSaved[i]);
+      h.ourState = true; for (int i = 0; i < 5; ++i) dev->SetRenderState(kSims3FogRs[i], ours[i]); h.ourState = false;
+      h.fogOurs = true;
+    }
     if (!terrain) {
       if (h.psAlbedoStage >= 0 && h.psAlbedoStage < 16 && h.boundTex[h.psAlbedoStage] != nullptr) {
         k = h.psAlbedoStage; ++h.overrideDraws;
@@ -1272,6 +1290,7 @@ namespace {
   // the masked-write emulation undone.
   template<typename Dev>
   void sims3EndDraw(Sims3Hook& h, Dev* dev) {
+    if (h.fogOurs) { h.fogOurs = false; h.ourState = true; for (int i = 0; i < 5; ++i) dev->SetRenderState(kSims3FogRs[i], h.fogSaved[i]); h.ourState = false; }
     if (h.viewportOurs) { h.viewportOurs = false; h.ourState = true; dev->SetViewport(&h.gameViewport); h.ourState = false; }
     // a terrain draw's pixel shader variant, moved texture and sampler states (milestone 17)
     if (h.psRestore) {
@@ -1361,6 +1380,7 @@ namespace {
     h.psTintReg = pLssPixelShader ? pLssPixelShader->sims3TintReg : -1;
     h.psHash = pLssPixelShader ? pLssPixelShader->sims3Hash : 0;
     h.psAuto = pLssPixelShader ? &pLssPixelShader->sims3Auto : nullptr;
+    h.psMajor = pLssPixelShader ? pLssPixelShader->sims3Major : (uint8_t) 0;
   }
   void sims3NoteTexture(Sims3Hook& h, DWORD Stage, IDirect3DBaseTexture9* pTexture) {
     h.boundTex[Stage] = pTexture;
@@ -1874,6 +1894,10 @@ static void sims3LogStats(bool withTable) {
              h.lightSearches, h.lightPlaceN, h.framesFromGame);
   }
   Logger::info(msg);
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   fog: %s; the runtime's fog colour %u %u %u of 255 from %.0f to %.0f (the game's curve %.2f), on %u terrain draws; %u captured draws carried a fog state of the game's own",
+           !sims3cam::fogFromGame() ? "off (fogFromGame 0)" : (h.fogBad ? "OFF: the game's fog did not agree with the terrain's" : (h.fogReady ? "the game's own, from beside its light record" : "waiting for the game's light record")),
+           (unsigned) ((h.fogColour >> 16) & 0xFFu), (unsigned) ((h.fogColour >> 8) & 0xFFu), (unsigned) (h.fogColour & 0xFFu), h.fogStart, h.fogEnd, h.fogCurve, h.fogDraws, h.gameFogDraws);
+  Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   lamp reporter: %s; %u lamps reported, %u lit, %u of those without a definition in the light table, %u beyond the budget of %u; %u readings (%u while it was writing), %u searches (the last through %u regions, %u MB)",
            h.lampReportLive ? "live" : (g_sims3LampBlock.load() ? "found, no world loaded" : "NOT FOUND: no lamp gives light (the script mod Sims3RtxLamps.package is not in Mods\\Packages, is an older version, or no world has loaded yet)"),
            h.lampReported, h.lampsOn, h.lampsUndefined, h.lampsBeyondBudget, sims3cam::lampMax(), h.lampReportReads, h.lampReportStale, g_sims3LampScans.load(), g_sims3LampScanRegions.load(), g_sims3LampScanMegabytes.load());
@@ -2280,6 +2304,23 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
         Logger::info(msg);
       }
     }
+    // The game's fog next to its light record (run 163: its colour 64 floats before it, its range 20
+    // before it) is handed to the lit terrain as c2 and c4: checked in the same way; if they ever
+    // disagree for two seconds the fog is left off for the session.
+    if (sims3cam::fogFromGame() && h.lightState == 3 && readTerrain && !h.fogBad) {
+      const float* rec = h.lightPlaces[h.lightUse].p;
+      float fog[8] = {};
+      const bool same = sims3LightRead(rec - 64, fog, 4) && sims3LightRead(rec - 20, fog + 4, 4) &&
+                        std::memcmp(fog, h.terrainFog, 3 * sizeof(float)) == 0 && std::memcmp(fog + 4, h.terrainFog + 4, 4 * sizeof(float)) == 0;
+      if (same) h.fogDisagree = 0;
+      else if (++h.fogDisagree > 120u) {
+        h.fogBad = true; h.fogReady = false;
+        char msg[320];
+        snprintf(msg, sizeof msg, "Sims 3 camera hook: the game's fog next to its light record (colour %.3f %.3f %.3f, c4 %.6f %.4f) does not agree with the terrain's (%.3f %.3f %.3f, %.6f %.4f): the fog is left off",
+                 fog[0], fog[1], fog[2], fog[4], fog[5], h.terrainFog[0], h.terrainFog[1], h.terrainFog[2], h.terrainFog[4], h.terrainFog[5]);
+        Logger::info(msg);
+      }
+    }
     // the sky's light: the game's own record once found, in every view; until then the lit terrain;
     // without either the last light holds
     bool fromGame = false;
@@ -2400,6 +2441,43 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
       } else if (!h.skyApiWarned) {
         h.skyApiWarned = true;
         Logger::warn("Sims 3 camera hook: the exposure is not driven: the Remix API is off (exposeRemixApi = True in .trex\\bridge.conf turns it on for the bridge server)");
+      }
+    }
+    // The game's fog (milestone 56): its colour (the terrain's c2) and its range (c4), read from beside
+    // its light record in every view, go to the runtime as D3D9 linear fog on the next frame's first
+    // base terrain draws (sims3BeginDraw); the runtime lays it over the ray-traced picture (its
+    // composite fog, used while rtx.volumetrics.enable is off). The colour goes in linear light, and
+    // rtx.fogColorScale is set once to fogColourScale (1: as bright as the sky the game draws).
+    h.fogReady = false; h.fogFrameDraws = 0;
+    if (sims3cam::fogFromGame() && h.lightState == 3 && !h.fogBad) {
+      const float* rec = h.lightPlaces[h.lightUse].p;
+      float c2[4] = {}, c4[4] = {};
+      if (sims3LightRead(rec - 64, c2, 4) && sims3LightRead(rec - 20, c4, 4) &&
+          sims3cam::fogColourFromGame(c2, &h.fogColour) && sims3cam::fogRangeFromGame(c4, &h.fogStart, &h.fogEnd)) {
+        h.fogReady = true; h.fogCurve = c4[3];
+        int moved = 0;
+        for (int k = 0; k < 3; ++k) {
+          const int a = (int) ((h.fogColour >> (8 * k)) & 0xFFu), b = (int) ((h.fogLoggedColour >> (8 * k)) & 0xFFu);
+          if ((a > b ? a - b : b - a) > moved) moved = a > b ? a - b : b - a;
+        }
+        const bool step = h.fogLoggedEnd < 0.f || moved > 2 || std::fabs(h.fogEnd - h.fogLoggedEnd) > 0.05f * h.fogLoggedEnd;
+        if ((step || h.markDump == 2) && h.fogLogged < 200u) {
+          h.fogLoggedColour = h.fogColour; h.fogLoggedEnd = h.fogEnd; ++h.fogLogged;
+          char msg[340];
+          snprintf(msg, sizeof msg, "Sims 3 camera hook: the game's fog at frame %u, clock %.2f h: colour %.3f %.3f %.3f, from %.0f to %.0f (curve %.2f) -> the runtime's fog colour %u %u %u of 255 (linear), from %.0f to %.0f",
+                   h.frames, h.clock.known ? h.clock.hour : -1.f, c2[0], c2[1], c2[2], (1.f - c4[1]) / c4[0], -c4[1] / c4[0], c4[3],
+                   (unsigned) ((h.fogColour >> 16) & 0xFFu), (unsigned) ((h.fogColour >> 8) & 0xFFu), (unsigned) (h.fogColour & 0xFFu), h.fogStart, h.fogEnd);
+          Logger::info(msg);
+        }
+      }
+      if (h.fogReady && !h.fogScaleSent && GlobalOptions::getExposeRemixApi()) {
+        h.fogScaleSent = true;
+        char val[32];
+        snprintf(val, sizeof val, "%.3f", sims3cam::fogColourScale());
+        remixapi::remixapi_SetConfigVariable("rtx.fogColorScale", val);
+        char msg[200];
+        snprintf(msg, sizeof msg, "Sims 3 camera hook: fog colour scale %s sent (rtx.fogColorScale; at 1 the game's fog colour is as bright as the sky it draws)", val);
+        Logger::info(msg);
       }
     }
   }
@@ -4535,6 +4613,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
     memcpy(g_sims3.terrainSunCol, &m_state.pixelConstants.fConsts[0], sizeof g_sims3.terrainSunCol);
     memcpy(g_sims3.terrainSunDir, &m_state.pixelConstants.fConsts[1], sizeof g_sims3.terrainSunDir);
     g_sims3.terrainNightSwitch = m_state.pixelConstants.fConsts[7].data[0];   // c7.x: the game's night switch (milestone 54)
+    memcpy(g_sims3.terrainFog, &m_state.pixelConstants.fConsts[2], 4 * sizeof(float));       // c2: the game's fog colour (milestone 56)
+    memcpy(g_sims3.terrainFog + 4, &m_state.pixelConstants.fConsts[4], 4 * sizeof(float));   // c4: the game's fog range and curve
     ++g_sims3.terrainSunDraws;
   }
   // The Sims 3 camera hook: a captured draw whose render states make it invisible in-game
@@ -5481,6 +5561,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreatePixelShader(CONST DWORD* pFunct
 
   auto* const pLssPixelShader = trackWrapper(new Direct3DPixelShader9_LSS(this, shader));
   (*ppShader) = pLssPixelShader;
+  pLssPixelShader->sims3Major = (uint8_t) shader.getMajorVersion();
   if (sims3cam::enabled() && !g_sims3.creatingVariant) {   // a terrain variant made by the hook: no tables, no dump
     const size_t count = sims3cam::shaderTokenCount(pFunction);   // 0: no END token, the analysis refuses the stream
     const uint64_t hash = count ? sims3cam::fnv1a64(pFunction, count * sizeof(DWORD)) : 0;
