@@ -1033,6 +1033,14 @@ namespace {
   inline void sims3OnReset(Sims3Hook& h) {
     for (auto& s : h.squares) if (s.merged) s.merged->Release();   // the squares' merged shapes (milestone 60)
     h.squares.clear(); h.mergePending = -1;
+    for (auto& e : h.plates) {   // the low-detail lots' split, glow layer and its textures (milestones 69-71)
+      if (e.house) e.house->Release(); if (e.plate) e.plate->Release(); if (e.glow) e.glow->Release(); if (e.glowVb) e.glowVb->Release();
+    }
+    h.plates.clear();
+    for (auto& g : h.glowTexs) if (g.tex) g.tex->Release();
+    h.glowTexs.clear();
+    if (h.platePs) { h.platePs->Release(); h.platePs = nullptr; }
+    h.platePsFailed = false;
     for (uint32_t i = 0; i < h.wallCacheCount; ++i) sims3ReleaseWallEntry(h.wallCache[i]);
     h.wallCacheCount = 0; for (auto& m : h.masks) m = Sims3Hook::MaskEntry(); h.maskNext = 0;
     for (auto& e : h.bufHashes) e = Sims3Hook::HashEntry(); h.bufHashNext = 0;
