@@ -9,6 +9,7 @@
 // 1277907 / 1278332 (eye y = -10.7, forward.y = +0.86) are therefore REFLECTION-pass draws.
 #include "sims3_camera_hook.h"
 #include "sims3_walls.h"
+#include "sims3_lots.h"
 #define XXH_INLINE_ALL
 #include "xxhash.h"   // the runtime's texture hash (milestone 17): the marker hashes the hook sends
 #include <cstdio>

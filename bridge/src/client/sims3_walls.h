@@ -306,7 +306,7 @@ inline bool cutWallOpenings(const WallCutInput& in, WallCutOutput& out) {
 
   auto vertexIndex = [&](uint32_t i) -> int64_t {
     const size_t k = (size_t) in.startIndex + i;
-    return (int64_t) (in.ib32 ? ((const uint32_t*) in.ib)[k] : ((const uint16_t*) in.ib)[k]) + in.baseVertex;
+    return (int64_t) readIndex((const uint8_t*) in.ib, k, in.ib32) + in.baseVertex;
   };
   // vertex v's record in a stream, null when it lies outside the buffer
   auto record = [](const uint8_t* buf, size_t size, uint32_t offset, uint32_t stride, int64_t v) -> const uint8_t* {

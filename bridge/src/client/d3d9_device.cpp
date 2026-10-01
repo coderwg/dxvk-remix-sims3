@@ -33,6 +33,7 @@
 #include "d3d9_texture.h"
 #include "sims3_camera_hook.h"
 #include "sims3_walls.h"
+#include "sims3_lots.h"
 #include <atomic>
 #include <thread>
 // The Sims 3 camera hook (milestone 17): the runtime identifies textures by the XXH3 of their
@@ -577,6 +578,31 @@ namespace {
 
   // The sampler states a terrain draw's moved stage-0 texture keeps at its new stage (milestone 17).
   inline constexpr D3DSAMPLERSTATETYPE kSims3SamplerCopy[Sims3Hook::kSamplerCopies] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER, D3DSAMP_MIPFILTER, D3DSAMP_SRGBTEXTURE, D3DSAMP_MAXANISOTROPY };
+  // A texture moved to stage 0 takes its own stage's sampler states with it (milestone 68): the runtime
+  // samples stage 0's texture with stage 0's states -- the sRGB flag picks the decode, the addressing
+  // and the filters the sampling. The states that differ are set on stage 0, their stage-0 values kept
+  // in saved; the mask returned says which, for sims3SamplerStatesBack.
+  template<typename Dev>
+  uint8_t sims3SamplerStatesTo0(Sims3Hook& h, Dev* dev, DWORD from, DWORD* saved) {
+    uint8_t set = 0;
+    h.ourSampler = true;
+    for (int i = 0; i < Sims3Hook::kSamplerCopies; ++i) {
+      DWORD v0 = 0, vf = 0;
+      dev->GetSamplerState(0, kSims3SamplerCopy[i], &v0); dev->GetSamplerState(from, kSims3SamplerCopy[i], &vf);
+      if (v0 == vf) continue;
+      saved[i] = v0; set |= (uint8_t) (1u << i);
+      dev->SetSamplerState(0, kSims3SamplerCopy[i], vf);
+    }
+    h.ourSampler = false;
+    return set;
+  }
+  template<typename Dev>
+  void sims3SamplerStatesBack(Sims3Hook& h, Dev* dev, const DWORD* saved, uint8_t set) {
+    if (!set) return;
+    h.ourSampler = true;
+    for (int i = 0; i < Sims3Hook::kSamplerCopies; ++i) if (set & (1u << i)) dev->SetSamplerState(0, kSims3SamplerCopy[i], saved[i]);
+    h.ourSampler = false;
+  }
   // Whether rtx.conf (next to this DLL, read by the runtime at start) tags the markers: the
   // terrain option naming both hashes and the hidden-instance option naming the layer marker's.
   // (The bridge's Remix API channel cannot be used for this: the server never initialises its
@@ -980,13 +1006,20 @@ namespace {
     vb->Unlock();
     return vb;
   }
-  template<typename Dev>
-  IDirect3DIndexBuffer9* sims3MakeIndexBuffer(Dev* dev, const std::vector<uint16_t>& indices) {
+  // An index buffer of the hook's own (D3DPOOL_DEFAULT, released at a device reset): 16-bit when every
+  // index fits, else 32-bit (the walls' cut geometry, the squares' shapes, the low-detail lots' parts).
+  template<typename Dev, typename Index>
+  IDirect3DIndexBuffer9* sims3MakeIndexBuffer(Dev* dev, const std::vector<Index>& indices) {
+    if (indices.empty()) return nullptr;
+    uint32_t maxIndex = 0; for (const Index i : indices) if ((uint32_t) i > maxIndex) maxIndex = (uint32_t) i;
+    const bool wide = maxIndex >= 0xFFFFu;
+    const size_t bytes = indices.size() * (wide ? 4u : 2u);
     IDirect3DIndexBuffer9* ib = nullptr;
-    if (indices.empty() || FAILED(dev->CreateIndexBuffer((UINT) (indices.size() * 2), D3DUSAGE_WRITEONLY, D3DFMT_INDEX16, D3DPOOL_DEFAULT, &ib, nullptr)) || !ib) return nullptr;
+    if (FAILED(dev->CreateIndexBuffer((UINT) bytes, D3DUSAGE_WRITEONLY, wide ? D3DFMT_INDEX32 : D3DFMT_INDEX16, D3DPOOL_DEFAULT, &ib, nullptr)) || !ib) return nullptr;
     void* p = nullptr;
     if (FAILED(ib->Lock(0, 0, &p, 0)) || !p) { ib->Release(); return nullptr; }
-    memcpy(p, indices.data(), indices.size() * 2);
+    if (wide) { uint32_t* q = (uint32_t*) p; for (size_t i = 0; i < indices.size(); ++i) q[i] = (uint32_t) indices[i]; }
+    else { uint16_t* q = (uint16_t*) p; for (size_t i = 0; i < indices.size(); ++i) q[i] = (uint16_t) indices[i]; }
     ib->Unlock();
     return ib;
   }
@@ -1254,18 +1287,8 @@ namespace {
       h.remapRestore = h.boundTex[0]; if (h.remapRestore) h.remapRestore->AddRef();   // held until sims3EndDraw: the remap drops the state's reference
       h.remapActive = true;
       h.inRemap = true; dev->SetTexture(0, h.boundTex[k]); h.inRemap = false;
-      // its sampler states go with it (milestone 68): the runtime samples the albedo with stage 0's --
-      // the sRGB flag picks the decode (EA's low-detail house atlases are linear and sampled raw), the
-      // addressing and filters the sampling; the game's stage 0 states come back in sims3EndDraw
-      h.ourSampler = true;
-      for (int i = 0; i < Sims3Hook::kSamplerCopies; ++i) {
-        DWORD v0 = 0, vk = 0;
-        dev->GetSamplerState(0, kSims3SamplerCopy[i], &v0); dev->GetSamplerState((DWORD) k, kSims3SamplerCopy[i], &vk);
-        if (v0 == vk) continue;
-        h.remapSamplerSaved[i] = v0; h.remapSamplerSet |= (uint8_t) (1u << i);
-        dev->SetSamplerState(0, kSims3SamplerCopy[i], vk);
-      }
-      h.ourSampler = false;
+      // its sampler states go with it (milestone 68); the game's stage 0 states come back in sims3EndDraw
+      h.remapSamplerSet = sims3SamplerStatesTo0(h, dev, (DWORD) k, h.remapSamplerSaved);
       if (h.remapSamplerSet) {
         ++h.remapSamplerDraws; if (h.remapSamplerSet & (1u << 5)) ++h.remapSrgbDraws;
         bool seen = false; for (uint32_t i = 0; i < h.remapSamplerLogged; ++i) if (h.remapSamplerLoggedPs[i] == h.psHash) seen = true;
@@ -1319,12 +1342,8 @@ namespace {
       h.inRemap = true; dev->SetTexture(0, h.remapRestore); h.inRemap = false;
       if (h.remapRestore) { h.remapRestore->Release(); h.remapRestore = nullptr; }
     }
-    if (h.remapSamplerSet) {   // the game's stage 0 sampler states back (milestone 68)
-      h.ourSampler = true;
-      for (int i = 0; i < Sims3Hook::kSamplerCopies; ++i) if (h.remapSamplerSet & (1u << i)) dev->SetSamplerState(0, kSims3SamplerCopy[i], h.remapSamplerSaved[i]);
-      h.ourSampler = false;
-      h.remapSamplerSet = 0;
-    }
+    sims3SamplerStatesBack(h, dev, h.remapSamplerSaved, h.remapSamplerSet);   // the game's stage 0 sampler states back (milestone 68)
+    h.remapSamplerSet = 0;
     if (h.autoVsRestore) {
       IDirect3DVertexShader9* base = h.autoVsRestore; h.autoVsRestore = nullptr;
       h.swappingVs = true; dev->SetVertexShader(base); h.swappingVs = false;
@@ -1424,19 +1443,6 @@ namespace {
     if (s.mergedFrame != h.frames) { s.mergedFrame = h.frames; h.mergePending = si; }
     return 3;
   }
-  template<typename Dev>
-  IDirect3DIndexBuffer9* sims3MakeIndexBufferAny(Dev* dev, const std::vector<uint32_t>& indices, uint32_t maxIndex) {
-    IDirect3DIndexBuffer9* ib = nullptr;
-    const bool wide = maxIndex >= 0xFFFFu;
-    const size_t bytes = indices.size() * (wide ? 4u : 2u);
-    if (indices.empty() || FAILED(dev->CreateIndexBuffer((UINT) bytes, D3DUSAGE_WRITEONLY, wide ? D3DFMT_INDEX32 : D3DFMT_INDEX16, D3DPOOL_DEFAULT, &ib, nullptr)) || !ib) return nullptr;
-    void* p = nullptr;
-    if (FAILED(ib->Lock(0, 0, &p, 0)) || !p) { ib->Release(); return nullptr; }
-    if (wide) memcpy(p, indices.data(), bytes);
-    else { uint16_t* q = (uint16_t*) p; for (size_t i = 0; i < indices.size(); ++i) q[i] = (uint16_t) indices[i]; }
-    ib->Unlock();
-    return ib;
-  }
   // The square's shape from the game's buffers as they are now (the square was drawn this frame).
   template<typename Dev>
   void sims3SquareBuild(Sims3Hook& h, Dev* dev, Sims3Hook::Square& s, const std::vector<uint64_t>& ranges) {
@@ -1464,7 +1470,7 @@ namespace {
       if (start + n > ibCount) n = (ibCount - start) / 3u * 3u;
       for (uint32_t k = 0; k < n; ++k) {
         uint32_t i;
-        if (s.ib32) { uint32_t v; memcpy(&v, id + (size_t) (start + k) * 4u, 4); i = v; } else { uint16_t v; memcpy(&v, id + (size_t) (start + k) * 2u, 2); i = v; }
+        i = sims3cam::readIndex(id, (size_t) start + k, s.ib32);
         const int64_t vtx = (int64_t) s.base + (int64_t) i;
         idx.push_back(vtx < 0 ? 0xFFFFFFFFu : (uint32_t) vtx);   // a vertex before the buffer: left out as outside
       }
@@ -1476,7 +1482,7 @@ namespace {
     if (out.empty()) { ++h.mergeBuildFailed; return; }
     uint32_t lo = 0xFFFFFFFFu, hi = 0;
     for (uint32_t v : out) { if (v < lo) lo = v; if (v > hi) hi = v; }
-    s.merged = sims3MakeIndexBufferAny(dev, out, hi);
+    s.merged = sims3MakeIndexBuffer(dev, out);
     if (!s.merged) { ++h.mergeBuildFailed; return; }
     s.mergedPrims = (uint32_t) (out.size() / 3); s.minIndex = lo; s.numVertices = hi - lo + 1; s.ready = true;
     if (h.mergeLogged < 60u) {
@@ -1583,7 +1589,7 @@ namespace {
     uint32_t lo = 0xFFFFFFFFu, hi = 0;
     for (uint32_t t = 0; t < prims * 3u && start + t < ibCount; ++t) {
       uint32_t i;
-      if (ib32) { uint32_t v; memcpy(&v, id + (size_t) (start + t) * 4u, 4); i = v; } else { uint16_t v; memcpy(&v, id + (size_t) (start + t) * 2u, 2); i = v; }
+      i = sims3cam::readIndex(id, (size_t) start + t, ib32);
       idx.push_back(i); if (i < lo) lo = i; if (i > hi) hi = i;
     }
     if (idx.size() < 3 || lo > hi) { ++h.plateFailed; return nullptr; }
@@ -1617,7 +1623,7 @@ namespace {
       if (list.empty()) { np = 0; return true; }
       uint32_t a = 0xFFFFFFFFu, b = 0;
       for (uint32_t& v : list) { v += lo; if (v < a) a = v; if (v > b) b = v; }
-      out = sims3MakeIndexBufferAny(dev, list, b);
+      out = sims3MakeIndexBuffer(dev, list);
       if (!out) return false;
       mn = a; num = b - a + 1; np = (uint32_t) (list.size() / 3);
       return true;
@@ -1646,7 +1652,7 @@ namespace {
         sims3cam::liftTriangle(p, vn, sims3cam::kLotGlowLift);
         for (int k = 0; k < 3; ++k) memcpy(&bytes[(t + k) * stride + posOff], &p[3 * k], 12);
       }
-      if (ok) { e.glowVb = sims3MakeVertexBuffer(dev, bytes); e.glow = e.glowVb ? sims3MakeIndexBufferAny(dev, seq, (uint32_t) seq.size() - 1u) : nullptr; }
+      if (ok) { e.glowVb = sims3MakeVertexBuffer(dev, bytes); e.glow = e.glowVb ? sims3MakeIndexBuffer(dev, seq) : nullptr; }
       if (e.glowVb && e.glow) { e.glowMin = 0; e.glowNum = (uint32_t) seq.size(); e.glowPrims = (uint32_t) (seq.size() / 3); e.glowStride = stride; }
       else { if (e.glowVb) { e.glowVb->Release(); e.glowVb = nullptr; } if (e.glow) { e.glow->Release(); e.glow = nullptr; } e.glowPrims = 0; }
     }
@@ -1686,6 +1692,84 @@ namespace {
     tex->UnlockRect(0);
     g.tex = tex; ++h.glowTexMade;
     return tex;
+  }
+
+  // A low-detail lot model's draw (milestones 69-71), in place of the game's: its house (with the
+  // plate's sides) from the house index buffer; the plate's top as terrain -- the visible terrain marker
+  // at stage 0 and the hook's plate shader, no alpha test; and, while the game's switch c3.x is above 0,
+  // its glowing windows once more as light -- the window-only glow texture at stage 0 with s3's sampler
+  // states, blended ONE / ONE, the texture factor the switch, from the glow layer's own vertices 5 cm out
+  // from the wall. The game's bindings come back afterwards. False when the hook has nothing to change
+  // (the game's draw then goes out as it is); uid is the last message's.
+  template<typename Dev, typename St>
+  bool sims3LotModelDraw(Sims3Hook& h, Dev* dev, const St& st, INT base, UINT minIndex, UINT numVertices, UINT start, UINT prims, UID& uid) {
+    if (!*st.streams[0] || !*st.indices || !*st.vertexDecl) return false;
+    auto* vb0 = bridge_cast<Direct3DVertexBuffer9_LSS*>(*st.streams[0]);
+    auto* ib = bridge_cast<Direct3DIndexBuffer9_LSS*>(*st.indices);
+    auto* decl = bridge_cast<Direct3DVertexDeclaration9_LSS*>(*st.vertexDecl);
+    const int gs = sims3cam::kLotGlowStage;
+    Direct3DTexture9_LSS* glowTex = (sims3cam::lotGlow() && h.psHash == sims3cam::kLotImpostorPs && h.boundTex[gs] && (h.boundKind[gs] & 0x7F) == 1) ? bridge_cast<Direct3DTexture9_LSS*>(h.boundTex[gs]) : nullptr;
+    Sims3Hook::PlateEntry* e = sims3LotPlateEntry(h, dev, vb0, st.streamOffsets[0], st.streamStrides[0], ib, decl ? decl->sims3Elements() : nullptr, base, start, prims, glowTex);
+    if (!e) return false;
+    const bool wantSplit = e->platePrims && sims3cam::terrainLotPlate();
+    if (wantSplit && !h.platePs && !h.platePsFailed) {
+      IDirect3DPixelShader9* ps = nullptr;
+      if (FAILED(dev->CreatePixelShader(sims3cam::kLotPlatePs, &ps)) || !ps) { h.platePsFailed = true; Logger::info("Sims 3 camera hook: the plate's pixel shader could not be created; low-detail lots drawn as one object"); }
+      else h.platePs = ps;
+    }
+    const bool split = wantSplit && h.platePs && sims3EnsureMarkers(h, dev);
+    const float glowScale = st.pixelConstants.fConsts[sims3cam::kLotGlowScaleReg].data[0];   // the game's switch, c3.x
+    const bool glowOn = glowTex && e->glowPrims && glowScale > 0.f;
+    if (!split && !glowOn) return false;
+    auto send = [&](INT b, UINT mn, UINT nv, UINT s, UINT np) {
+      ClientMessage c(Commands::IDirect3DDevice9Ex_DrawIndexedPrimitive, dev->getId());
+      uid = c.get_uid();
+      const D3DPRIMITIVETYPE type = D3DPT_TRIANGLELIST;
+      c.send_many(type, b, mn, nv, s, np);
+    };
+    IDirect3DIndexBuffer9* gib = (IDirect3DIndexBuffer9*) ib; gib->AddRef();
+    if (!split) send(base, minIndex, numVertices, start, prims);   // the model as the game draws it, then its glow
+    if (split) {
+      if (e->housePrims) { dev->SetIndices(e->house); send(base, e->houseMin, e->houseNum, 0u, e->housePrims); }
+      IDirect3DBaseTexture9* t0 = nullptr; dev->GetTexture(0, &t0);
+      IDirect3DPixelShader9* ps0 = nullptr; dev->GetPixelShader(&ps0);
+      const DWORD at = st.renderStates[D3DRS_ALPHATESTENABLE];
+      h.inRemap = true; dev->SetTexture(0, h.marker[0]); h.inRemap = false;
+      h.swappingPs = true; dev->SetPixelShader(h.platePs); h.swappingPs = false;
+      if (at) { h.ourState = true; dev->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE); h.ourState = false; }
+      dev->SetIndices(e->plate);
+      send(base, e->plateMin, e->plateNum, 0u, e->platePrims);
+      if (at) { h.ourState = true; dev->SetRenderState(D3DRS_ALPHATESTENABLE, at); h.ourState = false; }
+      h.swappingPs = true; dev->SetPixelShader(ps0); h.swappingPs = false; if (ps0) ps0->Release();
+      h.inRemap = true; dev->SetTexture(0, t0); h.inRemap = false; if (t0) t0->Release();
+      ++h.plateDraws; h.plateTriangles += e->platePrims;
+    }
+    if (glowOn) {
+      IDirect3DBaseTexture9* t0 = nullptr; dev->GetTexture(0, &t0);
+      IDirect3DTexture9* own = sims3LotGlowTexture(h, dev, glowTex);   // the windows only, one level (milestone 71)
+      h.inRemap = true; dev->SetTexture(0, own ? (IDirect3DBaseTexture9*) own : h.boundTex[gs]); h.inRemap = false;
+      DWORD sSaved[Sims3Hook::kSamplerCopies] = {};
+      const uint8_t sSet = sims3SamplerStatesTo0(h, dev, (DWORD) gs, sSaved);
+      const float g = glowScale > 1.f ? 1.f : glowScale;
+      const DWORD grey = (DWORD) (g * 255.f + 0.5f);
+      static constexpr D3DRENDERSTATETYPE kGlowRs[7] = { D3DRS_ALPHABLENDENABLE, D3DRS_SRCBLEND, D3DRS_DESTBLEND, D3DRS_BLENDOP, D3DRS_ALPHATESTENABLE, D3DRS_ZWRITEENABLE, D3DRS_TEXTUREFACTOR };
+      const DWORD ours[7] = { TRUE, D3DBLEND_ONE, D3DBLEND_ONE, D3DBLENDOP_ADD, FALSE, FALSE, 0xFF000000u | (grey << 16) | (grey << 8) | grey };
+      DWORD rsSaved[7];
+      for (int i = 0; i < 7; ++i) rsSaved[i] = st.renderStates[kGlowRs[i]];
+      h.ourState = true; for (int i = 0; i < 7; ++i) dev->SetRenderState(kGlowRs[i], ours[i]); h.ourState = false;
+      IDirect3DVertexBuffer9* gvb0 = (IDirect3DVertexBuffer9*) vb0; gvb0->AddRef();
+      const UINT off0 = st.streamOffsets[0], st0 = st.streamStrides[0];
+      dev->SetStreamSource(0, e->glowVb, 0, e->glowStride);
+      dev->SetIndices(e->glow);
+      send(0, e->glowMin, e->glowNum, 0u, e->glowPrims);
+      dev->SetStreamSource(0, gvb0, off0, st0); gvb0->Release();
+      h.ourState = true; for (int i = 0; i < 7; ++i) dev->SetRenderState(kGlowRs[i], rsSaved[i]); h.ourState = false;
+      sims3SamplerStatesBack(h, dev, sSaved, sSet);
+      h.inRemap = true; dev->SetTexture(0, t0); h.inRemap = false; if (t0) t0->Release();
+      ++h.glowDraws; h.glowTriangles += e->glowPrims;
+    }
+    dev->SetIndices(gib); gib->Release();
+    return true;
   }
 
   // The hook's facts about the bound objects (milestone 17w): what the setters recorded inline before.
@@ -5133,101 +5217,10 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
         };
         wallDone_ = wallDraw_();
       }
-      // The Sims 3 camera hook: a low-detail lot model (milestone 69) goes out as its house, then its
-      // plate's top as terrain -- the visible terrain marker at stage 0 and the hook's plate shader --
-      // from index buffers of the hook's own; the game's bindings come back afterwards.
+      // The Sims 3 camera hook: a low-detail lot model (milestones 69-71), drawn by the hook in its parts.
       if (!wallDone_ && sims3cam::enabled() && !g_sims3.ourDraw && (sims3cam::terrainLotPlate() || sims3cam::lotGlow()) && g_sims3.drawCaptured
-          && g_sims3.vsHash == sims3cam::kLotImpostorVs && Type == D3DPT_TRIANGLELIST && *m_state.streams[0] != nullptr && *m_state.indices != nullptr && *m_state.vertexDecl != nullptr) {
-        auto& h = g_sims3;
-        auto* vb0 = bridge_cast<Direct3DVertexBuffer9_LSS*>(*m_state.streams[0]);
-        auto* ib = bridge_cast<Direct3DIndexBuffer9_LSS*>(*m_state.indices);
-        auto* decl = bridge_cast<Direct3DVertexDeclaration9_LSS*>(*m_state.vertexDecl);
-        const int gs = sims3cam::kLotGlowStage;
-        Direct3DTexture9_LSS* glowTex = (sims3cam::lotGlow() && h.psHash == sims3cam::kLotImpostorPs && h.boundTex[gs] && (h.boundKind[gs] & 0x7F) == 1) ? bridge_cast<Direct3DTexture9_LSS*>(h.boundTex[gs]) : nullptr;
-        Sims3Hook::PlateEntry* e = sims3LotPlateEntry(h, this, vb0, m_state.streamOffsets[0], m_state.streamStrides[0], ib, decl ? decl->sims3Elements() : nullptr, BaseVertexIndex, startIndex, primCount, glowTex);
-        const bool wantSplit = e && e->platePrims && sims3cam::terrainLotPlate();
-        if (wantSplit && !h.platePs && !h.platePsFailed) {
-          IDirect3DPixelShader9* ps = nullptr;
-          if (FAILED(CreatePixelShader(sims3cam::kLotPlatePs, &ps)) || !ps) { h.platePsFailed = true; Logger::info("Sims 3 camera hook: the plate's pixel shader could not be created; low-detail lots drawn as one object"); }
-          else h.platePs = ps;
-        }
-        const bool split = wantSplit && h.platePs && sims3EnsureMarkers(h, this);
-        const float glowScale = m_state.pixelConstants.fConsts[sims3cam::kLotGlowScaleReg].data[0];   // the game's switch, c3.x
-        const bool glowOn = e && glowTex && e->glowPrims && glowScale > 0.f;
-        if (split || glowOn) {
-          IDirect3DIndexBuffer9* gib = (IDirect3DIndexBuffer9*) ib; gib->AddRef();
-          if (!split) {   // the model as the game draws it, then its glow
-            ClientMessage c(Commands::IDirect3DDevice9Ex_DrawIndexedPrimitive, getId());
-            currentUID = c.get_uid();
-            c.send_many(Type, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount);
-          }
-          if (split && e->housePrims) {
-            SetIndices(e->house);
-            ClientMessage c(Commands::IDirect3DDevice9Ex_DrawIndexedPrimitive, getId());
-            currentUID = c.get_uid();
-            c.send_many(Type, BaseVertexIndex, e->houseMin, e->houseNum, 0u, e->housePrims);
-          }
-          if (split) {
-          // the plate: terrain marker, the plate shader, no alpha test (the shader writes 1)
-          IDirect3DBaseTexture9* t0 = nullptr; GetTexture(0, &t0);
-          IDirect3DPixelShader9* ps0 = nullptr; GetPixelShader(&ps0);
-          const DWORD at = m_state.renderStates[D3DRS_ALPHATESTENABLE];
-          h.inRemap = true; SetTexture(0, h.marker[0]); h.inRemap = false;
-          h.swappingPs = true; SetPixelShader(h.platePs); h.swappingPs = false;
-          if (at) { h.ourState = true; SetRenderState(D3DRS_ALPHATESTENABLE, FALSE); h.ourState = false; }
-          SetIndices(e->plate);
-          {
-            ClientMessage c(Commands::IDirect3DDevice9Ex_DrawIndexedPrimitive, getId());
-            currentUID = c.get_uid();
-            c.send_many(Type, BaseVertexIndex, e->plateMin, e->plateNum, 0u, e->platePrims);
-          }
-          if (at) { h.ourState = true; SetRenderState(D3DRS_ALPHATESTENABLE, at); h.ourState = false; }
-          h.swappingPs = true; SetPixelShader(ps0); h.swappingPs = false; if (ps0) ps0->Release();
-          h.inRemap = true; SetTexture(0, t0); h.inRemap = false; if (t0) t0->Release();
-          ++h.plateDraws; h.plateTriangles += e->platePrims;
-          }
-          // the window glow (milestone 70): the glowing triangles again, the glow atlas at stage 0 with
-          // its sampler states, blended ONE / ONE (the runtime's emissive blend), the texture factor the
-          // game's switch -- stage 0 multiplies the texture by it, for the light as for the colour
-          if (glowOn) {
-            IDirect3DBaseTexture9* t0 = nullptr; GetTexture(0, &t0);
-            IDirect3DTexture9* own = sims3LotGlowTexture(h, this, glowTex);   // the windows only, one level (milestone 71)
-            h.inRemap = true; SetTexture(0, own ? (IDirect3DBaseTexture9*) own : h.boundTex[gs]); h.inRemap = false;
-            DWORD sSaved[Sims3Hook::kSamplerCopies] = {}; uint8_t sSet = 0;
-            h.ourSampler = true;
-            for (int i = 0; i < Sims3Hook::kSamplerCopies; ++i) {
-              DWORD v0 = 0, vg = 0; GetSamplerState(0, kSims3SamplerCopy[i], &v0); GetSamplerState((DWORD) gs, kSims3SamplerCopy[i], &vg);
-              if (v0 != vg) { sSaved[i] = v0; sSet |= (uint8_t) (1u << i); SetSamplerState(0, kSims3SamplerCopy[i], vg); }
-            }
-            h.ourSampler = false;
-            const float g = glowScale > 1.f ? 1.f : glowScale;
-            const DWORD grey = (DWORD) (g * 255.f + 0.5f);
-            static constexpr D3DRENDERSTATETYPE kGlowRs[7] = { D3DRS_ALPHABLENDENABLE, D3DRS_SRCBLEND, D3DRS_DESTBLEND, D3DRS_BLENDOP, D3DRS_ALPHATESTENABLE, D3DRS_ZWRITEENABLE, D3DRS_TEXTUREFACTOR };
-            const DWORD ours[7] = { TRUE, D3DBLEND_ONE, D3DBLEND_ONE, D3DBLENDOP_ADD, FALSE, FALSE, 0xFF000000u | (grey << 16) | (grey << 8) | grey };
-            DWORD rsSaved[7];
-            for (int i = 0; i < 7; ++i) rsSaved[i] = m_state.renderStates[kGlowRs[i]];
-            h.ourState = true; for (int i = 0; i < 7; ++i) SetRenderState(kGlowRs[i], ours[i]); h.ourState = false;
-            // the glow layer's own vertices (moved out from the wall), the game's stream 0 back afterwards
-            IDirect3DVertexBuffer9* gvb0 = (IDirect3DVertexBuffer9*) vb0; gvb0->AddRef();
-            const UINT off0 = m_state.streamOffsets[0], st0 = m_state.streamStrides[0];
-            SetStreamSource(0, e->glowVb, 0, e->glowStride);
-            SetIndices(e->glow);
-            {
-              ClientMessage c(Commands::IDirect3DDevice9Ex_DrawIndexedPrimitive, getId());
-              currentUID = c.get_uid();
-              const INT base0 = 0;
-              c.send_many(Type, base0, e->glowMin, e->glowNum, 0u, e->glowPrims);
-            }
-            SetStreamSource(0, gvb0, off0, st0); gvb0->Release();
-            h.ourState = true; for (int i = 0; i < 7; ++i) SetRenderState(kGlowRs[i], rsSaved[i]); h.ourState = false;
-            h.ourSampler = true; for (int i = 0; i < Sims3Hook::kSamplerCopies; ++i) if (sSet & (1u << i)) SetSamplerState(0, kSims3SamplerCopy[i], sSaved[i]); h.ourSampler = false;
-            h.inRemap = true; SetTexture(0, t0); h.inRemap = false; if (t0) t0->Release();
-            ++h.glowDraws; h.glowTriangles += e->glowPrims;
-          }
-          SetIndices(gib); gib->Release();
-          wallDone_ = true;   // the game's draw went out above (or as the hook's parts)
-        }
-      }
+          && g_sims3.vsHash == sims3cam::kLotImpostorVs && Type == D3DPT_TRIANGLELIST)
+        wallDone_ = sims3LotModelDraw(g_sims3, this, m_state, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount, currentUID);
       if (!wallDone_ && sims3cam::enabled() && g_sims3.splitDraw && Type == D3DPT_TRIANGLELIST && primCount >= 2) {
         // The Sims 3 camera hook: a lot's re-submission as two half draws (milestone 17r), each its
         // own geometry to the runtime's draw tracker; together they bake the same triangles.
