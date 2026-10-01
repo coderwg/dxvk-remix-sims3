@@ -193,11 +193,11 @@ int main() {
   CHECK(!positionIs3D(pretr),  "decl POSITIONT (pre-transformed): not 3D");
   CHECK(!positionIs3D(nopos),  "decl with no POSITION (TEXCOORD-only): not 3D");
   CHECK(fvfIs3D(D3DFVF_XYZ | D3DFVF_DIFFUSE) && !fvfIs3D(D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1), "FVF XYZ: 3D, XYZRHW: not 3D");
-  CHECK(drawWantsCamera(true, true, D3DZB_TRUE, true),   "3D decl + depth on + camera + primary RT -> main camera");
-  CHECK(!drawWantsCamera(true, true, D3DZB_FALSE, true), "3D decl + depth OFF                      -> identity (post/UI window)");
-  CHECK(!drawWantsCamera(true, false, D3DZB_TRUE, true), "2D decl                                  -> identity");
-  CHECK(!drawWantsCamera(false, true, D3DZB_TRUE, true), "no verified camera yet                   -> identity");
-  CHECK(!drawWantsCamera(true, true, D3DZB_TRUE, false), "non-primary render target (shadow/reflection pass) -> identity");
+  CHECK(drawIs3D(true, true, D3DZB_TRUE, true),   "3D decl + depth on + camera + primary RT -> main camera");
+  CHECK(!drawIs3D(true, true, D3DZB_FALSE, true), "3D decl + depth OFF                      -> identity (post/UI window)");
+  CHECK(!drawIs3D(true, false, D3DZB_TRUE, true), "2D decl                                  -> identity");
+  CHECK(!drawIs3D(false, true, D3DZB_TRUE, true), "no verified camera yet                   -> identity");
+  CHECK(!drawIs3D(true, true, D3DZB_TRUE, false), "non-primary render target (shadow/reflection pass) -> identity");
 
   // --- draw-time texture remap (milestone 1g)
   CHECK(isColorFormat(D3DFMT_A8R8G8B8) && isColorFormat(D3DFMT_DXT5) && isColorFormat(D3DFMT_DXT1), "colour formats: A8R8G8B8, DXT1, DXT5");
@@ -218,7 +218,7 @@ int main() {
   // --- per-shader constant patches (milestone 1f)
   CHECK(fnv1a64("a", 1) == 0xaf63dc4c8601ec8cull, "FNV-1a-64 test vector");
   const DWORD toks[] = { 0xFFFE0200u, 0x0000FFFFu };
-  CHECK(shaderHash(toks) == fnv1a64(toks, 8) && shaderTokenCount(toks) == 2 && shaderTokenCount(toks, 1) == 0 && shaderHash(toks + 1) == fnv1a64(toks + 1, 4), "shaderHash covers version..END inclusive; a stream without END within the bound counts 0");
+  CHECK(shaderTokenCount(toks) == 2 && shaderTokenCount(toks, 1) == 0, "shaderTokenCount counts version..END inclusive; a stream without END within the bound counts 0");
   const DWORD noEnd[] = { 0xFFFE0200u, 0x02000001u, 0x800F0000u, 0x90E40000u };
   CHECK(shaderTokenCount(noEnd, 4) == 0 && !dxsoIsVertexShader(noEnd, shaderTokenCount(noEnd, 4), 2), "a truncated stream (no END) is refused rather than read past its end");
   CHECK(dxsoIsDef(0x51u) && dxsoIsDef(0x2Fu) && dxsoIsDef(0x30u) && !dxsoIsDef(0x52u) && !dxsoIsDef(0x01u), "DEF / DEFB / DEFI are the literal definitions (0x51, 0x2F, 0x30); TEXREG2RGB (0x52) is not");
@@ -646,9 +646,10 @@ int main() {
         CHECK(!worldDir(rowsY90, zero, wd) && wd[0] == 0.f, "lamps: a point light's zero vector gives no direction");
       }
     }
-    const AlbedoStage* tc = findTintConst(0x0c19795eb80e2e96ull);
+    const AlbedoStage* tc = findAlbedoStage(0x0c19795eb80e2e96ull);
+    const AlbedoStage* tn = findAlbedoStage(0x5aee1186d554dbc4ull);
     const float purple[3] = { 0.5f, 0.25f, 1.0f }, hot[3] = { 2.f, -1.f, 0.5f };
-    CHECK(tc && tc->tint && kTintRegister == 8 && findTintConst(0x1234ull) == nullptr && findTintConst(0x5aee1186d554dbc4ull) == nullptr,
+    CHECK(tc && tc->tint && kTintRegister == 8 && findAlbedoStage(0x1234ull) == nullptr && (!tn || !tn->tint),
           "tint: the recolourable object PS carries the tint at c8; the 3-light variant carries none; unknown -> none");
     CHECK(packTint(purple) == 0xFF8040FFu && packTint(hot) == 0xFFFF0080u, "packTint: ARGB with rounding and clamping (%08X, %08X)", packTint(purple), packTint(hot));
     {
@@ -753,7 +754,7 @@ int main() {
     CHECK(kindOfVerified(hc) == Kind::Main, "camera: a proper camera at the horizon -> Main (the old pitch test rejected it and broke the far view)");
     hc.fwd[1] = 0.2f;
     CHECK(kindOfVerified(hc) == Kind::Main, "camera: a proper camera looking slightly up -> Main");
-    CHECK(!drawWantsCamera(true, true, D3DZB_TRUE, true, TRUE, D3DCULL_CCW) && drawWantsCamera(true, true, D3DZB_TRUE, true, FALSE, D3DCULL_CCW) && drawWantsCamera(true, true, D3DZB_TRUE, true, TRUE, D3DCULL_CW) && drawWantsCamera(true, true, D3DZB_TRUE, true),
+    CHECK(isMirrorPass(TRUE, D3DCULL_CCW) && !isMirrorPass(FALSE, D3DCULL_CCW) && !isMirrorPass(TRUE, D3DCULL_CW) && !isMirrorPass(0, D3DCULL_CW),
           "draw: stencil on with the winding flipped = the stencil-mirror pass -> not captured; either state alone, or the defaults, capture as before");
     CHECK(isReflectionDraw(true, true, D3DZB_TRUE, FALSE, D3DCULL_CW) && isReflectionDraw(false, true, D3DZB_TRUE, TRUE, D3DCULL_CCW) && !isReflectionDraw(false, true, D3DZB_TRUE, FALSE, D3DCULL_CW)
           && !isReflectionDraw(true, false, D3DZB_TRUE, FALSE, D3DCULL_CW) && !isReflectionDraw(true, true, D3DZB_FALSE, FALSE, D3DCULL_CW),
@@ -921,13 +922,11 @@ int main() {
     const TerrainShader* p = findTerrainShader(0x0344bbc366f10954ull);
     const TerrainShader* l = findTerrainShader(kLotTerrainVs);
     CHECK(w && !w->layerPass && p && p->layerPass && l && !l->layerPass && findTerrainShader(0x55c99586fb17cd1cull) && !findTerrainShader(0x24ef09fb3303a9d0ull), "kTerrainShaders: world terrain, lot paint composite (layer), lot terrain, lot-area paint; the outer ground is not terrain");
-    CHECK(!w->coverageAlpha && !l->coverageAlpha && !p->coverageAlpha && terrainAlphaMode(w, 1, FALSE) == 1 && terrainAlphaMode(l, 1, FALSE) == 1 && terrainAlphaMode(w, 2, TRUE) == 0 && terrainAlphaMode(p, 2, TRUE) == 0 && terrainAlphaMode(nullptr, 1, FALSE) == 1, "terrainAlphaMode: every base draw forces alpha 1 (no shader keeps its coverage alpha, run 77), the world's blended layer passes and the composite leave alpha alone");
+    CHECK(terrainAlphaMode(w, 1, FALSE) == 1 && terrainAlphaMode(l, 1, FALSE) == 1 && terrainAlphaMode(w, 2, TRUE) == 0 && terrainAlphaMode(p, 2, TRUE) == 0 && terrainAlphaMode(nullptr, 1, FALSE) == 1, "terrainAlphaMode: every base draw forces alpha 1 (no shader keeps its coverage alpha, run 77), the world's blended layer passes and the composite leave alpha alone");
     CHECK(terrainAlphaMode(l, 2, FALSE) == 1 && terrainAlphaMode(l, 2, TRUE) == 0 && terrainAlphaMode(w, 2, FALSE) == 0 && terrainAlphaMode(p, 2, FALSE) == 0, "terrainAlphaMode: a lot mesh's opaque chunk copies and replays force alpha 1 too (each covers its own chunk), not the world's or the composite's");
-    const TerrainShader t2 = { 1, "x", false, true, false };
-    CHECK(terrainAlphaMode(&t2, 1, FALSE) == 2 && terrainAlphaMode(&t2, 2, TRUE) == 0, "terrainAlphaMode: a coverage-alpha entry would give mode 2 for base draws only");
     CHECK(l->lotFamily && p->lotFamily && !w->lotFamily && !findTerrainShader(0x55c99586fb17cd1cull)->lotFamily, "lotFamily: the lot terrain and its paint composite are the lot family (drawn in place, re-submissions hidden); the world terrain and lot-area paint are not");
-    CHECK(markKey() == 45, "markKey: the trace-dump key defaults to Insert (virtual key 45)");
-    CHECK(hookOption("noSuchKeyForTheTest", 7) == 7 && ringTrace() == 0, "hook options: an absent key gives its default (no sims3hook.txt next to the test binary); the diagnostics are off by default");
+    CHECK(markKey() == 220, "markKey: the mark key defaults to backslash (virtual key 220), as the shipped sims3hook.txt");
+    CHECK(hookOption("noSuchKeyForTheTest", 7) == 7, "hook options: an absent key gives its default (no sims3hook.txt next to the test binary)");
     CHECK(terrainDrawKind(nullptr, TRUE, true) == 0 && terrainDrawKind(w, FALSE, false) == 1 && terrainDrawKind(w, TRUE, false) == 2 && terrainDrawKind(p, FALSE, false) == 2 && terrainDrawKind(l, FALSE, false) == 1 && terrainDrawKind(l, FALSE, true) == 2, "terrainDrawKind: base for opaque draws; layer pass for blended draws, the composite, and a lot mesh's further chunk copies");
     CHECK(wantsUnlitPatch(0x17eabad58f650687ull) && wantsUnlitPatch(0x670dbe0fa52c4650ull) && wantsUnlitPatch(0x98062e8d4d12af7dull) && wantsUnlitPatch(0xd63bf505ec4a44a0ull) && !wantsUnlitPatch(0x99ee53ff6ef1b0b6ull) && !wantsUnlitPatch(0x028ce2dde691b739ull), "unlit patch: the four lit lot-area paint shaders only (the composite's final mad is not albedo x light)");
     static uint32_t m0[kTerrainMarkerSize * kTerrainMarkerSize], m1[kTerrainMarkerSize * kTerrainMarkerSize], m2[kTerrainMarkerSize * kTerrainMarkerSize], m0b[kTerrainMarkerSize * kTerrainMarkerSize];

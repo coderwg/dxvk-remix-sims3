@@ -30,15 +30,6 @@
 
 #include <d3d9.h>
 
-// The Sims 3 camera hook: the texture hash the runtime computes (xxhash, single header next to the sources).
-#if __has_include("xxhash.h")
-#define XXH_INLINE_ALL
-#include "xxhash.h"
-#define SIMS3_TEX_XXHASH 1
-#else
-#define SIMS3_TEX_XXHASH 0
-#endif
-
 /*
  * Direct3DTexture9_LSS Interface Implementation
  */
@@ -156,21 +147,6 @@ uint32_t Direct3DTexture9_LSS::sims3Level0Version() const {
     return surface->sims3Version;
   }
   return 0;
-}
-
-uint64_t Direct3DTexture9_LSS::sims3Level0Hash() {
-  const uint32_t v = sims3Level0Version();
-  if (v == sims3HashVersion) return sims3Hash;
-  sims3HashVersion = v; sims3Hash = 0;
-#if SIMS3_TEX_XXHASH
-  const uint8_t* data = sims3Level0Data();
-  if (data) {
-    const D3DSURFACE_DESC d = getLevelDesc(0);
-    const size_t bytes = bridge_util::calcTotalSizeOfRect(d.Width, d.Height, d.Format);
-    if (bytes) sims3Hash = (uint64_t) XXH3_64bits(data, bytes);
-  }
-#endif
-  return sims3Hash;
 }
 
 HRESULT Direct3DTexture9_LSS::LockRect(UINT Level, D3DLOCKED_RECT* pLockedRect, CONST RECT* pRect, DWORD Flags) {

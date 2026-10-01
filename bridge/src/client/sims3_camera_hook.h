@@ -214,8 +214,6 @@ inline Kind classify(const float* c, unsigned count, Camera& cam) {
   return Kind::None;
 }
 
-inline bool sameMatrix(const D3DMATRIX& a, const D3DMATRIX& b) { return std::memcmp(&a, &b, sizeof a) == 0; }
-
 // What the runtime currently holds. Kind::None here means the transforms the runtime had
 // before the hook: the game's own, if it ever set any, else identity.
 struct Held { Kind kind = Kind::None; D3DMATRIX view = {}; D3DMATRIX proj = {}; };
@@ -281,9 +279,6 @@ inline bool isReflectionDraw(bool cameraMirrored, bool declIs3D, DWORD zEnable, 
 // primary render target.
 inline bool drawIs3D(bool cameraValid, bool declIs3D, DWORD zEnable, bool rtIsPrimary) {
   return cameraValid && declIs3D && zEnable != D3DZB_FALSE && rtIsPrimary;
-}
-inline bool drawWantsCamera(bool cameraValid, bool declIs3D, DWORD zEnable, bool rtIsPrimary, DWORD stencilEnable = 0, DWORD cullMode = D3DCULL_CW) {
-  return drawIs3D(cameraValid, declIs3D, zEnable, rtIsPrimary) && !isMirrorPass(stencilEnable, cullMode);
 }
 
 // ---- draw-time texture remap (milestone 1g) -------------------------------------------
@@ -813,7 +808,6 @@ inline const AlbedoStage* findAlbedoStage(uint64_t hash) { return findByHash(kAl
 // colour argument 2 is TFACTOR (d3d9_rtx_utils.cpp: materialData.tFactor = renderStates[
 // D3DRS_TEXTUREFACTOR]), and the game's pixel shaders ignore that fixed-function state, so
 // the client forwards c8 there for captured draws (white for shaders without a tint).
-inline const AlbedoStage* findTintConst(uint64_t hash) { const AlbedoStage* a = findAlbedoStage(hash); return (a && a->tint) ? a : nullptr; }
 
 inline uint32_t packTint(const float* rgb) {
   auto to8 = [](float v) -> uint32_t { if (!(v > 0.f)) return 0u; if (v > 1.f) return 255u; return (uint32_t) (v * 255.f + 0.5f); };
@@ -917,20 +911,20 @@ struct LotCopies {
 //     for a further world chunk -- is baked with its blend state (alpha as the shader writes it)
 //     but not ray-traced as its own geometry. The world's blended layers get the second marker,
 //     tagged terrain AND hidden (rtx.hideInstanceTextures): separate geometry. A lot's
-//     re-submissions -- its further chunk copies, its replays, its paint composite -- are hidden
+//     re-submissions -- its further chunk copies, its paint composite's passes -- are hidden
 //     too and issued as two half draws, so the runtime never takes one for the lot's
 //     own visible instance (runs 85-89: white or flickering lots whenever it did);
 //   * the lit lot-paint shaders get their final lighting multiply replaced by the albedo
 //     (psUnlitOutput), so the bake carries no sun, shadow or fog.
 // The markers' content is fixed, so their hashes are stable across runs: the hook sets the two
-// runtime options itself when it can hash (xxhash), otherwise the two textures are tagged once
-// in the runtime's menu.
+// runtime options itself when it can hash (xxhash), otherwise the textures are tagged once in
+// the runtime's menu.
 // Hook options from `sims3hook.txt` next to this DLL (one `key = value` per line, integers;
-// `#` comments), read once. Absent file or key = the default. Used for the diagnostics that
-// are flipped between runs without a rebuild.
+// `#` comments), read once. Absent file or key = the default, and every default is the value the
+// shipped sims3/config/sims3hook.txt carries, so the hook behaves the same without the file.
 inline int hookOption(const char* key, int def) {
   struct Entry { char key[48]; int value; };
-  static Entry entries[32]; static int count = -1;
+  static Entry entries[64]; static int count = -1;
   if (count < 0) {
     count = 0;
     char path[MAX_PATH] = {};
@@ -940,7 +934,7 @@ inline int hookOption(const char* key, int def) {
         snprintf(slash + 1, (size_t) (MAX_PATH - (slash + 1 - path)), "sims3hook.txt");
         if (FILE* f = fopen(path, "rb")) {
           char line[256];
-          while (fgets(line, sizeof line, f) && count < 32) {
+          while (fgets(line, sizeof line, f) && count < 64) {
             char* p = line; while (*p == ' ' || *p == '\t') ++p;
             if (*p == '#' || *p == '\r' || *p == '\n' || !*p) continue;
             char* eq = strchr(p, '='); if (!eq) continue;
@@ -959,23 +953,9 @@ inline int hookOption(const char* key, int def) {
   return def;
 }
 
-// Toggle with SIMS3_TERRAIN (unset/1 = the baker path; 0, f or n = the pre-M17 capture), or
-// `terrain = 0` in sims3hook.txt.
-inline bool terrainEnabled() {
-  static int s = -1;
-  if (s < 0) {
-    char e[8] = {};
-    const DWORD n = GetEnvironmentVariableA("SIMS3_TERRAIN", e, sizeof e);
-    s = (n > 0 && (e[0] == '0' || e[0] == 'f' || e[0] == 'F' || e[0] == 'n' || e[0] == 'N')) ? 0 : (hookOption("terrain", 1) != 0 ? 1 : 0);
-  }
-  return s == 1;
-}
-// markKey (milestone 17y): the virtual-key code of the key that writes the rolling trace to the log
-// (F9 and the backtick key always work too); default 45 = Insert.
-inline int markKey() { static int s = -1; if (s < 0) { s = hookOption("markKey", 45); if (s < 1 || s > 254) s = 45; } return s; }
-// ringTrace = 1 keeps the rolling trace of every draw and event (the last ~300 frames) that the
-// mark key writes to the log (diagnostic; 0 = off).
-inline int ringTrace() { static int s = -1; if (s < 0) s = hookOption("ringTrace", 0) != 0; return s; }
+// markKey (milestone 17y): the virtual-key code of the mark key, which logs the lit lamps and the
+// fog once (F9 and the backtick key always work too); default 220 = backslash.
+inline int markKey() { static int s = -1; if (s < 0) { s = hookOption("markKey", 220); if (s < 1 || s > 254) s = 220; } return s; }
 // The exposure from the lights of the sky (milestones 20d, 52, 54): exposureFromLight = 1 keeps the
 // runtime's sky brightness at 1 (the sky the game draws lights the scene as it is) and drives the
 // ceiling of its auto-exposure (rtx.autoExposure.evMaxValue) from the luminance of the sun and the
@@ -992,7 +972,7 @@ inline int exposureFromLight() { static int s = -1; if (s < 0) s = hookOption("e
 inline int fogFromGame() { static int s = -1; if (s < 0) s = hookOption("fogFromGame", 1) != 0; return s; }
 inline float fogColourScale() { static float s = -1.f; if (s < 0.f) { int v = hookOption("fogColourScale", 1000); if (v < 0) v = 0; if (v > 10000) v = 10000; s = (float) v / 1000.f; } return s; }
 inline float dayEvMax() { static float s = -99.f; if (s < -98.f) { int v = hookOption("dayEvMax", 500); if (v < -1000) v = -1000; if (v > 1000) v = 1000; s = (float) v / 100.f; } return s; }
-inline float nightEvMax() { static float s = -99.f; if (s < -98.f) { int v = hookOption("nightEvMax", 100); if (v < -1000) v = -1000; if (v > 1000) v = 1000; s = (float) v / 100.f; } return s; }
+inline float nightEvMax() { static float s = -99.f; if (s < -98.f) { int v = hookOption("nightEvMax", 0); if (v < -1000) v = -1000; if (v > 1000) v = 1000; s = (float) v / 100.f; } return s; }
 // The lights go to the runtime through the Remix API (milestones 20b, 23): the sun as a distant
 // light, the lamps as sphere lights, with explicit radiance and size. The API needs
 // exposeRemixApi = True in .trex\bridge.conf; without it there are no lights and one warning.
@@ -1001,7 +981,7 @@ inline float nightEvMax() { static float s = -99.f; if (s < -98.f) { int v = hoo
 // unit; lampRadiance = radiance per unit of colour, thousandths.
 inline float sunAngle() { static float s = -1.f; if (s < 0.f) { int v = hookOption("sunAngle", 2000); if (v < 100) v = 100; if (v > 90000) v = 90000; s = (float) v / 1000.f; } return s; }
 // moonLight = the moon's share of the game's moonlight, in percent (100 = the game's own; 0 = none, the night stays dark).
-inline float moonShare() { static float s = -1.f; if (s < 0.f) { int v = hookOption("moonLight", 100); if (v < 0) v = 0; if (v > 200) v = 200; s = (float) v / 100.f; } return s; }
+inline float moonShare() { static float s = -1.f; if (s < 0.f) { int v = hookOption("moonLight", 2); if (v < 0) v = 0; if (v > 200) v = 200; s = (float) v / 100.f; } return s; }
 // dawnMinutes = the sun's rise eased over this many game minutes after sunrise (the game's own rise is steep: nothing
 // at 6 h, orange at 6.2 h): the game's light times the minutes since sunrise over this; 0 = the game's rise as it is.
 inline float dawnHours() { static float s = -1.f; if (s < 0.f) { int v = hookOption("dawnMinutes", 60); if (v < 0) v = 0; if (v > 360) v = 360; s = (float) v / 60.f; } return s; }
@@ -1015,7 +995,7 @@ inline float lampRadius() { static float s = -1.f; if (s < 0.f) { int v = hookOp
 // lampMax = the most lamps lit at once (the nearest to the camera's target first); lampWorldLights =
 // 1 to light the world lights too (a street lamp's, faded in and out by the game's own night
 // switch), 0 to leave them dark.
-inline uint32_t lampMax() { static int s = -1; if (s < 0) { s = hookOption("lampMax", 48); if (s < 1) s = 1; if (s > 96) s = 96; } return (uint32_t) s; }
+inline uint32_t lampMax() { static int s = -1; if (s < 0) { s = hookOption("lampMax", 96); if (s < 1) s = 1; if (s > 96) s = 96; } return (uint32_t) s; }
 inline bool lampWorldLights() { static int s = -1; if (s < 0) s = hookOption("lampWorldLights", 1) != 0 ? 1 : 0; return s == 1; }
 inline float lampRadiance() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampRadiance", 40000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
 // The lamps' shapes from the game's definitions (milestone 32): cones for spots and lamp shades, a
@@ -1102,18 +1082,17 @@ inline float lampShadeGlow() { static float s = -1.f; if (s < 0.f) { int v = hoo
 // drawn in place, the first copy visible and every re-submission (further chunk copies, the
 // composite's passes) hidden and split in two (milestones 16-19; the lot replay of milestones
 // 17e-18i re-issued them after the world terrain, which run 119's paint test showed is not
-// needed: nothing overwrites a lot's paint in the atlas). coverageAlpha: the base draws keep
-// the shader's own alpha (its paint coverage) and bake with an alpha test; tried in run 77 and
-// wrong for this game -- the world's base pass is black where only its blended layer passes paint,
-// and the skipped texels showed stale bakes -- so no shader uses it.
-struct TerrainShader { uint64_t hash; const char* name; bool layerPass; bool coverageAlpha; bool lotFamily; };
+// needed: nothing overwrites a lot's paint in the atlas). (A base draw keeping the shader's own
+// coverage alpha, baked with an alpha test, was tried in run 77 and is wrong for this game: the
+// world's base pass is black where only its blended layer passes paint.)
+struct TerrainShader { uint64_t hash; const char* name; bool layerPass; bool lotFamily; };
 
 inline const TerrainShader kTerrainShaders[] = {
-  { 0x55c99586fb17cd1cull, "lot-area terrain paint (lit, 3 layers + lot mask)", false, false, false },
-  { 0xdfaf82cf9ec175b0ull, "world terrain (4 layers + chunk mask; alpha-blended draws = extra layers)", false, false, false },
-  { kLotTerrainVs,         "lot terrain (3 layers + chunk mask, clipped per chunk by texkill)", false, false, true },
-  { 0x0344bbc366f10954ull, "lot paint composite (unlit 4-layer blend over the lot terrain)", true, false, true },
-  { 0x2a57449ad7d2c7eeull, "the town's coarse ground (the far ground and the neighbourhood view)", false, false, false },
+  { 0x55c99586fb17cd1cull, "lot-area terrain paint (lit, 3 layers + lot mask)", false, false },
+  { 0xdfaf82cf9ec175b0ull, "world terrain (4 layers + chunk mask; alpha-blended draws = extra layers)", false, false },
+  { kLotTerrainVs,         "lot terrain (3 layers + chunk mask, clipped per chunk by texkill)", false, true },
+  { 0x0344bbc366f10954ull, "lot paint composite (unlit 4-layer blend over the lot terrain)", true, true },
+  { 0x2a57449ad7d2c7eeull, "the town's coarse ground (the far ground and the neighbourhood view)", false, false },
 };
 // The town's coarse ground (milestones 61, 63): low 256-unit squares of the whole town, one draw and
 // one vertex buffer per square (SHORT4, with 2-unit skirts on the square edges and around every
@@ -1124,15 +1103,14 @@ inline const TerrainShader kTerrainShaders[] = {
 inline constexpr uint64_t kCoarseGroundVs = 0x2a57449ad7d2c7eeull;
 // The lot's ground as the neighbourhood view draws it (milestone 63): VS 92337a18 (the lot VS's
 // decode and per-chunk clip, plus a normal) with PS 4c59eb62, which shows only a pre-baked 256x256
-// picture of the lot's paint; two draws per frame, the active lot only, over the coarse ground that
-// covers the lot as well (runs 168-171). terrainLotPicture = 0 leaves it out (one surface per patch:
-// the coarse ground, whose town colour map holds the lots); 1 = captured as an ordinary object.
+// picture of the lot's paint; two draws per frame, the active lot only (runs 168-171). It is left out:
+// a second surface over the lot's ground there -- the low-detail model's plate, which fills the hole
+// the town ground has under every lot (run 176).
 inline constexpr uint64_t kLotPictureVs = 0x92337a1805f17506ull;
-inline bool terrainLotPicture() { static int s = -1; if (s < 0) s = hookOption("terrainLotPicture", 0) != 0 ? 1 : 0; return s == 1; }
 
 // A lot's low-detail model, its impostor (runs 173-175): a simplified house and a flat ground plate,
 // one draw per lot with VS 074cd28f and PS 9c84a6b7; s2 the plain colour (alpha a cut-out), s3 the
-// window glow (rgb) and the ambient occlusion (alpha). The terrain census writes its draws and textures.
+// window glow (rgb) and the ambient occlusion (alpha).
 inline constexpr uint64_t kLotImpostorVs = 0x074cd28fc5260474ull;
 
 // The low-detail lot's ground plate as terrain (milestone 69): the town ground has a hole under every
@@ -1287,14 +1265,14 @@ inline constexpr DWORD kLotPlatePs[] = {
 };
 
 // How a terrain variant treats alpha: 0 as the shader writes it (blended layer passes), 1 forced
-// to 1 (base draws), 2 the shader's own coverage, baked with an alpha test (unused, run 77).
-// A lot mesh's further chunk copies and its replays are opaque draws each clipped to its own
+// to 1 (base draws).
+// A lot mesh's further chunk copies are opaque draws each clipped to its own
 // world chunk by texkill, together covering the lot: each must write the opacity (alpha 1) for
 // its part (milestone 17n; with only the first copy writing alpha, the rest of a lot kept stale
 // atlas texels, which shift whenever the cascades re-centre on a moving camera -- run 87's
 // flicker during camera movement). The blended composite keeps the shader's alpha.
 inline uint8_t terrainAlphaMode(const TerrainShader* t, uint8_t kind, DWORD alphaBlendEnable) {
-  if (kind == 1 || kind == 3) return (t && t->coverageAlpha) ? 2 : 1;   // kind 3: a square's piece that only paints (milestone 60), opaque like a base draw
+  if (kind == 1 || kind == 3) return 1;   // kind 3: a square's piece that only paints (milestone 60), opaque like a base draw
   if (t && t->lotFamily && !t->layerPass && alphaBlendEnable == 0) return 1;
   return 0;
 }
@@ -1323,10 +1301,9 @@ inline bool isLitTerrainPs(uint64_t psHash) {   // the four only: the coarse gro
 }
 
 // ---- the town ground's squares (milestone 60, design B) ----------------------------------
-// terrainMerge = 1: each 256-unit square of the town ground goes to the ray tracer as ONE shape,
-// the union of the game's opaque pieces without the skirts; the pieces themselves only paint.
-// 0: every opaque piece is traced as it comes, skirts and all (before milestone 60).
-inline bool terrainMerge() { static int s = -1; if (s < 0) s = hookOption("terrainMerge", 1) != 0 ? 1 : 0; return s == 1; }
+// Each 256-unit square of the town ground goes to the ray tracer as ONE shape, the union of the
+// game's opaque pieces without the skirts; the pieces themselves only paint. A piece not yet in a
+// shape is traced as it comes (before milestone 60 every piece was).
 // The ground's triangles of a square: a skirt hangs 2 units down from the ground's edge, so two of
 // its corners stand on the same point of the ground (the same raw x and z: run 168 found every
 // near-vertical triangle of the town ground to be such a 2.0-unit wall); a heightfield's own
@@ -1507,7 +1484,7 @@ inline bool psForceAlphaOne(std::vector<DWORD>& t) {
 // the in-frame bake: the world was black with layer 0 moved to the first undeclared stage
 // (runs 78-82), green with it moved to stage 1, a declared stage whose own texture was displaced
 // for the draw (run 84), and green with no move at all (run 83, the marker read as layer 0); at
-// Present an undeclared stage works (the lot replays, runs 78/80). The runtime's bookkeeping
+// Present an undeclared stage worked (the lot replays of the time, runs 78/80). The runtime's bookkeeping
 // (SetStateTexture / UndirtyTextures / PrepareDraw / BindTexture, the compiler's per-sampler
 // bound spec constant) shows nothing stage-specific, so the cause stays unknown; the way round
 // it: layer 0 goes to a stage the shader declares AND the game binds for the draw, whose own
@@ -1516,8 +1493,8 @@ inline bool psForceAlphaOne(std::vector<DWORD>& t) {
 // with the second half of TEXCOORD0, doubled. With s0 and sD swapped the variant reads layer 0
 // from sD (the game's layer-0 texture bound there) and the "detail" from s0, where the marker
 // sits: its red is 0x80, so the detail factor is 2 x 128/255 = 1.004 -- the bake loses the grain,
-// nothing else. A shader without such a read (the lot paint composite) falls back to the first
-// undeclared stage, which works for it because it is only ever replayed at Present.
+// nothing else. The one shader without such a read, the lot paint composite, is given a paint
+// layer's stage instead (lotCompositeStage).
 inline constexpr uint32_t kDxsoOpTex = 0x42u, kDxsoSwizzleZwzw = 0xEEu;   // texld; a source's .zwzw swizzle
 
 // The sampler of the shader's last `texld r, v0.zwzw, s` (its detail read), or -1.
@@ -1542,13 +1519,13 @@ inline int psDetailSampler(const DWORD* t, size_t count) {
 // layer: its term is 0. Two passes make the draw whole: pass 1 (mask at s4) paints layers 1..3
 // with the game's blend; pass 2 (mask at s3, the black marker at s1 and s2 as well) adds
 // layer 4 x mask.w alone, blended ONE / ONE with the same alpha test. The game's own draw of
-// the composite is pass 1 (layer 4 missing) -- the replay after the world terrain redoes both.
+// the composite is pass 1 (layer 4 missing); the hook issues pass 2 right after it (milestone 19).
 inline constexpr uint64_t kLotCompositePs = 0x99ee53ff6ef1b0b6ull;
 inline int lotCompositeStage(int pass) { return pass == 1 ? 4 : pass == 2 ? 3 : 0; }
 
-// The marker textures: 32x32 A8R8G8B8, fixed and flat. 0 = terrain (mid grey; base draws;
-// visible), 1 = the world's layer passes and a lot's lifted copies and replays (the same red,
-// with blue; hidden), 2 = the composite's passes (black; hidden, lifted). The red is what matters
+// The marker textures: 32x32 A8R8G8B8, fixed and flat. 0 = terrain (dark red; base draws;
+// visible), 1 = the world's layer passes and a lot's further chunk copies (the same red, with
+// blue; hidden), 2 = the composite's passes (black; hidden). The red is what matters
 // for 0 and 1: the variant reads the marker as the shader's detail texture (psDetailSampler),
 // doubled, and 0x80 makes that a factor of 1; the composite reads its marker as a paint layer,
 // and black takes that layer out. Any fixed content fixes the hashes, which are what rtx.conf
@@ -2214,12 +2191,6 @@ inline uint64_t fnv1a64(const void* bytes, size_t len) {
   return h;
 }
 
-// Hash a D3D9 shader token stream from its version token through the END token, inclusive
-// (0 for a stream without an END token).
-inline uint64_t shaderHash(const DWORD* tokens) {
-  const size_t n = shaderTokenCount(tokens);
-  return n ? fnv1a64(tokens, n * sizeof(DWORD)) : 0;
-}
 
 inline const ShaderPatch* findShaderPatch(uint64_t hash) { return findByHash(kShaderPatches, hash); }
 
