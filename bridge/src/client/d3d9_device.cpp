@@ -2179,8 +2179,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
     const bool readTerrain = fresh;
     // The game's own light in its memory (milestone 49). Two seconds after a world is live, on the
     // lot, a search finds the records holding what the terrain is handed (sims3cam::lightRecord);
-    // five seconds of agreement with the terrain confirm one; it is then read wherever no lit
-    // terrain is drawn, checked against the terrain whenever the lot shows it, and searched for
+    // five seconds of agreement with the terrain confirm one; it is then the sky's light in every
+    // view (milestone 51), checked against the terrain whenever the lot shows it, and searched for
     // again when it stops agreeing or a world is loaded anew.
     if (h.lampReportLive) ++h.lightLiveFrames;
     else { h.lightLiveFrames = 0; if (h.lightState != 1) { h.lightState = 0; h.lightUse = -1; } }
@@ -2218,7 +2218,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
           h.lightState = 3; h.lightDisagree = 0;
           const Sims3Hook::LightPlace& L = h.lightPlaces[h.lightUse];
           char where[160]; sims3DescribeAddress(L.p, where, sizeof where);
-          snprintf(msg, sizeof msg, "Sims 3 camera hook: the game's own light FOUND at %p (%s): it agreed with the terrain in %u of %u frames (%u of %u records agreed); read wherever no lit terrain is drawn",
+          snprintf(msg, sizeof msg, "Sims 3 camera hook: the game's own light FOUND at %p (%s): it agreed with the terrain in %u of %u frames (%u of %u records agreed); the sky's light from now on, in every view",
                    (const void*) L.p, where, L.matched, L.checked, confirmed, h.lightPlaceN);
         } else {
           h.lightState = 4; h.lightRetryFrame = h.frames;
@@ -2238,18 +2238,21 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
         Logger::info(msg);
       }
     }
+    // the sky's light: the game's own record once found, in every view; until then the lit terrain;
+    // without either the last light holds
     bool fromGame = false;
-    if (!fresh) {
-      ++h.framesNoTerrainSun;
-      if (h.lightState == 3 && sims3ReadGameLight(h.lightPlaces[h.lightUse].p, game)) { fresh = true; fromGame = true; ++h.framesFromGame; }
+    if (!fresh) ++h.framesNoTerrainSun;
+    if (h.lightState == 3) {
+      sims3cam::Sun rec = {};
+      if (sims3ReadGameLight(h.lightPlaces[h.lightUse].p, rec)) { game = rec; fresh = true; fromGame = true; ++h.framesFromGame; }
     }
     {
       // where the light comes from, logged when it has changed for half a second
-      const int src = readTerrain ? 0 : (fromGame ? 1 : 2);
+      const int src = fromGame ? 1 : (readTerrain ? 0 : 2);
       if (src == h.skySrcCand) ++h.skySrcFrames; else { h.skySrcCand = src; h.skySrcFrames = 1; }
       if (h.skySrcFrames == 30u && src != h.skySrcLogged && h.skySrcLogs < 100u) {
         ++h.skySrcLogs; h.skySrcLogged = src;
-        static const char* const kSrc[3] = { "the lit terrain", "the game's own light in its memory (no lit terrain drawn)", "nowhere: held at its last value (no lit terrain drawn, the game's light record not found yet)" };
+        static const char* const kSrc[3] = { "the lit terrain (the game's light record not found yet)", "the game's own light in its memory", "nowhere: held at its last value (no lit terrain drawn, the game's light record not found yet)" };
         char msg[320];
         snprintf(msg, sizeof msg, "Sims 3 camera hook: the sky's light comes from %s since frame %u, clock %.2f h",
                  kSrc[src], h.frames - 29u, h.clock.known ? h.clock.hour : -1.f);
@@ -2307,7 +2310,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
         const sims3cam::Sun& s0 = h.sky.shown[0]; const sims3cam::Sun& s1 = h.sky.shown[1];
         char msg[700];
         snprintf(msg, sizeof msg, "Sims 3 camera hook: sky at frame %u, clock %.2f h%s: the game's light%s is the %s's, colour %.3f, %.3f, %.3f (luminance %.3f), the dawn's ease x%.2f; SUN %s colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f; MOON %s colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f; the light of the sky %.3f, the afterglow x%.2f; sky level %.3f",
-                 h.frames, h.clock.known ? h.clock.hour : -1.f, !h.clock.known ? " (unknown)" : (h.clock.night ? " night" : " day"), fromGame ? " (from the game's memory)" : "", kBody[h.sky.body], game.col[0], game.col[1], game.col[2], sims3cam::luminance(game.col), ease,
+                 h.frames, h.clock.known ? h.clock.hour : -1.f, !h.clock.known ? " (unknown)" : (h.clock.night ? " night" : " day"), fromGame ? "" : (readTerrain ? " (from the terrain: the game's record not found yet)" : ""), kBody[h.sky.body], game.col[0], game.col[1], game.col[2], sims3cam::luminance(game.col), ease,
                  !h.sky.showing[0] ? "none," : (h.sky.glowing ? "its afterglow," : "as the game's,"), h.sky.showing[0] ? s0.col[0] : 0.f, h.sky.showing[0] ? s0.col[1] : 0.f, h.sky.showing[0] ? s0.col[2] : 0.f, s0.dir[0], s0.dir[1], s0.dir[2],
                  !h.sky.showing[1] ? "none," : (h.sky.body == 0 ? "kept past sunrise," : "the game's by its share, at least its floor,"), h.sky.showing[1] ? s1.col[0] : 0.f, h.sky.showing[1] ? s1.col[1] : 0.f, h.sky.showing[1] ? s1.col[2] : 0.f, s1.dir[0], s1.dir[1], s1.dir[2],
                  lum, h.sky.glowFade, h.skyLevel);

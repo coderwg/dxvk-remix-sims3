@@ -1136,8 +1136,9 @@ inline bool isLitTerrainPs(uint64_t psHash) { return wantsUnlitPatch(psHash); }
 // The game keeps the light it computes in a record of eight floats: the direction toward the
 // light, 0, the colour, 1 (run 161's search: a record that kept moving with the clock in the
 // neighbourhood view, where no lit terrain is drawn, and agreed with the terrain to five
-// decimals on the lot). The hook finds it by what the terrain is handed (lightRecord) and reads it
-// wherever no lit terrain is drawn (milestone 50 removed the table by the hour that stood in before).
+// decimals on the lot). The hook finds it by what the terrain is handed (lightRecord); once found
+// it is the sky's light in every view (milestone 51, for simplicity: one source), the terrain
+// standing in only until then.
 // (Not-a-number and infinite floats are told by their bits: the compiler may assume none exist.)
 inline bool finiteFloats(const float* q, int n) {
   for (int k = 0; k < n; ++k) { uint32_t u; std::memcpy(&u, q + k, 4); if ((u & 0x7f800000u) == 0x7f800000u) return false; }
