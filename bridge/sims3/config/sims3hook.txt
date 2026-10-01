@@ -17,7 +17,7 @@
 #               x the light of the sky as sent over the game's own, so by night x the moon's share); sent as rtx.fogColorScale
 terrain = 1
 terrainMerge = 1
-terrainCoarse = 0
+terrainCoarse = 1
 ringTrace = 0
 markKey = 220
 # The lights go to the runtime through the Remix API (exposeRemixApi = True in .trex\bridge.conf). The lamps are the

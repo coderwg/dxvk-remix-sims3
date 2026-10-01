@@ -859,6 +859,13 @@ inline const NeverCapture kNeverCapture[] = {
   // (The terrain paint passes -- the lot's 0344bbc3 and the world terrain's blended layers of
   // dfaf82cf -- were listed here until milestone 17; they are now baked by the runtime's terrain
   // baker as hidden layer passes, see kTerrainShaders.)
+  // The town ground's lighting pass (milestone 62, run 171): the world terrain's own geometry and
+  // geomorph (the same square vertex buffers, the unlit world pieces' triangles) with a pixel
+  // shader (9b8f4e2b) that computes only the light -- sun x shadow, light map, sky probe -- and a
+  // DESTCOLOR / SRCCOLOR blend that multiplies it over the unlit paint. Captured it was an exactly
+  // coplanar, untextured (grey) copy of the ground fighting the ground for the rays: the grey
+  // terrain flickering on the hills of runs 168 to 171. The ray tracer lights the ground itself.
+  { 0x3c837e49bf748d99ull, "the town ground's lighting pass (multiplied over the unlit world terrain)", false },
 };
 
 inline const NeverCapture* findNeverCapture(uint64_t hash) { return findByHash(kNeverCapture, hash); }
