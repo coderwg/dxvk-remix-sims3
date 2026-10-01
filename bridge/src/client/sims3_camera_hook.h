@@ -1135,17 +1135,6 @@ inline bool terrainLotPicture() { static int s = -1; if (s < 0) s = hookOption("
 // window glow (rgb) and the ambient occlusion (alpha). The terrain census writes its draws and textures.
 inline constexpr uint64_t kLotImpostorVs = 0x074cd28fc5260474ull;
 
-// Cut-outs the ray tracer must see (milestone 67): pixel shaders that discard texels by their colour
-// texture's alpha with texkill, which the runtime never sees, so the discarded texels (black in the
-// texture) would be solid surfaces. Their captured draws carry the same test as a D3D alpha test --
-// alpha >= ref -- which the runtime applies with the albedo's alpha; only where the game set none.
-struct AlphaCut { uint64_t psHash; uint8_t ref; const char* name; };
-inline constexpr AlphaCut kAlphaCuts[] = {
-  // texkill (s2.a - 0.5): 25% of the models' area sampled cut texels in run 176 (bushes, fences, edges)
-  { 0x9c84a6b7017f33fcull, 128, "the lots' low-detail models (texkill below colour alpha 0.5)" },
-};
-inline const AlphaCut* alphaCutFor(uint64_t psHash) { for (const AlphaCut& a : kAlphaCuts) if (a.psHash == psHash) return &a; return nullptr; }
-
 // How a terrain variant treats alpha: 0 as the shader writes it (blended layer passes), 1 forced
 // to 1 (base draws), 2 the shader's own coverage, baked with an alpha test (unused, run 77).
 // A lot mesh's further chunk copies and its replays are opaque draws each clipped to its own
@@ -1591,6 +1580,15 @@ struct PsSamplerUse {
   uint8_t colorChannels = 0;// how many of its r, g, b reach the colour output (an albedo: 3; a mask: 1 or 2)
   bool reachesColor() const { return colorChannels > 0; }
 };
+// A cut-out's value (milestone 68): a sum of up to three terms, each a literal times, when c >= 0,
+// one float constant component (register * 4 + component), read at draw time.
+struct CutTerm { float k = 0.f; int16_t c = -1; };
+struct CutPoly {
+  CutTerm t[3]; uint8_t n = 0;
+  bool add(const CutPoly& o) { if (n + o.n > 3) return false; for (uint8_t i = 0; i < o.n; ++i) t[n++] = o.t[i]; return true; }
+  void negate() { for (uint8_t i = 0; i < n; ++i) t[i].k = -t[i].k; }
+  bool same(const CutPoly& o) const { if (n != o.n) return false; for (uint8_t i = 0; i < n; ++i) if (t[i].c != o.t[i].c || t[i].k != o.t[i].k) return false; return true; }
+};
 struct PsAnalysis {
   PsSamplerUse samplers[16];
   uint16_t normalTexcoords = 0;   // TEXCOORD inputs the shader treats as a normal: normalised, or dotted with a constant (a light direction)
@@ -1599,6 +1597,12 @@ struct PsAnalysis {
   // alpha output (walls C: alpha-tested).
   int8_t maskSampler = -1;
   bool maskKill = false, maskAlpha = false;
+  // The cut-out (milestone 68): the shader's one texkill, when the value it tests is a * alpha + b --
+  // alpha one 2D sampler's alpha, a and b literals and float constants (cutA, cutB), straight-line
+  // code -- the game's alpha test written as a discard, which the runtime never sees. -1: none, or
+  // not of that form (a mask, a vertex value, two textures, a comparison, flow control).
+  int8_t cutSampler = -1;
+  CutPoly cutA, cutB;
   bool valid = false;
 };
 
@@ -1633,6 +1637,43 @@ inline bool analyzePixelShader(const DWORD* tokens, size_t count, PsAnalysis& ou
     for (uint32_t c = 0; c < n; ++c) all |= tempTaint[dxsoRegNum(tok)][(tok >> (16 + 2 * c)) & 3u];
     return all;
   };
+  // the cut-out (milestone 68): per temp component, a * alpha(sampler) + b, or unknown
+  struct Form { bool known = false; int8_t s = -1; CutPoly a, b; };
+  Form form[32][4];
+  float defv[256][4] = {}; bool defd[256] = {};
+  int kills = 0; bool killOk = false, flow = false; Form killed;
+  auto srcForm = [&](uint32_t tok, uint32_t comp) -> Form {
+    Form f;
+    const uint32_t mod = (tok >> 24) & 0xFu;
+    if ((mod != 0u && mod != 1u) || (tok & (1u << 13))) return f;   // plain or negated, no relative addressing
+    const uint32_t ty = dxsoRegType(tok), n = dxsoRegNum(tok), sc = (tok >> (16 + 2 * comp)) & 3u;
+    if (ty == kTemp && n < 32) f = form[n][sc];
+    else if (ty == 2u && n < 256) {                                      // a float constant: a literal (DEF) or read at draw time
+      f.known = true; f.b.n = 1;
+      if (defd[n]) f.b.t[0].k = defv[n][sc]; else { f.b.t[0].k = 1.f; f.b.t[0].c = (int16_t) (n * 4 + sc); }
+    } else return f;
+    if (f.known && mod == 1u) { f.a.negate(); f.b.negate(); }
+    return f;
+  };
+  auto addForm = [](const Form& x, const Form& y) -> Form {
+    if (!x.known || !y.known || (x.s >= 0 && y.s >= 0 && x.s != y.s)) return Form();
+    Form r = x; r.s = x.s >= 0 ? x.s : y.s;
+    if (!r.a.add(y.a) || !r.b.add(y.b)) return Form();
+    return r;
+  };
+  auto mulForm = [](const Form& x, const Form& y) -> Form {
+    if (!x.known || !y.known || (x.s >= 0 && y.s >= 0)) return Form();
+    const Form& v = x.s >= 0 ? x : y; const Form& kf = x.s >= 0 ? y : x;   // kf: a constant
+    if (kf.b.n != 1) return Form();
+    const CutTerm kt = kf.b.t[0];
+    Form r = v;
+    auto scale = [&](CutPoly& p) -> bool {
+      for (uint8_t i = 0; i < p.n; ++i) { p.t[i].k *= kt.k; if (kt.c >= 0) { if (p.t[i].c >= 0) return false; p.t[i].c = kt.c; } }
+      return true;
+    };
+    if (!scale(r.a) || !scale(r.b)) return Form();
+    return r;
+  };
   dxsoForEach(tokens, count, [&](size_t pos, uint32_t op, uint32_t len) {
     if (op == kDxsoOpDcl && len >= 2) {
       const uint32_t usage = tokens[pos + 1], dest = tokens[pos + 2];
@@ -1642,7 +1683,13 @@ inline bool analyzePixelShader(const DWORD* tokens, size_t count, PsAnalysis& ou
       else if (type == kTexture && n < 32 && major < 3) inputTexcoord[n] = (int8_t) n;
       return true;
     }
+    if (op == 0x51u && len >= 5) {                                     // DEF c#, four literals (the cut-out's constants)
+      const uint32_t n = dxsoRegNum(tokens[pos + 1]);
+      if (n < 256) { defd[n] = true; for (uint32_t c = 0; c < 4; ++c) std::memcpy(&defv[n][c], &tokens[pos + 2 + c], 4); }
+      return true;
+    }
     if (dxsoIsDef(op) || len < 1) return true;
+    if ((op >= 0x19u && op <= 0x1Eu) || (op >= 0x26u && op <= 0x2Du) || op == 0x60u) flow = true;   // call / loop / rep / if / else / break
     // which coordinate inputs the shader uses as a normal: NRM of an input, or DP3 of an input
     // with a constant register (the light directions of the rig)
     {
@@ -1664,7 +1711,41 @@ inline bool analyzePixelShader(const DWORD* tokens, size_t count, PsAnalysis& ou
       if (out.maskSampler >= 0 && dtype == kTemp && dn < 32) {
         for (uint32_t c = 0; c < 4; ++c) if (tempTaint[dn][c] & bit((uint32_t) out.maskSampler, 0)) out.maskKill = true;
       }
+      // the cut-out: every tested component the same a * alpha(s) + b
+      ++kills; killOk = false;
+      if (dtype == kTemp && dn < 32 && !flow) {
+        Form f0; bool same = true;
+        for (uint32_t c = 0; c < 4 && same; ++c) {
+          if (!(mask & (1u << c))) continue;
+          const Form& f = form[dn][c];
+          if (!f.known || f.s < 0) same = false;
+          else if (!f0.known) f0 = f;
+          else if (f.s != f0.s || !f.a.same(f0.a) || !f.b.same(f0.b)) same = false;
+        }
+        if (same && f0.known) { killed = f0; killOk = true; }
+      }
       return true;
+    }
+    // the cut-out's forms of the components this instruction writes (unknown unless plain arithmetic)
+    if (dtype == kTemp && dn < 32) {
+      Form nf[4];
+      const bool sat = ((dest >> 20) & 1u) != 0u, predicated = (tokens[pos] & (1u << 28)) != 0u;
+      for (uint32_t c = 0; c < 4 && !sat && !predicated; ++c) {
+        if (!(mask & (1u << c))) continue;
+        if ((op == 0x42u || op == 0x5Fu || op == 0x5Du) && len >= 3) {  // TEXLD / TEXLDL / TEXLDD: the alpha of a 2D sampler
+          const uint32_t samp = tokens[pos + 3];
+          const bool proj = op == 0x42u && (((tokens[pos] >> 16) & 0xFFu) & 1u);
+          if (!proj && dxsoRegType(samp) == kSampler && dxsoRegNum(samp) < 16 && ((samp >> (16 + 2 * c)) & 3u) == 3u) {
+            nf[c].known = true; nf[c].s = (int8_t) dxsoRegNum(samp); nf[c].a.n = 1; nf[c].a.t[0].k = 1.f;
+          }
+        }
+        else if (op == 0x01u && len >= 2) nf[c] = srcForm(tokens[pos + 2], c);
+        else if (op == 0x02u && len >= 3) nf[c] = addForm(srcForm(tokens[pos + 2], c), srcForm(tokens[pos + 3], c));
+        else if (op == 0x03u && len >= 3) { Form y = srcForm(tokens[pos + 3], c); if (y.known) { y.a.negate(); y.b.negate(); } nf[c] = addForm(srcForm(tokens[pos + 2], c), y); }
+        else if (op == 0x05u && len >= 3) nf[c] = mulForm(srcForm(tokens[pos + 2], c), srcForm(tokens[pos + 3], c));
+        else if (op == 0x04u && len >= 4) nf[c] = addForm(mulForm(srcForm(tokens[pos + 2], c), srcForm(tokens[pos + 3], c)), srcForm(tokens[pos + 4], c));
+      }
+      for (uint32_t c = 0; c < 4; ++c) if (mask & (1u << c)) form[dn][c] = nf[c];
     }
     uint64_t taint[4] = {};
     if (op == 0x42u && len >= 3) {                                     // TEXLD dest, coord, sampler
@@ -1712,8 +1793,35 @@ inline bool analyzePixelShader(const DWORD* tokens, size_t count, PsAnalysis& ou
     out.samplers[s].colorChannels = n;
   }
   if (out.maskSampler >= 0 && !out.maskKill && (colorTaint[0][3] & bit((uint32_t) out.maskSampler, 0))) out.maskAlpha = true;
+  if (kills == 1 && killOk && killed.s >= 0 && killed.s < 16 && !out.samplers[killed.s].cube) { out.cutSampler = killed.s; out.cutA = killed.a; out.cutB = killed.b; }
   out.valid = true;
   return true;
+}
+
+// A cut-out's a or b with the bound float constants (get(register, component)).
+template<typename Get>
+inline float cutEval(const CutPoly& p, Get&& get) {
+  float v = 0.f;
+  for (uint8_t i = 0; i < p.n; ++i) v += p.t[i].k * (p.t[i].c >= 0 ? get((uint32_t) p.t[i].c >> 2, (uint32_t) p.t[i].c & 3u) : 1.f);
+  return v;
+}
+// The D3D alpha test that keeps what "texkill (a * alpha + b)" keeps (alpha in steps of 1/255):
+// D3DCMP_GREATEREQUAL or D3DCMP_LESSEQUAL with ref, D3DCMP_NEVER when every texel is discarded,
+// 0 when none ever is (no test needed).
+inline uint32_t cutAlphaTest(float a, float b, uint32_t& ref) {
+  ref = 0;
+  if (a == 0.f) return b < 0.f ? (uint32_t) D3DCMP_NEVER : 0u;
+  const float t = -b / a;
+  if (a > 0.f) {
+    if (t <= 0.f) return 0u;
+    if (t > 1.f) return (uint32_t) D3DCMP_NEVER;
+    const float r = std::ceil(t * 255.f - 1e-3f); ref = r <= 0.f ? 0u : r >= 255.f ? 255u : (uint32_t) r;
+    return (uint32_t) D3DCMP_GREATEREQUAL;
+  }
+  if (t >= 1.f) return 0u;
+  if (t < 0.f) return (uint32_t) D3DCMP_NEVER;
+  const float r = std::floor(t * 255.f + 1e-3f); ref = r <= 0.f ? 0u : r >= 255.f ? 255u : (uint32_t) r;
+  return (uint32_t) D3DCMP_LESSEQUAL;
 }
 
 // The albedo for a draw of an untabled pixel shader: among the samplers that reach the colour

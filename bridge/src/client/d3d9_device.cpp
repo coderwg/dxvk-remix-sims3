@@ -75,6 +75,12 @@ namespace {
     bool inRemap = false;                // our own SetTexture calls must not update the tracking above
     IDirect3DBaseTexture9* remapRestore = nullptr;
     bool remapActive = false;
+    // The albedo's own sampler states, moved to stage 0 with it (milestone 68): the runtime reads
+    // stage 0's -- the sRGB flag picks the decode, the addressing and filters the sampling.
+    DWORD remapSamplerSaved[7] = {}; uint8_t remapSamplerSet = 0;
+    uint32_t remapSamplerDraws = 0, remapSrgbDraws = 0, remapSamplerLogged = 0;
+    uint64_t remapSamplerLoggedPs[24] = {};
+    uint32_t cutShaders = 0, cutLogged = 0; uint64_t cutLoggedPs[32] = {};   // pixel shaders analysed with a cut-out; their first draws logged (milestone 68)
     bool loggedMain = false, loggedOther = false, loggedDraw3D = false, loggedDraw2D = false, loggedRemap = false;
     uint32_t loggedPatches = 0;          // bit per rule index, so each patch is announced once
     int psAlbedoStage = -1;              // bound pixel shader's known diffuse stage, or -1
@@ -298,7 +304,7 @@ namespace {
       uint32_t kept = 0, skirts = 0, flat = 0, outside = 0;
     };
     uint32_t lotPictureDropped = 0;   // the neighbourhood view's lot picture draws left out (milestone 63)
-    uint32_t alphaCutDraws = 0;       // captured draws given their shader's cut-out as an alpha test (milestone 67)
+    uint32_t alphaCutDraws = 0;       // captured draws given their shader's cut-out as an alpha test (milestones 67-68)
     std::vector<Square> squares; int mergePending = -1;
     uint32_t terrainPaintDraws = 0, mergedDraws = 0, mergePaintPieces = 0, mergeFallbackPieces = 0, mergeBuilds = 0, mergeBuildFailed = 0, mergeLogged = 0, mergeEvicted = 0, mergeSkipped = 0;
     bool drawIndexed = false; D3DPRIMITIVETYPE drawType = D3DPT_TRIANGLELIST; INT drawBase = 0; UINT drawStart = 0, drawPrims = 0;   // the indexed draw call's arguments, for the squares
@@ -1270,14 +1276,26 @@ namespace {
         if (h.psAuto && h.psAuto->valid && h.vsBound) k = sims3AutoAlbedo(h);
         if (k < 0) { bool bound[16]; for (int i = 0; i < 16; ++i) bound[i] = h.boundTex[i] != nullptr; k = sims3cam::pickAlbedoStage(bound, h.boundColor2D); }
       }
-      // a cut-out the runtime must see (milestone 67): the shader's texkill as the D3D alpha test
-      if (const sims3cam::AlphaCut* cut = sims3cam::alphaCutFor(h.psHash)) {
-        if (!rs[D3DRS_ALPHATESTENABLE] && !h.atOurs) {
+      // a cut-out the runtime must see (milestones 67-68): the shader's texkill on its albedo's alpha,
+      // a * alpha + b with the bound constants, as the D3D alpha test the runtime applies to the albedo
+      if (k >= 0 && h.psAuto && h.psAuto->valid && h.psAuto->cutSampler == k && !rs[D3DRS_ALPHATESTENABLE] && !h.atOurs) {
+        auto get = [&](uint32_t reg, uint32_t comp) -> float { float v[4] = {}; dev->GetPixelShaderConstantF(reg, v, 1); return v[comp & 3u]; };
+        const float a = sims3cam::cutEval(h.psAuto->cutA, get), b = sims3cam::cutEval(h.psAuto->cutB, get);
+        uint32_t ref = 0; const uint32_t func = sims3cam::cutAlphaTest(a, b, ref);
+        if (func) {
           dev->GetRenderState(D3DRS_ALPHATESTENABLE, &h.atSaved[0]); dev->GetRenderState(D3DRS_ALPHAFUNC, &h.atSaved[1]); dev->GetRenderState(D3DRS_ALPHAREF, &h.atSaved[2]);
           h.atOurs = true; h.ourState = true;
-          dev->SetRenderState(D3DRS_ALPHATESTENABLE, TRUE); dev->SetRenderState(D3DRS_ALPHAFUNC, D3DCMP_GREATEREQUAL); dev->SetRenderState(D3DRS_ALPHAREF, cut->ref);
+          dev->SetRenderState(D3DRS_ALPHATESTENABLE, TRUE); dev->SetRenderState(D3DRS_ALPHAFUNC, func); dev->SetRenderState(D3DRS_ALPHAREF, ref);
           h.ourState = false;
           ++h.alphaCutDraws;
+        }
+        bool seen = false; for (uint32_t i = 0; i < h.cutLogged; ++i) if (h.cutLoggedPs[i] == h.psHash) seen = true;
+        if (!seen && h.cutLogged < 32) {
+          h.cutLoggedPs[h.cutLogged++] = h.psHash; char msg[256];
+          snprintf(msg, sizeof msg, "Sims 3 camera hook: cut-out of PS %016llx (VS %016llx): texkill on the alpha of s%d, %.3f * alpha + %.3f -> %s %u",
+                   (unsigned long long) h.psHash, (unsigned long long) h.vsHash, k, a, b,
+                   func == D3DCMP_GREATEREQUAL ? "alpha test >=" : func == D3DCMP_LESSEQUAL ? "alpha test <=" : func == D3DCMP_NEVER ? "never drawn" : "nothing discarded, no test", ref);
+          Logger::info(msg);
         }
       }
       // the vertex shader variant for the draw: the promoted coordinate and/or the world normal as a
@@ -1325,6 +1343,33 @@ namespace {
       h.remapRestore = h.boundTex[0]; if (h.remapRestore) h.remapRestore->AddRef();   // held until sims3EndDraw: the remap drops the state's reference
       h.remapActive = true;
       h.inRemap = true; dev->SetTexture(0, h.boundTex[k]); h.inRemap = false;
+      // its sampler states go with it (milestone 68): the runtime samples the albedo with stage 0's --
+      // the sRGB flag picks the decode (EA's low-detail house atlases are linear and sampled raw), the
+      // addressing and filters the sampling; the game's stage 0 states come back in sims3EndDraw
+      h.ourSampler = true;
+      for (int i = 0; i < Sims3Hook::kSamplerCopies; ++i) {
+        DWORD v0 = 0, vk = 0;
+        dev->GetSamplerState(0, kSims3SamplerCopy[i], &v0); dev->GetSamplerState((DWORD) k, kSims3SamplerCopy[i], &vk);
+        if (v0 == vk) continue;
+        h.remapSamplerSaved[i] = v0; h.remapSamplerSet |= (uint8_t) (1u << i);
+        dev->SetSamplerState(0, kSims3SamplerCopy[i], vk);
+      }
+      h.ourSampler = false;
+      if (h.remapSamplerSet) {
+        ++h.remapSamplerDraws; if (h.remapSamplerSet & (1u << 5)) ++h.remapSrgbDraws;
+        bool seen = false; for (uint32_t i = 0; i < h.remapSamplerLogged; ++i) if (h.remapSamplerLoggedPs[i] == h.psHash) seen = true;
+        if (!seen && h.remapSamplerLogged < 24) {
+          h.remapSamplerLoggedPs[h.remapSamplerLogged++] = h.psHash;
+          static const char* const kNames[Sims3Hook::kSamplerCopies] = { "addressU", "addressV", "mag", "min", "mip", "sRGB", "anisotropy" };
+          char msg[512]; int n = snprintf(msg, sizeof msg, "Sims 3 camera hook: albedo at stage %d keeps its sampler states at stage 0 for VS %016llx PS %016llx:", k, (unsigned long long) h.vsHash, (unsigned long long) h.psHash);
+          for (int i = 0; i < Sims3Hook::kSamplerCopies && n > 0 && n < (int) sizeof msg; ++i) {
+            if (!(h.remapSamplerSet & (1u << i))) continue;
+            DWORD vk = 0; dev->GetSamplerState(0, kSims3SamplerCopy[i], &vk);
+            n += snprintf(msg + n, sizeof msg - n, " %s %lu (stage 0 had %lu)", kNames[i], (unsigned long) vk, (unsigned long) h.remapSamplerSaved[i]);
+          }
+          Logger::info(msg);
+        }
+      }
     }
     return true;
   }
@@ -1362,6 +1407,12 @@ namespace {
       h.remapActive = false;
       h.inRemap = true; dev->SetTexture(0, h.remapRestore); h.inRemap = false;
       if (h.remapRestore) { h.remapRestore->Release(); h.remapRestore = nullptr; }
+    }
+    if (h.remapSamplerSet) {   // the game's stage 0 sampler states back (milestone 68)
+      h.ourSampler = true;
+      for (int i = 0; i < Sims3Hook::kSamplerCopies; ++i) if (h.remapSamplerSet & (1u << i)) dev->SetSamplerState(0, kSims3SamplerCopy[i], h.remapSamplerSaved[i]);
+      h.ourSampler = false;
+      h.remapSamplerSet = 0;
     }
     if (h.autoVsRestore) {
       IDirect3DVertexShader9* base = h.autoVsRestore; h.autoVsRestore = nullptr;
@@ -2320,7 +2371,11 @@ static void sims3LogStats(bool withTable) {
     snprintf(msg, sizeof msg, "Sims 3 camera hook:   the neighbourhood view's lot picture (milestone 63): %s, %u draws left out",
              sims3cam::terrainLotPicture() ? "captured (terrainLotPicture 1)" : "left out", h.lotPictureDropped);
     Logger::info(msg);
-    snprintf(msg, sizeof msg, "Sims 3 camera hook:   cut-outs (milestone 67): %u captured draws given their shader's texkill as an alpha test", h.alphaCutDraws);
+    snprintf(msg, sizeof msg, "Sims 3 camera hook:   cut-outs (milestones 67-68): %u pixel shaders read with a cut-out on a sampler's alpha; %u captured draws given it as an alpha test",
+             h.cutShaders, h.alphaCutDraws);
+    Logger::info(msg);
+    snprintf(msg, sizeof msg, "Sims 3 camera hook:   albedo sampler states (milestone 68): %u draws moved an albedo to stage 0 with sampler states differing from stage 0's, %u of them its sRGB flag",
+             h.remapSamplerDraws, h.remapSrgbDraws);
     Logger::info(msg);
   }
   MEMORYSTATUSEX ms = {}; ms.dwLength = sizeof ms; GlobalMemoryStatusEx(&ms);
@@ -6013,6 +6068,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreatePixelShader(CONST DWORD* pFunct
     // what the bytecode says about its samplers: the albedo choice for untabled shaders, the
     // coordinate for tabled ones drawn with an untabled vertex shader, the wall opening mask
     sims3cam::analyzePixelShader(pFunction, count, pLssPixelShader->sims3Auto);
+    if (pLssPixelShader->sims3Auto.cutSampler >= 0) ++g_sims3.cutShaders;
   }
 
   uint32_t dataSize = 0;

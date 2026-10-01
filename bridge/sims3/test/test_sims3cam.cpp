@@ -274,6 +274,45 @@ int main() {
     }
   }
 
+  // --- the cut-out (milestone 68): a texkill on one sampler's alpha read as a * alpha + b
+  {
+    uint32_t ref = 0;
+    CHECK(cutAlphaTest(1.f, -0.5f, ref) == D3DCMP_GREATEREQUAL && ref == 128, "cut: alpha - 0.5 keeps alpha >= 128/255 (ref %u)", ref);
+    CHECK(cutAlphaTest(255.f, -128.f, ref) == D3DCMP_GREATEREQUAL && ref == 128, "cut: alpha * 255 - 128 keeps alpha >= 128 (ref %u)", ref);
+    CHECK(cutAlphaTest(255.f, 0.f, ref) == 0u, "cut: alpha * 255 - 0 discards nothing: no test");
+    CHECK(cutAlphaTest(1.f, 0.5f, ref) == 0u, "cut: alpha + 0.5 discards nothing");
+    CHECK(cutAlphaTest(1.f, -1.5f, ref) == D3DCMP_NEVER, "cut: alpha - 1.5 discards everything");
+    CHECK(cutAlphaTest(-1.f, 0.5f, ref) == D3DCMP_LESSEQUAL && ref == 127, "cut: 0.5 - alpha keeps alpha <= 127/255 (ref %u)", ref);
+    CHECK(cutAlphaTest(0.f, -1.f, ref) == D3DCMP_NEVER && cutAlphaTest(0.f, 1.f, ref) == 0u, "cut: a constant value discards all or nothing");
+    std::vector<DWORD> imp, obj, obj2, walls, two, vin;
+    if (loadShader("ps_9c84a6b7017f33fc", imp)) {
+      PsAnalysis a;
+      CHECK(analyzePixelShader(imp.data(), imp.size(), a) && a.cutSampler == 2 && a.cutA.n == 1 && a.cutA.t[0].k == 1.f && a.cutA.t[0].c < 0 && a.cutB.n == 1 && a.cutB.t[0].k == -0.5f && a.cutB.t[0].c < 0,
+            "cut: the low-detail houses' PS 9c84a6b7 -> 1 * alpha(s2) - 0.5 (sampler %d)", a.cutSampler);
+    } else SKIP("ps_9c84a6b7017f33fc dump not found");
+    if (loadShader("ps_00230c49e1b880b6", obj)) {
+      PsAnalysis a;
+      const bool ok = analyzePixelShader(obj.data(), obj.size(), a);
+      CHECK(ok && a.cutSampler == 6 && a.cutA.n == 1 && a.cutA.t[0].k == 255.f && a.cutA.t[0].c < 0 && a.cutB.n == 1 && a.cutB.t[0].k == -1.f && a.cutB.t[0].c == 7 * 4,
+            "cut: object PS 00230c49 -> 255 * alpha(s6) - c7.x, the game's alpha reference (sampler %d, b term c%d)", a.cutSampler, a.cutB.n ? a.cutB.t[0].c : -1);
+      auto get = [](uint32_t reg, uint32_t comp) -> float { return (reg == 7 && comp == 0) ? 96.f : 0.f; };
+      uint32_t r2 = 0;
+      CHECK(cutAlphaTest(cutEval(a.cutA, get), cutEval(a.cutB, get), r2) == D3DCMP_GREATEREQUAL && r2 == 96, "  with c7.x = 96: alpha test >= 96 (ref %u)", r2);
+    } else SKIP("ps_00230c49e1b880b6 dump not found");
+    if (loadShader("ps_10c22e3b87e087a0", obj2)) {
+      PsAnalysis a;
+      CHECK(analyzePixelShader(obj2.data(), obj2.size(), a) && a.cutSampler == 9 && a.cutB.n == 1 && a.cutB.t[0].k == -0.5f, "cut: PS 10c22e3b -> alpha(s9) - 0.5 (sampler %d)", a.cutSampler);
+    } else SKIP("ps_10c22e3b87e087a0 dump not found");
+    if (loadShader("ps_936215cf2c1c56a7", walls) || loadShader("ps_0463ee5c7120f777", walls)) {
+      PsAnalysis a;
+      CHECK(analyzePixelShader(walls.data(), walls.size(), a) && a.cutSampler == -1, "cut: a shader whose texkill is no single alpha threshold reads none (sampler %d)", a.cutSampler);
+    } else SKIP("no mask / two-texkill dump found");
+    if (loadShader("ps_03d264329cbfcf64", vin)) {
+      PsAnalysis a;
+      CHECK(analyzePixelShader(vin.data(), vin.size(), a) && a.cutSampler == -1, "cut: PS 03d26432 discards by a vertex value: no cut-out");
+    } else SKIP("ps_03d264329cbfcf64 dump not found");
+  }
+
   // --- the world normal from the vertex shader (milestone 11), on the in-game shader dumps
   {
     std::vector<DWORD> obj, sim, wallsB3, roof, floors, psObj;
