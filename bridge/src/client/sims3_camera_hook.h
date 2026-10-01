@@ -1176,11 +1176,11 @@ inline constexpr uint64_t kLotImpostorPs = 0x9c84a6b7017f33fcull;
 inline constexpr int kLotGlowStage = 3, kLotGlowScaleReg = 3;
 inline constexpr uint8_t kLotGlowThreshold = 40;   // a texel glows above 40 / 255 (run 176: 14% of the house texels, mean 174, 165, 125)
 inline bool lotGlow() { static int s = -1; if (s < 0) s = hookOption("lotGlow", 1) != 0 ? 1 : 0; return s == 1; }
-// The brightest of r, g, b of every level-0 texel (DXT1, DXT3 / DXT5 colour blocks, A8R8G8B8, X8R8G8B8).
-inline bool decodeMaxChannel(uint32_t format, const uint8_t* data, size_t size, uint32_t w, uint32_t hgt, std::vector<uint8_t>& out) {
+// Every level-0 texel as A8R8G8B8 (DXT1, DXT3 / DXT5 colour blocks with alpha 255, A8R8G8B8, X8R8G8B8).
+inline bool decodeColour(uint32_t format, const uint8_t* data, size_t size, uint32_t w, uint32_t hgt, std::vector<uint32_t>& out) {
   if (!data || w == 0 || hgt == 0 || w > 4096 || hgt > 4096) return false;
   const bool dxt1 = format == (uint32_t) D3DFMT_DXT1, dxt35 = format == (uint32_t) D3DFMT_DXT3 || format == (uint32_t) D3DFMT_DXT5;
-  out.assign((size_t) w * hgt, 0);
+  out.assign((size_t) w * hgt, 0xFF000000u);
   if (dxt1 || dxt35) {
     const uint32_t bw = (w + 3) / 4, bh = (hgt + 3) / 4, bs = dxt1 ? 8u : 16u;
     if (size < (size_t) bw * bh * bs) return false;
@@ -1188,28 +1188,57 @@ inline bool decodeMaxChannel(uint32_t format, const uint8_t* data, size_t size, 
       const uint8_t* b = data + ((size_t) by * bw + bx) * bs + (dxt1 ? 0u : 8u);
       const uint32_t c0 = b[0] | ((uint32_t) b[1] << 8), c1 = b[2] | ((uint32_t) b[3] << 8);
       const uint32_t bits = b[4] | ((uint32_t) b[5] << 8) | ((uint32_t) b[6] << 16) | ((uint32_t) b[7] << 24);
-      int rgb[4][3];
-      for (int k = 0; k < 2; ++k) { const uint32_t c = k ? c1 : c0; rgb[k][0] = (int) (((c >> 11) & 31u) * 255u / 31u); rgb[k][1] = (int) (((c >> 5) & 63u) * 255u / 63u); rgb[k][2] = (int) ((c & 31u) * 255u / 31u); }
+      uint32_t rgb[4][3];
+      for (int k = 0; k < 2; ++k) { const uint32_t c = k ? c1 : c0; rgb[k][0] = ((c >> 11) & 31u) * 255u / 31u; rgb[k][1] = ((c >> 5) & 63u) * 255u / 63u; rgb[k][2] = (c & 31u) * 255u / 31u; }
       const bool four = !dxt1 || c0 > c1;
       for (int q = 0; q < 3; ++q) {
         rgb[2][q] = four ? (2 * rgb[0][q] + rgb[1][q]) / 3 : (rgb[0][q] + rgb[1][q]) / 2;
         rgb[3][q] = four ? (rgb[0][q] + 2 * rgb[1][q]) / 3 : 0;
       }
-      uint8_t pal[4];
-      for (int k = 0; k < 4; ++k) pal[k] = (uint8_t) (std::max)(rgb[k][0], (std::max)(rgb[k][1], rgb[k][2]));
       for (uint32_t py = 0; py < 4; ++py) for (uint32_t px = 0; px < 4; ++px) {
         const uint32_t x = bx * 4 + px, y = by * 4 + py;
-        if (x < w && y < hgt) out[(size_t) y * w + x] = pal[(bits >> (2 * (py * 4 + px))) & 3u];
+        if (x >= w || y >= hgt) continue;
+        const uint32_t* c = rgb[(bits >> (2 * (py * 4 + px))) & 3u];
+        out[(size_t) y * w + x] = 0xFF000000u | (c[0] << 16) | (c[1] << 8) | c[2];
       }
     }
     return true;
   }
   if (format == (uint32_t) D3DFMT_A8R8G8B8 || format == (uint32_t) D3DFMT_X8R8G8B8) {
     if (size < (size_t) w * hgt * 4) return false;
-    for (size_t i = 0; i < (size_t) w * hgt; ++i) out[i] = (std::max)(data[i * 4], (std::max)(data[i * 4 + 1], data[i * 4 + 2]));
+    for (size_t i = 0; i < (size_t) w * hgt; ++i) out[i] = 0xFF000000u | ((uint32_t) data[i * 4 + 2] << 16) | ((uint32_t) data[i * 4 + 1] << 8) | data[i * 4];
     return true;
   }
   return false;
+}
+inline uint8_t maxChannel(uint32_t argb) { const uint8_t r = (uint8_t) (argb >> 16), g = (uint8_t) (argb >> 8), b = (uint8_t) argb; return r > g ? (r > b ? r : b) : (g > b ? g : b); }
+// The brightest of r, g, b of every level-0 texel (the glow test).
+inline bool decodeMaxChannel(uint32_t format, const uint8_t* data, size_t size, uint32_t w, uint32_t hgt, std::vector<uint8_t>& out) {
+  std::vector<uint32_t> argb;
+  if (!decodeColour(format, data, size, w, hgt, argb)) return false;
+  out.resize(argb.size());
+  for (size_t i = 0; i < argb.size(); ++i) out[i] = maxChannel(argb[i]);
+  return true;
+}
+// The window-only glow (milestone 71): every texel at or below the threshold black, so only the windows
+// emit -- and, kept in one full-size level, they stay windows at a distance (the atlas's smaller
+// levels average their light over the whole wall).
+inline void windowOnlyGlow(std::vector<uint32_t>& argb, uint8_t threshold) {
+  for (uint32_t& c : argb) if (maxChannel(c) <= threshold) c = 0xFF000000u;
+}
+// The glow layer sits this far in front of the surface it lights (milestone 71; game units = metres):
+// the house's own triangles in the same place gave the ray tracer two surfaces in one spot.
+inline constexpr float kLotGlowLift = 0.05f;
+// One triangle's corners (x, y, z three times) moved along its face normal, turned to the side of
+// the vertex normal vn, by lift.
+inline void liftTriangle(float* p, const float* vn, float lift) {
+  const float ux = p[3] - p[0], uy = p[4] - p[1], uz = p[5] - p[2], vx = p[6] - p[0], vy = p[7] - p[1], vz = p[8] - p[2];
+  float nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+  const float len = std::sqrt(nx * nx + ny * ny + nz * nz);
+  if (!(len > 0.f)) return;
+  nx /= len; ny /= len; nz /= len;
+  if (nx * vn[0] + ny * vn[1] + nz * vn[2] < 0.f) { nx = -nx; ny = -ny; nz = -nz; }
+  for (int k = 0; k < 3; ++k) { p[3 * k] += nx * lift; p[3 * k + 1] += ny * lift; p[3 * k + 2] += nz * lift; }
 }
 // The triangles (vertex numbers) that cover a texel of the glow texture brighter than the threshold:
 // every texel centre inside the triangle in texture space, or the texel under its centre when it covers none.

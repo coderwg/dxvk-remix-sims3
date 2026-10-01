@@ -293,6 +293,22 @@ int main() {
     CHECK(out.size() == 6 && out[0] == 0 && out[3] == 6, "glow: the triangle over the bright texel and the tiny one inside it glow; the far one does not (%zu indices)", out.size());
   }
 
+  // --- the window glow's layer (milestone 71): only the windows, lifted off the wall
+  {
+    const uint8_t blk[8] = { 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55 };   // DXT1: row 0 white, the rest black
+    std::vector<uint32_t> c;
+    CHECK(decodeColour((uint32_t) D3DFMT_DXT1, blk, sizeof blk, 4, 4, c) && c.size() == 16 && c[0] == 0xFFFFFFFFu && c[5] == 0xFF000000u, "glow: DXT1 decodes to A8R8G8B8 (white %08X, black %08X)", c[0], c[5]);
+    std::vector<uint32_t> g = { 0xFFAEA57Du, 0xFF141414u, 0xFF292929u, 0xFF000000u };
+    windowOnlyGlow(g, kLotGlowThreshold);
+    CHECK(g[0] == 0xFFAEA57Du && g[1] == 0xFF000000u && g[2] == 0xFF292929u && g[3] == 0xFF000000u, "glow: texels at or below 40/255 go black, brighter ones stay (a window %08X kept, 20 dropped, 41 kept)", g[0]);
+    float p[9] = { 1.f, 0.f, 0.f,   1.f, 0.f, 1.f,   1.f, 1.f, 0.f };   // a wall at x = 1
+    const float out[3] = { 1.f, 0.f, 0.f }, in[3] = { -1.f, 0.f, 0.f };
+    float q[9]; memcpy(q, p, sizeof q);
+    liftTriangle(p, out, 0.05f); liftTriangle(q, in, 0.05f);
+    CHECK(std::fabs(p[0] - 1.05f) < 1e-5f && std::fabs(p[6] - 1.05f) < 1e-5f && std::fabs(q[3] - 0.95f) < 1e-5f && p[1] == 0.f && p[5] == 1.f,
+          "glow: a wall triangle moves 5 cm to the side its normal faces, whatever its winding (x %.3f out, %.3f in)", p[0], q[0]);
+  }
+
   // --- the low-detail lot's plate (milestone 69): its flat class-1 triangles, and the plate shader
   {
     // a slab: top (4 triangles around the centre, y = 1, class 1), one side triangle (class 1, vertical), a house triangle (class 0)
