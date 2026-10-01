@@ -527,9 +527,6 @@ int main() {
             mergeGroundTriangles(gx, gz, gi, kept, ms);
             CHECK(ms.in == 6 && ms.kept == 2 && ms.skirts == 2 && ms.flat == 1 && ms.outside == 1 && kept == std::vector<uint32_t>({ 0, 1, 2, 1, 3, 2 }),
                   "a square's shape: the ground's two triangles kept; the skirt's two, the one on a line and the one past the vertices left out");
-            const std::vector<float> sq = { 1152.f, 1152.f, 1408.f, 1152.f };
-            CHECK(overSquares(1100.f, 1200.f, sq) && overSquares(1280.f, 1152.f, sq) && overSquares(1536.f, 1024.f, sq) && !overSquares(1537.f, 1152.f, sq) && !overSquares(1152.f, 1300.f, sq) && !overSquares(0.f, 0.f, {}),
-                  "the coarse ground: a corner lies over a detailed square inside its 256 units or on its edge, not beyond");
             CHECK(rangesOverlap((0ull << 32) | 10u, (29ull << 32) | 1u) && !rangesOverlap((0ull << 32) | 10u, (30ull << 32) | 5u) && rangesOverlap((30ull << 32) | 5u, (40ull << 32) | 2u),
                   "a square's pieces: index ranges overlap when they share an index, not when one starts where the other ends");
           }

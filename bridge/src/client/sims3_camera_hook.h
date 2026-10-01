@@ -1115,11 +1115,20 @@ inline const TerrainShader kTerrainShaders[] = {
   { 0x0344bbc366f10954ull, "lot paint composite (unlit 4-layer blend over the lot terrain)", true, false, true },
   { 0x2a57449ad7d2c7eeull, "the town's coarse ground (the far ground and the neighbourhood view)", false, false, false },
 };
-// The town's coarse ground (milestone 61): one low mesh of the whole town, lit by PS 072c2bbd from a
-// single pre-baked colour map of the town (s3 at v1). The neighbourhood view's only ground; in the
-// household view the game draws it for the distance as well, under and beyond the detailed squares
-// (runs 168, 169). VS: position x c16.xyx + c16.zwz, world rows c8..c10.
+// The town's coarse ground (milestones 61, 63): low 256-unit squares of the whole town, one draw and
+// one vertex buffer per square (SHORT4, with 2-unit skirts on the square edges and around every
+// flattened lot pad), lit by PS 072c2bbd from a single pre-baked colour map of the town (s3 at v1).
+// The neighbourhood view's only ground; in the household view the game draws, square by square,
+// either the detailed pieces or the coarse square, never both (run 170). It goes through the
+// squares' merged path like the detailed squares. VS: position x c16.xyx + c16.zwz, rows c8..c10.
 inline constexpr uint64_t kCoarseGroundVs = 0x2a57449ad7d2c7eeull;
+// The lot's ground as the neighbourhood view draws it (milestone 63): VS 92337a18 (the lot VS's
+// decode and per-chunk clip, plus a normal) with PS 4c59eb62, which shows only a pre-baked 256x256
+// picture of the lot's paint; two draws per frame, the active lot only, over the coarse ground that
+// covers the lot as well (runs 168-171). terrainLotPicture = 0 leaves it out (one surface per patch:
+// the coarse ground, whose town colour map holds the lots); 1 = captured as an ordinary object.
+inline constexpr uint64_t kLotPictureVs = 0x92337a1805f17506ull;
+inline bool terrainLotPicture() { static int s = -1; if (s < 0) s = hookOption("terrainLotPicture", 0) != 0 ? 1 : 0; return s == 1; }
 
 // How a terrain variant treats alpha: 0 as the shader writes it (blended layer passes), 1 forced
 // to 1 (base draws), 2 the shader's own coverage, baked with an alpha test (unused, run 77).
@@ -1162,18 +1171,6 @@ inline bool isLitTerrainPs(uint64_t psHash) {   // the four only: the coarse gro
 // the union of the game's opaque pieces without the skirts; the pieces themselves only paint.
 // 0: every opaque piece is traced as it comes, skirts and all (before milestone 60).
 inline bool terrainMerge() { static int s = -1; if (s < 0) s = hookOption("terrainMerge", 1) != 0 ? 1 : 0; return s == 1; }
-// terrainCoarse (milestone 61): where the game draws its coarse town ground while detailed squares are
-// drawn too (the household view), 1 = its triangles lying wholly over the squares are left out (the
-// rest is the far ground), 0 = it is left out altogether. Without squares (the neighbourhood view)
-// it is the whole ground either way.
-inline bool terrainCoarse() { static int s = -1; if (s < 0) s = hookOption("terrainCoarse", 1) != 0 ? 1 : 0; return s == 1; }
-// A corner of the coarse ground lies over a detailed square: squares as their centres (x, z), each
-// 256 units wide; a corner on a square's edge counts as over it.
-inline bool overSquares(float x, float z, const std::vector<float>& centres) {
-  for (size_t i = 0; i + 1 < centres.size(); i += 2)
-    if (std::fabs(x - centres[i]) <= 128.01f && std::fabs(z - centres[i + 1]) <= 128.01f) return true;
-  return false;
-}
 // The ground's triangles of a square: a skirt hangs 2 units down from the ground's edge, so two of
 // its corners stand on the same point of the ground (the same raw x and z: run 168 found every
 // near-vertical triangle of the town ground to be such a 2.0-unit wall); a heightfield's own

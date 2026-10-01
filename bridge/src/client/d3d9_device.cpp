@@ -295,12 +295,8 @@ namespace {
       uint32_t builtVbVersion = 0, builtIbId = 0, builtIbVersion = 0; INT builtBase = 0;
       IDirect3DIndexBuffer9* merged = nullptr; uint32_t mergedPrims = 0, minIndex = 0, numVertices = 0, vertexCount = 0; bool ready = false;
       uint32_t kept = 0, skirts = 0, flat = 0, outside = 0;
-      float cx = 0.f, cz = 0.f; bool hasCentre = false;   // the square's centre in the world (its pieces' translation), for the coarse ground (milestone 61)
     };
-    // the coarse ground's draws over the detailed squares (milestone 61): the filtered copy per draw, cached
-    struct CoarseEntry { uint64_t key = 0; IDirect3DIndexBuffer9* ib = nullptr; uint32_t prims = 0, minIndex = 0, numVertices = 0, kept = 0, total = 0, lastFrame = 0; uint8_t mode = 0; };
-    std::vector<CoarseEntry> coarse; IDirect3DIndexBuffer9* coarseIb = nullptr; uint32_t coarsePrims = 0, coarseMin = 0, coarseNum = 0;
-    uint32_t coarseAsIs = 0, coarseFiltered = 0, coarseDropped = 0, coarseBuilt = 0, coarseLogged = 0, coarseUnreadable = 0; uint64_t coarseKept = 0, coarseTotal = 0;
+    uint32_t lotPictureDropped = 0;   // the neighbourhood view's lot picture draws left out (milestone 63)
     std::vector<Square> squares; int mergePending = -1;
     uint32_t terrainPaintDraws = 0, mergedDraws = 0, mergePaintPieces = 0, mergeFallbackPieces = 0, mergeBuilds = 0, mergeBuildFailed = 0, mergeLogged = 0, mergeEvicted = 0, mergeSkipped = 0;
     bool drawIndexed = false; D3DPRIMITIVETYPE drawType = D3DPT_TRIANGLELIST; INT drawBase = 0; UINT drawStart = 0, drawPrims = 0;   // the indexed draw call's arguments, for the squares
@@ -331,7 +327,6 @@ namespace {
 
   template<typename Dev> void sims3TerrainBlockEnd(Sims3Hook& h, Dev* dev);   // defined with the terrain path (milestone 18g)
   template<typename Dev> uint8_t sims3SquarePiece(Sims3Hook& h, Dev* dev);    // defined with the squares (milestone 60)
-  template<typename Dev> int sims3CoarseGround(Sims3Hook& h, Dev* dev);        // defined with the squares (milestone 61)
 
   // The hook's facts about a bound object, from the object (milestone 17w; defined after the
   // vertex shader and declaration headers are included). The setters call them, and so does
@@ -1123,8 +1118,6 @@ namespace {
   inline void sims3OnReset(Sims3Hook& h) {
     for (auto& s : h.squares) if (s.merged) s.merged->Release();   // the squares' merged shapes (milestone 60)
     h.squares.clear(); h.mergePending = -1;
-    for (auto& e : h.coarse) if (e.ib) e.ib->Release();             // the coarse ground's filtered copies (milestone 61)
-    h.coarse.clear(); h.coarseIb = nullptr;
     for (uint32_t i = 0; i < h.wallCacheCount; ++i) sims3ReleaseWallEntry(h.wallCache[i]);
     h.wallCacheCount = 0; for (auto& m : h.masks) m = Sims3Hook::MaskEntry(); h.maskNext = 0;
     for (auto& e : h.bufHashes) e = Sims3Hook::HashEntry(); h.bufHashNext = 0;
@@ -1219,7 +1212,6 @@ namespace {
   template<typename Dev>
   bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
     if (!h.reissue) ++h.frameDraws;
-    if (!h.reissue) h.coarseIb = nullptr;      // a filtered coarse draw that did not go out (milestone 61)
     if (h.mergePending >= 0 && !h.reissue) {   // a square's shape that was not sent after its piece (the piece took another way out): next piece then
       if ((size_t) h.mergePending < h.squares.size()) h.squares[(size_t) h.mergePending].mergedFrame = 0xFFFFFFFFu;
       h.mergePending = -1; ++h.mergeSkipped;
@@ -1234,6 +1226,8 @@ namespace {
       sims3BeginMaskedWrite(h, dev, rs);
       return false;
     }
+    // the neighbourhood view's lot picture (milestone 63): a second surface over the coarse ground, left out
+    if (h.vsHash == sims3cam::kLotPictureVs && !sims3cam::terrainLotPicture()) { h.drawDropped = true; h.drawCaptured = false; ++h.lotPictureDropped; return false; }
     int k = -1;
     ++h.capturedDraws;
     if (rs[D3DRS_FOGENABLE] && (rs[D3DRS_FOGTABLEMODE] != D3DFOG_NONE || rs[D3DRS_FOGVERTEXMODE] != D3DFOG_NONE)) ++h.gameFogDraws;   // a fog state of the game's own (milestone 56: none expected)
@@ -1244,11 +1238,7 @@ namespace {
     const bool lotFamilyDraw = terrainKind != 0 && h.vsTerrain && h.vsTerrain->lotFamily;
     // the town ground's squares (milestone 60, design B): an opaque piece of a square whose merged
     // shape is ready only paints (3); the shape follows it (sims3MergedSquareDraw)
-    // the town's coarse ground (milestone 61): over the detailed squares left out (filtered copy, or
-    // the whole draw); without squares it is the ground
-    if (terrainKind == 1 && !h.reissue && h.vsHash == sims3cam::kCoarseGroundVs && sims3cam::terrainMerge()) {
-      if (sims3CoarseGround(h, dev) == 2) { h.drawDropped = true; h.lastKind = 0; return false; }
-    } else
+    // the town ground's squares (milestones 60, 63): the detailed pieces and the coarse squares alike
     if (terrainKind == 1 && !h.reissue && !lotFamilyDraw && sims3cam::terrainMerge()) terrainKind = sims3SquarePiece(h, dev);
     if (terrainKind != 0 && h.reissue) terrainKind = h.reissueKind ? h.reissueKind : 2;   // the hook's own re-issue: the composite's second pass (hidden), a square's merged shape (1)
     h.lastKind = terrainKind;
@@ -1449,11 +1439,6 @@ namespace {
     }
     Sims3Hook::Square& s = h.squares[(size_t) si];
     if (s.frameSeen != h.frames) { s.frameSeen = h.frames; s.frameRanges.clear(); }
-    if (!s.hasCentre) {   // the pieces' world rows: c4..c6 for the world shader, c8..c10 for the lot-area one (run 168); the translation in .w
-      float rows[12] = {};
-      const UINT reg = h.vsHash == 0x55c99586fb17cd1cull ? 8u : 4u;
-      if (SUCCEEDED(dev->GetVertexShaderConstantF(reg, rows, 3))) { s.cx = rows[3]; s.cz = rows[11]; s.hasCentre = true; }
-    }
     s.lastFrame = h.frames;
     s.vbVersion = lvb->sims3Version; s.ib = ib; s.ibId = (uint32_t) lib->getId(); s.ibVersion = lib->sims3Version; s.ib32 = lib->getDesc().Format == D3DFMT_INDEX32; s.base = h.drawBase;
     const uint64_t range = ((uint64_t) h.drawStart << 32) | (uint64_t) h.drawPrims;
@@ -1560,117 +1545,6 @@ namespace {
       else ++i;
     }
   }
-  // The town's coarse ground (milestone 61). Returns 0: the draw goes out as it is (no detailed square
-  // this frame or the last: the neighbourhood view; or nothing of it lies over one), 1: the hook's
-  // filtered copy goes out in its place (h.coarseIb, sent by the draw call), 2: left out altogether
-  // (all of it over the squares, or terrainCoarse 0). A triangle is left out when all three corners
-  // lie over detailed squares (those drawn this frame or the last), so the copy has no gaps at the
-  // squares' edges. Cached per draw, buffers, constants and squares.
-  template<typename Dev>
-  int sims3CoarseGround(Sims3Hook& h, Dev* dev) {
-    std::vector<float> centres;
-    for (const auto& s : h.squares) if (s.hasCentre && s.frameSeen != 0xFFFFFFFFu && s.frameSeen + 1u >= h.frames) { centres.push_back(s.cx); centres.push_back(s.cz); }
-    if (centres.empty()) { ++h.coarseAsIs; return 0; }
-    if (!sims3cam::terrainCoarse()) { ++h.coarseDropped; return 2; }
-    if (!h.drawIndexed || h.drawType != D3DPT_TRIANGLELIST || h.drawPrims == 0) { ++h.coarseAsIs; return 0; }
-    IDirect3DVertexBuffer9* vb = nullptr; UINT off = 0, stride = 0;
-    if (FAILED(dev->GetStreamSource(0, &vb, &off, &stride)) || !vb) { ++h.coarseAsIs; return 0; }
-    vb->Release();
-    IDirect3DIndexBuffer9* ib = nullptr;
-    if (FAILED(dev->GetIndices(&ib)) || !ib) { ++h.coarseAsIs; return 0; }
-    ib->Release();
-    auto* lvb = bridge_cast<Direct3DVertexBuffer9_LSS*>(vb);
-    auto* lib = bridge_cast<Direct3DIndexBuffer9_LSS*>(ib);
-    float c16[4] = {}, rows[12] = {};
-    dev->GetVertexShaderConstantF(16, c16, 1); dev->GetVertexShaderConstantF(8, rows, 3);
-    // the key: the draw, its buffers' contents, its constants and the squares
-    std::vector<float> sorted = centres;
-    struct { uint32_t vbId, vbVer, ibId, ibVer, off, stride, start, prims; int32_t base; float c16[4], rows[12]; } k = {};
-    k.vbId = (uint32_t) lvb->getId(); k.vbVer = lvb->sims3Version; k.ibId = (uint32_t) lib->getId(); k.ibVer = lib->sims3Version; k.off = off; k.stride = stride;
-    k.start = h.drawStart; k.prims = h.drawPrims; k.base = h.drawBase; memcpy(k.c16, c16, sizeof c16); memcpy(k.rows, rows, sizeof rows);
-    const uint64_t key = sims3cam::fnv1a64(&k, sizeof k) ^ (sims3cam::fnv1a64(sorted.data(), sorted.size() * sizeof(float)) * 0x9E3779B97F4A7C15ull);
-    Sims3Hook::CoarseEntry* e = nullptr;
-    for (auto& c : h.coarse) if (c.key == key) { e = &c; break; }
-    if (!e) {
-      Sims3Hook::CoarseEntry n; n.key = key; n.mode = 0;
-      // the position from the declaration: SHORT4, FLOAT3 or FLOAT4
-      IDirect3DVertexDeclaration9* decl = nullptr; int posOffset = -1; BYTE posType = 0;
-      if (SUCCEEDED(dev->GetVertexDeclaration(&decl)) && decl) {
-        auto* ld = bridge_cast<Direct3DVertexDeclaration9_LSS*>(decl);
-        const D3DVERTEXELEMENT9* el = ld ? ld->sims3Elements() : nullptr;
-        for (int i = 0; el && i < 32 && el[i].Stream != 0xFF; ++i)
-          if (el[i].Stream == 0 && el[i].Usage == D3DDECLUSAGE_POSITION && el[i].UsageIndex == 0) { posOffset = el[i].Offset; posType = el[i].Type; }
-        decl->Release();
-      }
-      const uint8_t* vd = lvb->sims3Data(); const uint8_t* id = lib->sims3Data();
-      const bool known = posType == D3DDECLTYPE_SHORT4 || posType == D3DDECLTYPE_FLOAT3 || posType == D3DDECLTYPE_FLOAT4;
-      if (!vd || !id || posOffset < 0 || !known) {
-        if (h.coarseUnreadable++ < 4u) { char msg[200]; snprintf(msg, sizeof msg, "Sims 3 camera hook: the coarse ground's draw at frame %u cannot be read (position type %u, buffers %s): it goes out as it is", h.frames + 1, (unsigned) posType, vd && id ? "readable" : "without client copies"); Logger::info(msg); }
-        n.mode = 0;
-      } else {
-        const uint32_t vbSize = lvb->sims3Size(), ibSize = lib->sims3Size();
-        const bool ib32 = lib->getDesc().Format == D3DFMT_INDEX32;
-        const uint32_t isz = ib32 ? 4u : 2u, ibCount = ibSize / isz;
-        uint32_t nIdx = h.drawPrims * 3u;
-        if (h.drawStart >= ibCount) nIdx = 0; else if (h.drawStart + nIdx > ibCount) nIdx = (ibCount - h.drawStart) / 3u * 3u;
-        auto corner = [&](uint32_t v, float& wx, float& wz) -> bool {
-          const size_t at = (size_t) off + (size_t) v * stride + (size_t) posOffset;
-          float p[3] = {};
-          if (posType == D3DDECLTYPE_SHORT4) { if (at + 8 > vbSize) return false; int16_t c[4]; memcpy(c, vd + at, 8); p[0] = c[0]; p[1] = c[1]; p[2] = c[2]; }
-          else { if (at + 12 > vbSize) return false; memcpy(p, vd + at, 12); }
-          const float r[4] = { p[0] * c16[0] + c16[2], p[1] * c16[1] + c16[3], p[2] * c16[0] + c16[2], 1.f };
-          wx = r[0] * rows[0] + r[1] * rows[1] + r[2] * rows[2] + r[3] * rows[3];
-          wz = r[0] * rows[8] + r[1] * rows[9] + r[2] * rows[10] + r[3] * rows[11];
-          return true;
-        };
-        std::vector<uint32_t> kept;
-        uint32_t lo = 0xFFFFFFFFu, hi = 0;
-        for (uint32_t t = 0; t + 2 < nIdx; t += 3) {
-          uint32_t v[3]; bool over = true, ok = true;
-          for (int c = 0; c < 3; ++c) {
-            uint32_t i;
-            if (ib32) { uint32_t x; memcpy(&x, id + (size_t) (h.drawStart + t + c) * 4u, 4); i = x; } else { uint16_t x; memcpy(&x, id + (size_t) (h.drawStart + t + c) * 2u, 2); i = x; }
-            const int64_t vv = (int64_t) h.drawBase + (int64_t) i;
-            if (vv < 0) { ok = false; break; }
-            v[c] = (uint32_t) vv;
-            float wx = 0.f, wz = 0.f;
-            if (!corner(v[c], wx, wz)) { ok = false; break; }
-            if (!sims3cam::overSquares(wx, wz, centres)) over = false;
-          }
-          if (!ok) continue;
-          if (over) continue;
-          for (int c = 0; c < 3; ++c) { kept.push_back(v[c]); if (v[c] < lo) lo = v[c]; if (v[c] > hi) hi = v[c]; }
-        }
-        n.total = nIdx / 3u; n.kept = (uint32_t) (kept.size() / 3);
-        if (n.kept == n.total) n.mode = 0;
-        else if (n.kept == 0) n.mode = 2;
-        else {
-          n.ib = sims3MakeIndexBufferAny(dev, kept, hi);
-          if (n.ib) { n.mode = 1; n.prims = n.kept; n.minIndex = lo; n.numVertices = hi - lo + 1; } else n.mode = 0;
-        }
-        ++h.coarseBuilt;
-        if (h.coarseLogged < 40u) {
-          ++h.coarseLogged; char msg[300];
-          snprintf(msg, sizeof msg, "Sims 3 camera hook: the coarse ground's draw at frame %u over %u detailed squares -> %u of %u triangles kept (%s)",
-                   h.frames + 1, (unsigned) (centres.size() / 2), n.kept, n.total, n.mode == 0 ? "goes out as it is" : n.mode == 1 ? "the filtered copy in its place" : "left out");
-          Logger::info(msg);
-        }
-      }
-      if (h.coarse.size() >= 256u) {   // the oldest copy makes room
-        size_t old = 0; for (size_t i = 1; i < h.coarse.size(); ++i) if (h.coarse[i].lastFrame < h.coarse[old].lastFrame) old = i;
-        if (h.coarse[old].ib) h.coarse[old].ib->Release();
-        h.coarse.erase(h.coarse.begin() + (ptrdiff_t) old);
-      }
-      h.coarse.push_back(n);
-      e = &h.coarse.back();
-    }
-    e->lastFrame = h.frames;
-    h.coarseKept += e->kept; h.coarseTotal += e->total;
-    if (e->mode == 1) { h.coarseIb = e->ib; h.coarsePrims = e->prims; h.coarseMin = e->minIndex; h.coarseNum = e->numVertices; ++h.coarseFiltered; return 1; }
-    if (e->mode == 2) { ++h.coarseDropped; return 2; }
-    ++h.coarseAsIs; return 0;
-  }
-
   // Right after a square's first piece of the frame: the square's shape, through the ordinary draw
   // hooks as the hook's own re-issue (kind 1), from the piece's stream and state with the shape's
   // index buffer; the game's index buffer back afterwards.
@@ -2409,8 +2283,8 @@ static void sims3LogStats(bool withTable) {
              sims3cam::terrainMerge() ? "on" : "off (terrainMerge 0)", (unsigned) h.squares.size(), ready, (unsigned long long) kept, (unsigned long long) skirts, (unsigned long long) flat,
              h.mergedDraws, h.mergePaintPieces, h.mergeFallbackPieces, h.mergeBuilds, h.mergeBuildFailed, h.mergeSkipped, h.mergeEvicted);
     Logger::info(msg);
-    snprintf(msg, sizeof msg, "Sims 3 camera hook:   the coarse ground (milestone 61, terrainCoarse %d): %u draws as they are (no detailed squares: the neighbourhood view), %u as filtered copies, %u left out; %llu of %llu of its triangles kept over the frames; %u copies built, %u cached, %u unreadable",
-             sims3cam::terrainCoarse() ? 1 : 0, h.coarseAsIs, h.coarseFiltered, h.coarseDropped, (unsigned long long) h.coarseKept, (unsigned long long) h.coarseTotal, h.coarseBuilt, (unsigned) h.coarse.size(), h.coarseUnreadable);
+    snprintf(msg, sizeof msg, "Sims 3 camera hook:   the neighbourhood view's lot picture (milestone 63): %s, %u draws left out",
+             sims3cam::terrainLotPicture() ? "captured (terrainLotPicture 1)" : "left out", h.lotPictureDropped);
     Logger::info(msg);
   }
   MEMORYSTATUSEX ms = {}; ms.dwLength = sizeof ms; GlobalMemoryStatusEx(&ms);
@@ -5310,15 +5184,6 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
         };
         wallDone_ = wallDraw_();
       }
-      if (!wallDone_ && sims3cam::enabled() && g_sims3.coarseIb != nullptr) {
-        // The Sims 3 camera hook: the town's coarse ground over the detailed squares (milestone 61):
-        // the hook's filtered copy in place of the game's draw, from the same stream and state
-        IDirect3DIndexBuffer9* gib = nullptr; GetIndices(&gib);
-        SetIndices(g_sims3.coarseIb);
-        { ClientMessage c(Commands::IDirect3DDevice9Ex_DrawIndexedPrimitive, getId()); currentUID = c.get_uid(); const INT b0 = 0; const UINT s0 = 0; c.send_many(Type, b0, g_sims3.coarseMin, g_sims3.coarseNum, s0, g_sims3.coarsePrims); }
-        SetIndices(gib); if (gib) gib->Release();
-        g_sims3.coarseIb = nullptr;
-      } else
       if (!wallDone_ && sims3cam::enabled() && g_sims3.splitDraw && Type == D3DPT_TRIANGLELIST && primCount >= 2) {
         // The Sims 3 camera hook: a lot's re-submission as two half draws (milestone 17r), each its
         // own geometry to the runtime's draw tracker; together they bake the same triangles.
