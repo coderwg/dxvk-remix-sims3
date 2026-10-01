@@ -1,5 +1,5 @@
-"""Builds the lamp reporter script mod: compiles LampReporter.cs against the game's own script
-assemblies and wraps the DLL into a package the game loads from Mods\\Packages.
+"""Builds the hook's script mod (the lamp reporter, and the home lot in the map view): compiles every
+.cs file next to this script against the game's own script assemblies and wraps the DLL into a package the game loads from Mods\\Packages.
 
     python build_scriptmod.py <folder with the game's script assemblies> [<output package>]
 
@@ -12,7 +12,7 @@ The package holds two resources, as every pure script mod does:
   _XML 0x0333406C  the tuning of the class that starts the mod; its instance is the FNV-1 64 hash
                    of the lower-cased full class name, which is how the game finds the class
 """
-import os, struct, subprocess, sys
+import glob, os, struct, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CLASS = 'Sims3RtxHook.LampReporter'
@@ -58,13 +58,13 @@ def main():
     os.makedirs(os.path.dirname(dll), exist_ok=True)
     cmd = [CSC, '/nologo', '/target:library', '/nostdlib+', '/noconfig', '/optimize+', '/debug-', '/warn:4', '/out:' + dll]
     cmd += ['/r:' + os.path.join(refs, r + '.dll') for r in REFS]
-    cmd += [os.path.join(HERE, 'LampReporter.cs')]
+    cmd += sorted(glob.glob(os.path.join(HERE, '*.cs')))
     r = subprocess.run(cmd, capture_output=True, text=True)
     print((r.stdout + r.stderr).strip() or 'compiled without a message')
     if r.returncode != 0: print('COMPILE_FAILED'); return 2
     data = open(dll, 'rb').read()
     xml = ('<?xml version="1.0" encoding="utf-8"?>\r\n<base>\r\n  <Current_Tuning>\r\n'
-           '    <!--Starts the lamp reporter of the RTX Remix camera hook. It reads the lamps; it changes nothing.-->\r\n'
+           '    <!--Starts the script mod of the RTX Remix camera hook: it reads the lamps, and keeps the home lot in full detail in the map view.-->\r\n'
            '    <kInstantiator value="True" />\r\n  </Current_Tuning>\r\n</base>\r\n').encode('utf-8')
     pkg = package([(0x0333406C, 0, fnv1_64(CLASS), xml), (0x073FAA07, 0, fnv1_64(ASSEMBLY), s3sa(data))])
     open(out, 'wb').write(pkg)

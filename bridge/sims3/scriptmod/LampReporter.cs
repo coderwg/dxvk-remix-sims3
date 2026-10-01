@@ -3,8 +3,9 @@
 // The hook (the patched d3d9.dll) sees only what the game draws, and the game never draws "this
 // lamp is on". The game's scripts know every lamp exactly: a LightGameObject with its place and
 // turn in the world, the keys of its object and of its model, whether it is on, its colour (a
-// preset or a custom one) and its level. This mod reads those and hands them to the hook. It
-// changes nothing in the game and keeps nothing in a save: its task is not persistable and its
+// preset or a custom one) and its level. This mod reads those and hands them to the hook. Its one
+// change to the game runs from the same task: the household's home lot in full detail in the map
+// view (HomeLotInMapView.cs). It keeps nothing in a save: its task is not persistable and its
 // fields are plain statics.
 //
 // The channel (the technique of the S3IO project): a script cannot write files, but it can
@@ -114,6 +115,7 @@ namespace Sims3RtxHook
 
         static void OnWorldQuit(object sender, EventArgs e)
         {
+            HomeLotInMapView.Release();
             try
             {
                 if (sTask != ObjectGuid.InvalidObjectGuid) { Simulator.DestroyObject(sTask); sTask = ObjectGuid.InvalidObjectGuid; }
@@ -210,6 +212,8 @@ namespace Sims3RtxHook
                 while (true)
                 {
                     try { LampReporter.Report(); }
+                    catch (Exception) { }
+                    try { HomeLotInMapView.Update(); }
                     catch (Exception) { }
                     Simulator.Sleep(kSleepTicks);   // outside the catch: the game ends a task through it
                 }
