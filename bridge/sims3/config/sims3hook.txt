@@ -2,11 +2,10 @@
 # terrain       1 = terrain through the runtime's terrain baker (0 = the pre-M17 capture)
 # ringTrace     1 = keep a rolling trace of every draw and event of the last ~300 frames; the mark key writes it to the log (diagnostic; 0 = off)
 # markKey       virtual-key code of the mark key (F9 and backtick always work); 45 = Insert, 220 = backslash, 36 = Home, 35 = End, 19 = Pause, 145 = Scroll Lock
-# skyFromLight  1 = night from the lights of the sky: the runtime's sky brightness (rtx.skyBrightness) and the ceiling of its
-#               auto-exposure (rtx.autoExposure.evMaxValue) follow the luminance of the sun and the moon as sent, relative to the
+# exposureFromLight  1 = the runtime's sky brightness stays 1 (the sky the game draws lights the scene as it is) and the ceiling of
+#               its auto-exposure (rtx.autoExposure.evMaxValue) follows the luminance of the sun and the moon as sent, relative to the
 #               game's full daylight; needs exposeRemixApi = True
-# skyMinBrightness  the darkest sky brightness, in thousandths
-# dayEvMax / nightEvMax  the auto-exposure ceiling in hundredths of an EV at full day and at the floor (runtime default 500; 0 at the floor since 2026-09-30: no brightening of the night)
+# dayEvMax / nightEvMax  the auto-exposure ceiling in hundredths of an EV at full day and at no light (runtime default 500; 0 at no light since 2026-09-30: no brightening of the night)
 terrain = 1
 ringTrace = 0
 markKey = 220
@@ -24,8 +23,7 @@ markKey = 220
 # duskLevel     the level of full sunlight, in thousandths, below which the sun is held as the afterglow until the moon comes
 # lampRadius    the lamps' sphere radius in thousandths of a unit
 # lampRadiance  the lamps' radiance per unit of colour, thousandths
-skyFromLight = 1
-skyMinBrightness = 2
+exposureFromLight = 1
 dayEvMax = 500
 nightEvMax = 0
 sunAngle = 2000
@@ -44,7 +42,7 @@ lampRadiance = 40000
 # Which objects are lamps, where they stand, whether they are on, in which colour and at which level comes from the
 # lamp reporter, a script mod (Sims3RtxLamps.package in Mods\Packages; sims3/scriptmod). Without it no lamp gives light.
 # lampMax           the most lamps lit at once, the nearest to the camera's target first (1..96)
-# lampWorldLights   1 = the world lights too (a street lamp's), by night only, by the game's clock; 0 = they stay dark
+# lampWorldLights   1 = the world lights too (a street lamp's), while the game's own night switch is on; 0 = they stay dark
 lampMax = 96
 lampWorldLights = 1
 lampShapes = 1

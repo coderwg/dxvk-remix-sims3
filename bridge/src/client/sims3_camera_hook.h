@@ -969,15 +969,14 @@ inline int markKey() { static int s = -1; if (s < 0) { s = hookOption("markKey",
 // ringTrace = 1 keeps the rolling trace of every draw and event (the last ~300 frames) that the
 // mark key writes to the log (diagnostic; 0 = off).
 inline int ringTrace() { static int s = -1; if (s < 0) s = hookOption("ringTrace", 0) != 0; return s; }
-// Night from the lights of the sky (milestones 20d, 52): skyFromLight = 1 drives the runtime's sky
-// brightness (rtx.skyBrightness) and the ceiling of its auto-exposure (rtx.autoExposure.evMaxValue)
-// from the luminance of the sun and the moon as sent, relative to the game's full daylight (1),
-// through the Remix API (the server loads the runtime's API only with exposeRemixApi = True in
-// .trex\bridge.conf). skyMinBrightness = the sky's floor in thousandths; dayEvMax / nightEvMax =
-// the exposure ceiling in hundredths of an EV at full day and at the floor (the runtime's default
+// The exposure from the lights of the sky (milestones 20d, 52, 54): exposureFromLight = 1 keeps the
+// runtime's sky brightness at 1 (the sky the game draws lights the scene as it is) and drives the
+// ceiling of its auto-exposure (rtx.autoExposure.evMaxValue) from the luminance of the sun and the
+// moon as sent, relative to the game's full daylight (1), through the Remix API (the server loads
+// the runtime's API only with exposeRemixApi = True in .trex\bridge.conf). dayEvMax / nightEvMax =
+// the exposure ceiling in hundredths of an EV at full day and at no light (the runtime's default
 // is 5.0).
-inline int skyFromLight() { static int s = -1; if (s < 0) s = hookOption("skyFromLight", 1) != 0; return s; }
-inline float skyMinBrightness() { static float s = -1.f; if (s < 0.f) { int v = hookOption("skyMinBrightness", 30); if (v < 0) v = 0; if (v > 1000) v = 1000; s = (float) v / 1000.f; } return s; }
+inline int exposureFromLight() { static int s = -1; if (s < 0) s = hookOption("exposureFromLight", 1) != 0; return s; }
 inline float dayEvMax() { static float s = -99.f; if (s < -98.f) { int v = hookOption("dayEvMax", 500); if (v < -1000) v = -1000; if (v > 1000) v = 1000; s = (float) v / 100.f; } return s; }
 inline float nightEvMax() { static float s = -99.f; if (s < -98.f) { int v = hookOption("nightEvMax", 100); if (v < -1000) v = -1000; if (v > 1000) v = 1000; s = (float) v / 100.f; } return s; }
 // The lights go to the runtime through the Remix API (milestones 20b, 23): the sun as a distant
@@ -1000,7 +999,8 @@ inline float duskLevel() { static float s = -1.f; if (s < 0.f) { int v = hookOpt
 inline float sunRadiance() { static float s = -1.f; if (s < 0.f) { int v = hookOption("sunRadiance", 1000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
 inline float lampRadius() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampRadius", 150); if (v < 20) v = 20; s = (float) v / 1000.f; } return s; }
 // lampMax = the most lamps lit at once (the nearest to the camera's target first); lampWorldLights =
-// 1 to light the world lights too (a street lamp's), 0 to leave them dark.
+// 1 to light the world lights too (a street lamp's, while the game's own night switch is on), 0 to
+// leave them dark.
 inline uint32_t lampMax() { static int s = -1; if (s < 0) { s = hookOption("lampMax", 48); if (s < 1) s = 1; if (s > 96) s = 96; } return (uint32_t) s; }
 inline bool lampWorldLights() { static int s = -1; if (s < 0) s = hookOption("lampWorldLights", 1) != 0 ? 1 : 0; return s == 1; }
 inline float lampRadiance() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampRadiance", 40000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }

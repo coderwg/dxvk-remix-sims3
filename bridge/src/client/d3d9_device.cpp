@@ -85,7 +85,8 @@ namespace {
     bool loggedTint = false;
     // the sun (milestone 41): the directional light the lit terrain shaders were handed, c0 and c1 at the last such draw
     float terrainSunCol[3] = {}, terrainSunDir[3] = {}; uint32_t terrainSunDraws = 0, terrainSunDrawsLast = 0;
-    float terrainConsts[64] = {}; uint32_t ambientDumpFrame = 0, ambientLines = 0, ambientDumps = 0;   // the game's ambient light, a diagnostic (milestone 53)
+    float terrainNightSwitch = 0.f;      // the lit terrain's c7.x: the game's night switch as handed to the terrain (milestone 54)
+    uint32_t nightSwitchDisagree = 0, streetLogged = 0; int streetSaid = -1; bool nightSwitchBad = false;   // the night switch next to the light record, checked against it
     sims3cam::Sun sun = {}, moon = {};   // the two lights of the sky as the runtime holds them
     bool sunSet = false, moonSet = false, skySet = false, loggedSun = false;
     sims3cam::SkyLights sky;             // the game's one light as the sun's and the moon's, with the sun's afterglow at dusk (milestones 42, 44)
@@ -1856,8 +1857,8 @@ static void sims3LogStats(bool withTable) {
     }
     g_sims3.statsTick = nowTick; g_sims3.statsFrame = h.frames;
   }
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   night: the light of the sky %.3f, sky brightness %.3f and exposure ceiling %.2f EV sent %u times%s",
-           h.skyLevel, h.skyBrightnessSent, h.evMaxSent, h.skySends, GlobalOptions::getExposeRemixApi() ? "" : " (Remix API off: nothing sent)");
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   exposure: the light of the sky %.3f, exposure ceiling %.2f EV sent %u times; sky brightness %s%s",
+           h.skyLevel, h.evMaxSent, h.skySends, h.skyBrightnessSent == 1.f ? "1 (the game's own sky)" : "not set", GlobalOptions::getExposeRemixApi() ? "" : " (Remix API off: nothing sent)");
   Logger::info(msg);
   uint32_t lampHandles = 0;
   for (uint32_t k = 0; k < h.lamps.n; ++k) { const sims3cam::Lamp& Lh = h.lamps.lamps[k]; lampHandles += (Lh.api ? 1u : 0u) + (Lh.api2 ? 1u : 0u) + (Lh.api3 ? 1u : 0u); }
@@ -2018,16 +2019,34 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
         Logger::info(msg);
       }
     }
-    // the game's clock; the world lights (a street lamp's) are reported on around the clock (run 151)
-    // and are lit by night only, by the game's own word for night
+    // the game's clock; the world lights (a street lamp's) are reported on around the clock (run 151).
+    // They are lit while the game's own night switch is on (milestone 54: the flag the game turns its
+    // lamp glow on the ground on by, kept next to its light record, run 163); until the record is
+    // found, while the game's word for night holds
     h.clock = h.lampReportLive ? sims3cam::clockFromRecord(h.lampRecords.data()) : sims3cam::GameClock {};
-    const bool worldLights = sims3cam::lampWorldLights() && h.clock.known && h.clock.night;
+    int nightSwitch = -1;   // the game's night switch: -1 not read, 0 off, 1 on
+    if (h.lightState == 3 && !h.nightSwitchBad) {
+      float sw = -1.f;
+      if (sims3LightRead(h.lightPlaces[h.lightUse].p - 28, &sw, 1) && (sims3cam::floatBits(&sw, 0u) || sims3cam::floatBits(&sw, 0x3f800000u))) nightSwitch = sw > 0.5f ? 1 : 0;
+    }
+    const bool worldLights = sims3cam::lampWorldLights() && (nightSwitch >= 0 ? nightSwitch == 1 : (h.clock.known && h.clock.night));
     if (h.clock.known && (!h.clockSaid || h.clock.night != h.clockNight) && h.clockLogged < 80u) {
       h.clockSaid = true; h.clockNight = h.clock.night; ++h.clockLogged;
-      char msg[260];
-      snprintf(msg, sizeof msg, "Sims 3 camera hook: the game's clock at frame %u: %.2f h, %s (sunrise %.2f, sunset %.2f): the world lights (street lamps) are %s",
-               h.frames, h.clock.hour, h.clock.night ? "NIGHT" : "DAY", h.clock.sunrise, h.clock.sunset, worldLights ? "lit where the game has them on" : (sims3cam::lampWorldLights() ? "dark" : "dark (lampWorldLights 0)"));
+      char msg[200];
+      snprintf(msg, sizeof msg, "Sims 3 camera hook: the game's clock at frame %u: %.2f h, %s (sunrise %.2f, sunset %.2f)",
+               h.frames, h.clock.hour, h.clock.night ? "NIGHT" : "DAY", h.clock.sunrise, h.clock.sunset);
       Logger::info(msg);
+    }
+    {
+      const int street = (worldLights ? 1 : 0) + (nightSwitch >= 0 ? 2 : 0);
+      if ((h.clock.known || nightSwitch >= 0) && street != h.streetSaid && h.streetLogged < 80u) {
+        h.streetSaid = street; ++h.streetLogged;
+        char msg[260];
+        snprintf(msg, sizeof msg, "Sims 3 camera hook: the street lamps are %s from frame %u, clock %.2f h, by %s",
+                 worldLights ? "LIT" : (sims3cam::lampWorldLights() ? "dark" : "dark (lampWorldLights 0)"), h.frames, h.clock.known ? h.clock.hour : -1.f,
+                 nightSwitch >= 0 ? "the game's own night switch" : "the game's word for night (its night switch not found yet)");
+        Logger::info(msg);
+      }
     }
     // the lit lamps that have a definition, the nearest to the camera's target first
     h.lamps.begin();
@@ -2239,33 +2258,18 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
         Logger::info(msg);
       }
     }
-    // The game's ambient light, a diagnostic (milestone 53): where in its memory the game keeps the
-    // ambient light it uses by the hour (its sky files' AmbientSkyTop and AmbientSkyBottom, the
-    // probe's scale) is not known; the light record found in run 161 sat among other lighting
-    // records. Every 30 seconds and at the mark, the 256 floats around the record (64 before it,
-    // 192 from it) and the lit terrain's constants c0..c15 are logged with the clock, to be read
-    // against the sky files' timelines.
-    if (h.lightState == 3 && (h.frames - h.ambientDumpFrame >= 1800u || h.markDump == 2) && h.ambientLines < 640u) {
-      h.ambientDumpFrame = h.frames; ++h.ambientDumps;
-      const float* rec = h.lightPlaces[h.lightUse].p;
-      const char* when = !h.clock.known ? "clock unknown" : (h.clock.night ? "night" : "day");
-      for (int line = 0; line < 16 && h.ambientLines < 640u; ++line) {
-        const int at = line * 16 - 64;
-        float w[16] = {};
-        const bool ok = sims3LightRead(rec + at, w, 16);
-        char msg[600]; int n = 0;
-        n += snprintf(msg + n, sizeof msg - n, "Sims 3 camera hook: ambient diag %u, frame %u, clock %.2f h %s, record %+4d:", h.ambientDumps, h.frames, h.clock.known ? h.clock.hour : -1.f, when, at);
-        if (!ok) n += snprintf(msg + n, sizeof msg - n, " (unreadable)");
-        else for (int k = 0; k < 16 && n > 0 && n < (int) sizeof msg - 20; ++k) n += snprintf(msg + n, sizeof msg - n, "%s%.5g", k % 4 == 0 ? " | " : " ", w[k]);
-        ++h.ambientLines;
-        Logger::info(msg);
-      }
-      for (int line = 0; line < 4 && h.ambientLines < 640u; ++line) {
-        char msg[600]; int n = 0;
-        n += snprintf(msg + n, sizeof msg - n, "Sims 3 camera hook: ambient diag %u, frame %u, clock %.2f h %s, terrain c%d..c%d (%s):", h.ambientDumps, h.frames, h.clock.known ? h.clock.hour : -1.f, when, line * 4, line * 4 + 3,
-                      readTerrain ? "this frame" : "the last lit terrain draw");
-        for (int k = 0; k < 16 && n > 0 && n < (int) sizeof msg - 20; ++k) n += snprintf(msg + n, sizeof msg - n, "%s%.5g", k % 4 == 0 ? " | " : " ", h.terrainConsts[line * 16 + k]);
-        ++h.ambientLines;
+    // The game's night switch, next to its light record (run 163: 28 floats before it), is handed
+    // to the lit terrain as c7.x: checked whenever the terrain is drawn; if they ever disagree for
+    // two seconds the street lamps go back to the game's word for night.
+    if (h.lightState == 3 && readTerrain && !h.nightSwitchBad) {
+      float sw = -1.f;
+      uint32_t want; memcpy(&want, &h.terrainNightSwitch, 4);
+      if (sims3LightRead(h.lightPlaces[h.lightUse].p - 28, &sw, 1) && sims3cam::floatBits(&sw, want)) h.nightSwitchDisagree = 0;
+      else if (++h.nightSwitchDisagree > 120u) {
+        h.nightSwitchBad = true;
+        char msg[260];
+        snprintf(msg, sizeof msg, "Sims 3 camera hook: the game's night switch next to its light record (%.3f) does not agree with the terrain's (%.3f): the street lamps follow the game's word for night instead",
+                 sw, h.terrainNightSwitch);
         Logger::info(msg);
       }
     }
@@ -2352,42 +2356,43 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
     const bool haveSky = h.skySet;   // for the night below
     if (h.sunApi && h.sunSet && h.sky.showing[0] && sims3cam::luminance(h.sun.col) > 0.001f) remixapi::remixapi_DrawLightInstance((remixapi_LightHandle) h.sunApi);   // every frame it gives light (milestone 20b)
     if (h.moonApi && h.moonSet && h.sky.showing[1] && sims3cam::luminance(h.moon.col) > 0.001f) remixapi::remixapi_DrawLightInstance((remixapi_LightHandle) h.moonApi);
-    // Night from the lights of the sky (milestones 20d, 42): the luminance of the sun's and the
-    // moon's light together, as sent (1 at noon, orange 0.3 at dusk, never below the hold level
-    // through dusk and dawn, the moon's share by night). Relative to the game's full daylight (1,
-    // milestone 52: the game's light is exact, nothing to learn or smooth) it sets the
-    // runtime's sky brightness -- the sky probe scaled wherever a ray escapes, ambient and
-    // backdrop together -- and the ceiling of the auto-exposure, which would otherwise brighten
-    // the dark scene back up (its default range reaches +5 EV).
-    if (sims3cam::skyFromLight()) {
-      if (haveSky) {
-        h.skyLevel = h.sky.level();
-        float b = h.skyLevel;
-        if (b > 1.f) b = 1.f;
-        if (b < sims3cam::skyMinBrightness()) b = sims3cam::skyMinBrightness();
-        const float ev = sims3cam::nightEvMax() + (sims3cam::dayEvMax() - sims3cam::nightEvMax()) * b;
-        // a change of a twentieth (at least 0.001, or 0.01 EV) is sent: at the night's level the old fixed steps of 0.01 and 0.05 EV were never crossed (run 156)
-        const float stepB = 0.05f * h.skyBrightnessSent > 0.001f ? 0.05f * h.skyBrightnessSent : 0.001f, stepEv = 0.05f * std::fabs(h.evMaxSent) > 0.01f ? 0.05f * std::fabs(h.evMaxSent) : 0.01f;
-        const bool due = h.skyBrightnessSent < 0.f || ((std::fabs(b - h.skyBrightnessSent) > stepB || std::fabs(ev - h.evMaxSent) > stepEv) && h.frames - h.skySendFrame >= 10);
-        if (due) {
-          if (GlobalOptions::getExposeRemixApi()) {
+    // The sky and the exposure (milestones 20d, 52, 54). The runtime's sky brightness stays 1: the
+    // sky that lights the scene is the one the game draws, painted with the game's own sky colours
+    // at every hour and in every weather (run 163 found them next to the light record), so there is
+    // nothing to map. The ceiling of the auto-exposure follows the light of the sky as sent -- the
+    // sun's and the moon's together, relative to the game's full daylight -- so that it does not
+    // brighten the night back up (its default range reaches +5 EV).
+    if (sims3cam::exposureFromLight()) {
+      if (GlobalOptions::getExposeRemixApi()) {
+        if (h.skyBrightnessSent != 1.f) {
+          remixapi::remixapi_SetConfigVariable("rtx.skyBrightness", "1.000");
+          h.skyBrightnessSent = 1.f;
+          Logger::info("Sims 3 camera hook: sky brightness 1: the sky the game draws lights the scene as it is");
+        }
+        if (haveSky) {
+          h.skyLevel = h.sky.level();
+          const float b = h.skyLevel > 1.f ? 1.f : h.skyLevel;
+          const float ev = sims3cam::nightEvMax() + (sims3cam::dayEvMax() - sims3cam::nightEvMax()) * b;
+          // a change of a twentieth (at least 0.01 EV) is sent
+          const float stepEv = 0.05f * std::fabs(h.evMaxSent) > 0.01f ? 0.05f * std::fabs(h.evMaxSent) : 0.01f;
+          const bool due = h.evMaxSent < -98.f || (std::fabs(ev - h.evMaxSent) > stepEv && h.frames - h.skySendFrame >= 10);
+          if (due) {
             char val[32];
-            snprintf(val, sizeof val, "%.3f", b); remixapi::remixapi_SetConfigVariable("rtx.skyBrightness", val);
             snprintf(val, sizeof val, "%.2f", ev); remixapi::remixapi_SetConfigVariable("rtx.autoExposure.evMaxValue", val);
-            const bool step = h.skyLoggedB < 0.f || std::fabs(b - h.skyLoggedB) > 0.05f;   // against the last one logged (a smooth light never steps against the last one sent)
-            h.skyBrightnessSent = b; h.evMaxSent = ev; h.skySendFrame = h.frames; ++h.skySends;
+            const bool step = h.skyLoggedB < 0.f || std::fabs(b - h.skyLoggedB) > 0.05f;   // against the last one logged
+            h.evMaxSent = ev; h.skySendFrame = h.frames; ++h.skySends;
             if (step && h.skyBrightLogged < 200) {
               h.skyLoggedB = b;
-              ++h.skyBrightLogged; char msg[220];
-              snprintf(msg, sizeof msg, "Sims 3 camera hook: sky brightness %.3f and exposure ceiling %.2f EV sent at frame %u (the light of the sky %.3f; clock %.2f h)",
-                       b, ev, h.frames, h.skyLevel, h.clock.known ? h.clock.hour : -1.f);
+              ++h.skyBrightLogged; char msg[200];
+              snprintf(msg, sizeof msg, "Sims 3 camera hook: exposure ceiling %.2f EV sent at frame %u (the light of the sky %.3f; clock %.2f h)",
+                       ev, h.frames, h.skyLevel, h.clock.known ? h.clock.hour : -1.f);
               Logger::info(msg);
             }
-          } else if (!h.skyApiWarned) {
-            h.skyApiWarned = true;
-            Logger::warn("Sims 3 camera hook: night not driven: the Remix API is off (exposeRemixApi = True in .trex\\bridge.conf turns it on for the bridge server)");
           }
         }
+      } else if (!h.skyApiWarned) {
+        h.skyApiWarned = true;
+        Logger::warn("Sims 3 camera hook: the exposure is not driven: the Remix API is off (exposeRemixApi = True in .trex\\bridge.conf turns it on for the bridge server)");
       }
     }
   }
@@ -4522,7 +4527,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
   if (sims3cam::enabled() && primCount > 0 && sims3cam::isLitTerrainPs(g_sims3.psHash)) {
     memcpy(g_sims3.terrainSunCol, &m_state.pixelConstants.fConsts[0], sizeof g_sims3.terrainSunCol);
     memcpy(g_sims3.terrainSunDir, &m_state.pixelConstants.fConsts[1], sizeof g_sims3.terrainSunDir);
-    memcpy(g_sims3.terrainConsts, &m_state.pixelConstants.fConsts[0], sizeof g_sims3.terrainConsts);   // c0..c15, for the ambient diagnostic (milestone 53)
+    g_sims3.terrainNightSwitch = m_state.pixelConstants.fConsts[7].data[0];   // c7.x: the game's night switch (milestone 54)
     ++g_sims3.terrainSunDraws;
   }
   // The Sims 3 camera hook: a captured draw whose render states make it invisible in-game
