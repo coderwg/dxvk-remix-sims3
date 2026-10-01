@@ -1,5 +1,16 @@
---- "/c/Program Files/EA Games/The Sims 3/Game/Bin/GraphicsRules.sgr.stock-2026-09-19"	2026-09-19 14:56:36.901118300 +0100
-+++ "/c/Program Files/EA Games/The Sims 3/Game/Bin/GraphicsRules.sgr"	2026-09-19 14:57:49.879386600 +0100
+--- GraphicsRules.sgr.stock-2026-09-19
++++ GraphicsRules.sgr
+@@ -394,8 +394,8 @@
+ 	setting $High
+ 		prop $ConfigGroup DropTexMipsOnLoad 0
+ 		prop $ConfigGroup TextureSizeThreshold  2048
+-		prop $ConfigGroup RttSizeSmall  256
+-		prop $ConfigGroup RttSizeLarge  512
++		prop $ConfigGroup RttSizeSmall  1024
++		prop $ConfigGroup RttSizeLarge  2048
+ 		prop $ConfigGroup TrilinearEnabled  true
+ 		prop $ConfigGroup AnisoEnabled  true
+ 		prop $ConfigGroup ForceActiveLotObjectsToHighLOD true
 @@ -541,8 +541,8 @@
  	prop $ConfigGroup ActiveLODLimit 200
  	prop $ConfigGroup ShaderSkinCompositing true
@@ -45,3 +56,21 @@
  	prop $ConfigGroup AllowImpostorUnload false
  end
  if ($cardLevel >= $cardLevelHigh)
+@@ -653,7 +653,7 @@
+ 		prop $ConfigGroup MaxActiveLots 8
+                 prop $ConfigGroup CameraSpeedThreshold 32.0
+ 	setting 16
+-		prop $ConfigGroup MaxActiveLots 8
++		prop $ConfigGroup MaxActiveLots 16
+                 prop $ConfigGroup CameraSpeedThreshold 32.0
+ end
+ if (($cardLevel >= $cardLevelUber) and ($gpumemLevel >= $gpumemLevelHigh) and ($ramLevel >= $ramLevelUber) and ($cpuLevel >= $cpuLevelUber))
+@@ -671,7 +671,7 @@
+ 		prop $ConfigGroup PlatformMaxActiveLots 4
+ 	setting 6
+ 		prop $ConfigGroup NumMaxActiveLotOptions 6
+-		prop $ConfigGroup PlatformMaxActiveLots 8
++		prop $ConfigGroup PlatformMaxActiveLots 16
+ end
+ if ($os64Bit == 1)
+ 	setOption NumMaxActiveLotOptions 6
