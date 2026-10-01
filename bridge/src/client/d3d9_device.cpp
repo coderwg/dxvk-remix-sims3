@@ -85,6 +85,7 @@ namespace {
     bool loggedTint = false;
     // the sun (milestone 41): the directional light the lit terrain shaders were handed, c0 and c1 at the last such draw
     float terrainSunCol[3] = {}, terrainSunDir[3] = {}; uint32_t terrainSunDraws = 0, terrainSunDrawsLast = 0;
+    float terrainConsts[64] = {}; uint32_t ambientDumpFrame = 0, ambientLines = 0, ambientDumps = 0;   // the game's ambient light, a diagnostic (milestone 53)
     sims3cam::Sun sun = {}, moon = {};   // the two lights of the sky as the runtime holds them
     bool sunSet = false, moonSet = false, skySet = false, loggedSun = false;
     sims3cam::SkyLights sky;             // the game's one light as the sun's and the moon's, with the sun's afterglow at dusk (milestones 42, 44)
@@ -2235,6 +2236,36 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
         h.lightState = 0; h.lightUse = -1;
         char msg[200];
         snprintf(msg, sizeof msg, "Sims 3 camera hook: the game's own light stopped agreeing with the terrain at frame %u: searched for again", h.frames);
+        Logger::info(msg);
+      }
+    }
+    // The game's ambient light, a diagnostic (milestone 53): where in its memory the game keeps the
+    // ambient light it uses by the hour (its sky files' AmbientSkyTop and AmbientSkyBottom, the
+    // probe's scale) is not known; the light record found in run 161 sat among other lighting
+    // records. Every 30 seconds and at the mark, the 256 floats around the record (64 before it,
+    // 192 from it) and the lit terrain's constants c0..c15 are logged with the clock, to be read
+    // against the sky files' timelines.
+    if (h.lightState == 3 && (h.frames - h.ambientDumpFrame >= 1800u || h.markDump == 2) && h.ambientLines < 640u) {
+      h.ambientDumpFrame = h.frames; ++h.ambientDumps;
+      const float* rec = h.lightPlaces[h.lightUse].p;
+      const char* when = !h.clock.known ? "clock unknown" : (h.clock.night ? "night" : "day");
+      for (int line = 0; line < 16 && h.ambientLines < 640u; ++line) {
+        const int at = line * 16 - 64;
+        float w[16] = {};
+        const bool ok = sims3LightRead(rec + at, w, 16);
+        char msg[600]; int n = 0;
+        n += snprintf(msg + n, sizeof msg - n, "Sims 3 camera hook: ambient diag %u, frame %u, clock %.2f h %s, record %+4d:", h.ambientDumps, h.frames, h.clock.known ? h.clock.hour : -1.f, when, at);
+        if (!ok) n += snprintf(msg + n, sizeof msg - n, " (unreadable)");
+        else for (int k = 0; k < 16 && n > 0 && n < (int) sizeof msg - 20; ++k) n += snprintf(msg + n, sizeof msg - n, "%s%.5g", k % 4 == 0 ? " | " : " ", w[k]);
+        ++h.ambientLines;
+        Logger::info(msg);
+      }
+      for (int line = 0; line < 4 && h.ambientLines < 640u; ++line) {
+        char msg[600]; int n = 0;
+        n += snprintf(msg + n, sizeof msg - n, "Sims 3 camera hook: ambient diag %u, frame %u, clock %.2f h %s, terrain c%d..c%d (%s):", h.ambientDumps, h.frames, h.clock.known ? h.clock.hour : -1.f, when, line * 4, line * 4 + 3,
+                      readTerrain ? "this frame" : "the last lit terrain draw");
+        for (int k = 0; k < 16 && n > 0 && n < (int) sizeof msg - 20; ++k) n += snprintf(msg + n, sizeof msg - n, "%s%.5g", k % 4 == 0 ? " | " : " ", h.terrainConsts[line * 16 + k]);
+        ++h.ambientLines;
         Logger::info(msg);
       }
     }
@@ -4491,6 +4522,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
   if (sims3cam::enabled() && primCount > 0 && sims3cam::isLitTerrainPs(g_sims3.psHash)) {
     memcpy(g_sims3.terrainSunCol, &m_state.pixelConstants.fConsts[0], sizeof g_sims3.terrainSunCol);
     memcpy(g_sims3.terrainSunDir, &m_state.pixelConstants.fConsts[1], sizeof g_sims3.terrainSunDir);
+    memcpy(g_sims3.terrainConsts, &m_state.pixelConstants.fConsts[0], sizeof g_sims3.terrainConsts);   // c0..c15, for the ambient diagnostic (milestone 53)
     ++g_sims3.terrainSunDraws;
   }
   // The Sims 3 camera hook: a captured draw whose render states make it invisible in-game
