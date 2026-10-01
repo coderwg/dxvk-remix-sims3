@@ -1,7 +1,13 @@
-"""Builds the hook's script mod (the lamp reporter, and the home lot in the map view): compiles every
-.cs file next to this script against the game's own script assemblies and wraps the DLL into a package the game loads from Mods\\Packages.
+"""Builds one of the hook's script mods: compiles the .cs files in the mod's folder against the game's
+own script assemblies and wraps the DLL into a package the game loads from Mods\\Packages.
 
-    python build_scriptmod.py <folder with the game's script assemblies> [<output package>]
+    python build_scriptmod.py <mod> <folder with the game's script assemblies> [<output package>]
+
+The mods, one folder each, separate because they do separate things:
+  lamps            Sims3RtxLamps.package: the lamp reporter; reads the lamps and the clock for the hook,
+                   changes nothing in the game; its block version must match the hook's
+  mapviewhomelot   Sims3RtxMapViewHomeLot.package: the household's home lot in full detail in the map
+                   view; needs neither the hook nor Remix
 
 The assemblies (mscorlib, System, SimIFace, ScriptCore, Sims3GameplaySystems, Sims3GameplayObjects,
 UI, Sims3Metadata) come out of the game's own packages (Game\\Bin\\simcore, scripts and
@@ -15,8 +21,13 @@ The package holds two resources, as every pure script mod does:
 import glob, os, struct, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CLASS = 'Sims3RtxHook.LampReporter'
-ASSEMBLY = 'Sims3RtxLamps'
+# mod: (folder, the class that starts it, the assembly's name, the tuning's comment)
+MODS = {
+    'lamps': ('lamps', 'Sims3RtxHook.LampReporter', 'Sims3RtxLamps',
+              'Starts the lamp reporter of the RTX Remix camera hook. It reads the lamps; it changes nothing.'),
+    'mapviewhomelot': ('mapviewhomelot', 'Sims3RtxHook.MapViewHomeLot', 'Sims3RtxMapViewHomeLot',
+                       'Starts the map-view home lot of the RTX Remix camera hook: the household\'s home lot in full detail in the map view.'),
+}
 REFS = ['mscorlib', 'System', 'SimIFace', 'ScriptCore', 'Sims3GameplaySystems', 'Sims3GameplayObjects', 'UI', 'Sims3Metadata']
 CSC = r'C:\Windows\Microsoft.NET\Framework\v3.5\csc.exe'
 
@@ -51,20 +62,22 @@ def package(resources):
     return bytes(h) + body + index
 
 def main():
-    if len(sys.argv) < 2: print(__doc__); return 1
-    refs = sys.argv[1]
-    out = sys.argv[2] if len(sys.argv) > 2 else os.path.join(HERE, ASSEMBLY + '.package')
-    dll = os.path.join(HERE, 'out', ASSEMBLY + '.dll')
+    if len(sys.argv) < 3 or sys.argv[1] not in MODS: print(__doc__); return 1
+    folder, CLASS, ASSEMBLY, note = MODS[sys.argv[1]]
+    src = os.path.join(HERE, folder)
+    refs = sys.argv[2]
+    out = sys.argv[3] if len(sys.argv) > 3 else os.path.join(src, ASSEMBLY + '.package')
+    dll = os.path.join(src, 'out', ASSEMBLY + '.dll')
     os.makedirs(os.path.dirname(dll), exist_ok=True)
     cmd = [CSC, '/nologo', '/target:library', '/nostdlib+', '/noconfig', '/optimize+', '/debug-', '/warn:4', '/out:' + dll]
     cmd += ['/r:' + os.path.join(refs, r + '.dll') for r in REFS]
-    cmd += sorted(glob.glob(os.path.join(HERE, '*.cs')))
+    cmd += sorted(glob.glob(os.path.join(src, '*.cs')))
     r = subprocess.run(cmd, capture_output=True, text=True)
     print((r.stdout + r.stderr).strip() or 'compiled without a message')
     if r.returncode != 0: print('COMPILE_FAILED'); return 2
     data = open(dll, 'rb').read()
     xml = ('<?xml version="1.0" encoding="utf-8"?>\r\n<base>\r\n  <Current_Tuning>\r\n'
-           '    <!--Starts the script mod of the RTX Remix camera hook: it reads the lamps, and keeps the home lot in full detail in the map view.-->\r\n'
+           '    <!--' + note + '-->\r\n'
            '    <kInstantiator value="True" />\r\n  </Current_Tuning>\r\n</base>\r\n').encode('utf-8')
     pkg = package([(0x0333406C, 0, fnv1_64(CLASS), xml), (0x073FAA07, 0, fnv1_64(ASSEMBLY), s3sa(data))])
     open(out, 'wb').write(pkg)
