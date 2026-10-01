@@ -1135,6 +1135,54 @@ inline bool terrainLotPicture() { static int s = -1; if (s < 0) s = hookOption("
 // window glow (rgb) and the ambient occlusion (alpha). The terrain census writes its draws and textures.
 inline constexpr uint64_t kLotImpostorVs = 0x074cd28fc5260474ull;
 
+// The low-detail lot's ground plate as terrain (milestone 69): the town ground has a hole under every
+// lot and the low-detail model's plate -- a fan of up-facing triangles at the lot's ground height,
+// class 1 (its packed normal's alpha 255), plus side triangles hanging 1.5 m down -- is the only ground
+// there. The plate's top goes to the runtime's terrain baker (the visible terrain marker at stage 0 and
+// the hook's own pixel shader: the plate's colour from EA's linear atlas, encoded to sRGB as the bake
+// expects), so it takes the terrain's material and light; the rest of the model (the house, the
+// plate's sides) is drawn as before. terrainLotPlate 0 = the model as one object, as before.
+inline bool terrainLotPlate() { static int s = -1; if (s < 0) s = hookOption("terrainLotPlate", 1) != 0 ? 1 : 0; return s == 1; }
+struct PlateSplitStats { uint32_t in = 0, plate = 0, house = 0, outside = 0; };
+// pos: x, y, z per vertex (model space, y up); cls: the class byte per vertex; idx: triangles as
+// vertex numbers. A triangle is the plate's top when its three corners are class 1 (255) and it lies
+// flat. Out: the house's and the plate's triangles, as the same vertex numbers.
+inline void splitLotPlate(const std::vector<float>& pos, const std::vector<uint8_t>& cls, const std::vector<uint32_t>& idx,
+                          std::vector<uint32_t>& house, std::vector<uint32_t>& plate, PlateSplitStats& st) {
+  const size_t n = cls.size();
+  for (size_t t = 0; t + 2 < idx.size(); t += 3) {
+    const uint32_t a = idx[t], b = idx[t + 1], c = idx[t + 2];
+    ++st.in;
+    if (a >= n || b >= n || c >= n || pos.size() < 3 * n) { ++st.outside; continue; }
+    bool top = cls[a] == 255 && cls[b] == 255 && cls[c] == 255;
+    if (top) {
+      const float ux = pos[3 * b] - pos[3 * a], uy = pos[3 * b + 1] - pos[3 * a + 1], uz = pos[3 * b + 2] - pos[3 * a + 2];
+      const float vx = pos[3 * c] - pos[3 * a], vy = pos[3 * c + 1] - pos[3 * a + 1], vz = pos[3 * c + 2] - pos[3 * a + 2];
+      const float nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+      const float len = std::sqrt(nx * nx + ny * ny + nz * nz);
+      top = len > 0.f && std::fabs(ny) > 0.999f * len;
+    }
+    std::vector<uint32_t>& out = top ? plate : house;
+    out.push_back(a); out.push_back(b); out.push_back(c);
+    if (top) ++st.plate; else ++st.house;
+  }
+}
+// The plate's pixel shader (ps_3_0): texld r0, v0 (TEXCOORD0), s2 -- the model's colour atlas, stored
+// linear and sampled raw as the game does -- then rgb ^ (1 / 2.2) into oC0.rgb and 1 into oC0.a.
+inline constexpr DWORD kLotPlatePs[] = {
+  0xFFFF0300u,                                                 // ps_3_0
+  0x05000051u, 0xA00F0000u, 0x3EE8BA2Fu, 0x3F800000u, 0x00000000u, 0x00000000u,   // def c0, 0.4545454, 1, 0, 0
+  0x0200001Fu, 0x80000005u, 0x90030000u,                       // dcl_texcoord v0.xy
+  0x0200001Fu, 0x90000000u, 0xA00F0802u,                       // dcl_2d s2
+  0x03000042u, 0x800F0000u, 0x90E40000u, 0xA0E40802u,          // texld r0, v0, s2
+  0x03000020u, 0x80010001u, 0x80000000u, 0xA0000000u,          // pow r1.x, r0.x, c0.x
+  0x03000020u, 0x80020001u, 0x80550000u, 0xA0000000u,          // pow r1.y, r0.y, c0.x
+  0x03000020u, 0x80040001u, 0x80AA0000u, 0xA0000000u,          // pow r1.z, r0.z, c0.x
+  0x02000001u, 0x80070800u, 0x80E40001u,                       // mov oC0.xyz, r1
+  0x02000001u, 0x80080800u, 0xA0550000u,                       // mov oC0.w, c0.y
+  0x0000FFFFu,
+};
+
 // How a terrain variant treats alpha: 0 as the shader writes it (blended layer passes), 1 forced
 // to 1 (base draws), 2 the shader's own coverage, baked with an alpha test (unused, run 77).
 // A lot mesh's further chunk copies and its replays are opaque draws each clipped to its own

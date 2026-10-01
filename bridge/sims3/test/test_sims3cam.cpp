@@ -274,6 +274,22 @@ int main() {
     }
   }
 
+  // --- the low-detail lot's plate (milestone 69): its flat class-1 triangles, and the plate shader
+  {
+    // a slab: top (4 triangles around the centre, y = 1, class 1), one side triangle (class 1, vertical), a house triangle (class 0)
+    const std::vector<float> pos = { 0, 1, 0,   10, 1, 0,   10, 1, 10,   0, 1, 10,   5, 1, 5,   0, -0.5f, 0,   3, 1, 3,   3, 4, 3,   4, 1, 3 };
+    const std::vector<uint8_t> cls = { 255, 255, 255, 255, 255, 255, 0, 0, 0 };
+    const std::vector<uint32_t> idx = { 4, 0, 1,  4, 1, 2,  4, 2, 3,  4, 3, 0,   0, 1, 5,   6, 7, 8,   0, 1, 99 };
+    std::vector<uint32_t> house, plate; PlateSplitStats st;
+    splitLotPlate(pos, cls, idx, house, plate, st);
+    CHECK(st.in == 7 && st.plate == 4 && st.house == 2 && st.outside == 1 && plate.size() == 12 && house.size() == 6,
+          "plate: the slab's 4 flat class-1 triangles are the plate; its side and the house triangle stay with the house; an index past the vertices is left out (%u/%u/%u/%u)", st.plate, st.house, st.outside, st.in);
+    const size_t n = shaderTokenCount(kLotPlatePs, sizeof kLotPlatePs / sizeof kLotPlatePs[0]);
+    PsAnalysis a;
+    CHECK(n == sizeof kLotPlatePs / sizeof kLotPlatePs[0] && analyzePixelShader(kLotPlatePs, n, a) && a.samplers[2].read && a.samplers[2].texcoord == 0 && a.samplers[2].colorChannels == 3 && a.cutSampler == -1,
+          "plate shader: ps_3_0, %zu tokens, reads s2 at TEXCOORD0 into all three colour channels, no cut-out", n);
+  }
+
   // --- the cut-out (milestone 68): a texkill on one sampler's alpha read as a * alpha + b
   {
     uint32_t ref = 0;
