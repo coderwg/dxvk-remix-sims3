@@ -605,44 +605,6 @@ int main() {
         CHECK(!none.glowing && !none.showing[0] && none.showing[1] && nearf(luminance(none.shown[1].col), 0.5f * 0.1556f), "sky: with no minutes the afterglow is gone the moment the moon comes, and the moon stands at its floor at once");
         SkyLights dark; dark.step(gameLight(23.f), true, 0.f, 1.f, 1.f, false, 0.1f); dark.step(gameLight(6.02f), false, 0.f, -1.f, 0.02f, false, 0.1f);
         CHECK(!dark.keeping && !dark.showing[1] && dark.showing[0], "sky: with no share for the moon there is no floor and nothing is kept");
-        // the game's light by the hour (milestone 47)
-        CHECK(SkyTable::slotOf(0.f) == 0 && SkyTable::slotOf(12.f) == 144 && SkyTable::slotOf(23.99f) == 287 && SkyTable::slotOf(24.f) == 0, "sky table: one entry per five minutes of the game's clock");
-        SkyTable tab; Sun rec = {};
-        const bool emptyNone = !tab.recall(12.f, rec);
-        const bool firstDay = !tab.setDay(6.f, 18.f) && tab.dayKnown;
-        CHECK(emptyNone && firstDay, "sky table: empty it recalls nothing; the game's day is taken without clearing anything");
-        for (int i = 0; i < 24 * 48; ++i) { const float hr = (float) i / 48.f; tab.learn(hr, gameLight(hr)); }   // a day on the lot, read every 1.25 game minutes
-        CHECK(tab.filled == 288u, "sky table: a day on the lot fills all 288 entries (%u)", tab.filled);
-        bool nearAll = true; float worst = 0.f, worstAt = 0.f;
-        const float probe[] = { 10.3f, 17.9f, 18.9f, 19.5f, 23.97f, 2.f, 4.6f, 6.1f, 6.55f };
-        for (float hr : probe) {
-          const Sun truth = gameLight(hr);
-          if (!tab.recall(hr, rec)) { nearAll = false; worstAt = hr; break; }
-          const float err = std::fabs(luminance(rec.col) - luminance(truth.col));
-          if (err > worst) { worst = err; worstAt = hr; }
-          if (err > 0.01f || dot3(rec.dir, truth.dir) < 0.999f) nearAll = false;
-        }
-        CHECK(nearAll, "sky table: the light recalled for an hour is the game's for that hour (worst %.4f at %.2f h)", worst, worstAt);
-        const bool flip = tab.recall(18.99f, rec) && std::fabs(std::fabs(rec.dir[0]) - 0.664f) < 0.001f;
-        CHECK(flip, "sky table: across the light's change of sides the nearer reading is taken, never a blend (x %.3f at 18.99 h)", rec.dir[0]);
-        SkyTable gap; gap.setDay(6.f, 18.f); gap.learn(10.f, gameLight(10.f));
-        CHECK(gap.recall(10.02f, rec) && !gap.recall(11.f, rec), "sky table: an hour with no reading near it is not recalled");
-        const std::string text = skyFormat(tab);
-        SkyTable back;
-        for (size_t p0 = 0; p0 < text.size(); ) { size_t e = text.find('\n', p0); if (e == std::string::npos) e = text.size() - 1; skyParseLine(back, text.substr(p0, e - p0 + 1).c_str()); p0 = e + 1; }
-        Sun a1 = {}, a2 = {};
-        const bool same = back.recall(17.9f, a1) && tab.recall(17.9f, a2) && std::fabs(luminance(a1.col) - luminance(a2.col)) < 0.0005f && dot3(a1.dir, a2.dir) > 0.99999f;
-        CHECK(back.filled == 288u && back.dayKnown && nearf(back.sunrise, 6.f) && nearf(back.sunset, 18.f) && same, "sky table: written to its file and read back whole (%u entries)", back.filled);
-        const bool kept = !back.setDay(6.f, 18.f) && back.filled == 288u;
-        const bool cleared = back.setDay(6.5f, 18.f) && back.filled == 0u && nearf(back.sunrise, 6.5f);
-        CHECK(kept && cleared, "sky table: kept for the same day, cleared for another");
-        SkyTable bad;
-        skyParseLine(bad, "sims3sky 1\n"); skyParseLine(bad, "day 6 18\n");
-        const bool notUnit = !skyParseLine(bad, "144 12.0 1 1 1 0 2 0\n"), below = !skyParseLine(bad, "144 12.0 1 1 1 0 -1 0\n"), wrongSlot = !skyParseLine(bad, "145 12.0 1 1 1 0 1 0\n"), good = skyParseLine(bad, "144 12.0 1 1 1 0 1 0\n");
-        CHECK(notUnit && below && wrongSlot && good && bad.filled == 1u && bad.dayKnown, "sky table: an entry whose direction is not a light's or whose hour is not its entry's is not taken");
-        SkyTable other;
-        skyParseLine(other, "sims3sky 2\n"); skyParseLine(other, "day 6 18\n"); skyParseLine(other, "144 12.0 1 1 1 0 1 0\n");
-        CHECK(other.filled == 0u && !other.dayKnown, "sky table: another version of the file is not read");
       }
     }
   }

@@ -89,8 +89,7 @@ namespace {
     bool sunSet = false, moonSet = false, skySet = false, loggedSun = false;
     sims3cam::SkyLights sky;             // the game's one light as the sun's and the moon's, with the sun's afterglow at dusk (milestones 42, 44)
     sims3cam::Sun gameLight = {};        // the game's light as last handed over
-    sims3cam::SkyTable skyTable;         // the game's light by the hour, from what the terrain gave (milestone 47)
-    bool skyTableLoaded = false, skyWorldLive = false; uint32_t framesFromTable = 0, skySrcFrames = 0, skySrcLogs = 0; int skySrcCand = -1, skySrcLogged = -1;
+    uint32_t skySrcFrames = 0, skySrcLogs = 0; int skySrcCand = -1, skySrcLogged = -1;   // where the sky's light comes from, for the log
     // the game's own light in its memory (milestone 49): the records a search found, how well each agreed with the terrain, the one in use
     struct LightPlace { const float* p; uint32_t checked, matched; };
     LightPlace lightPlaces[64] = {}; uint32_t lightPlaceN = 0, lightConfirmFrames = 0, lightDisagree = 0, lightLiveFrames = 0, lightRetryFrame = 0, lightSearches = 0, framesFromGame = 0;
@@ -1841,11 +1840,11 @@ static void sims3LogStats(bool withTable) {
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   lights: %u lamp lights held (lit %u times, put out %u times, %u light calls)", h.lamps.n, h.lamps.lit, h.lamps.out, h.lampEvents);
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   sky: the game's light is the %s's, luminance %.3f; sun %s luminance %.3f toward %.3f, %.3f, %.3f; moon %s luminance %.3f toward %.3f, %.3f, %.3f (share %.2f); the sun's afterglow %s; %u light updates, %u terrain draws in the last frame, %u frames without one (%u of them from the table by the hour, which holds %u of 288 entries), %u refused",
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   sky: the game's light is the %s's, luminance %.3f; sun %s luminance %.3f toward %.3f, %.3f, %.3f; moon %s luminance %.3f toward %.3f, %.3f, %.3f (share %.2f); the sun's afterglow %s; %u light updates, %u terrain draws in the last frame, %u frames without one, %u refused",
            h.sky.body ? "moon" : "sun", sims3cam::luminance(h.gameLight.col),
            h.sky.showing[0] ? (h.sky.glowing ? "its afterglow," : "sent,") : "none,", h.sky.showing[0] ? sims3cam::luminance(h.sky.shown[0].col) : 0.f, h.sky.shown[0].dir[0], h.sky.shown[0].dir[1], h.sky.shown[0].dir[2],
            h.sky.showing[1] ? (h.sky.body == 0 ? "kept," : "sent,") : "none,", h.sky.showing[1] ? sims3cam::luminance(h.sky.shown[1].col) : 0.f, h.sky.shown[1].dir[0], h.sky.shown[1].dir[1], h.sky.shown[1].dir[2], sims3cam::moonShare(),
-           h.sky.glowing ? format_string("at x%.2f", h.sky.glowFade).c_str() : "none", h.sunChanges, h.terrainSunDrawsLast, h.framesNoTerrainSun, h.framesFromTable, h.skyTable.filled, h.sunRefused);
+           h.sky.glowing ? format_string("at x%.2f", h.sky.glowFade).c_str() : "none", h.sunChanges, h.terrainSunDrawsLast, h.framesNoTerrainSun, h.sunRefused);
   Logger::info(msg);
   {
     const uint64_t nowTick = GetTickCount64();
@@ -1923,57 +1922,9 @@ static void sims3LogStats(bool withTable) {
   g_sims3.shaderStatCount = 0;
 }
 
-// The Sims 3 camera hook (milestone 47): the table of the game's light by the hour, kept next to the
-// DLL as sims3sky.txt between sessions. Written through a temporary file, so a crash while writing
-// leaves the previous table whole.
-static bool sims3PathNextToDll(const char* name, char* out, size_t cap) {
-  HMODULE self = GetModuleHandleA("d3d9.dll");
-  if (!self || !GetModuleFileNameA(self, out, (DWORD) cap)) return false;
-  char* slash = strrchr(out, '\\');
-  if (!slash) return false;
-  snprintf(slash + 1, cap - (size_t) (slash + 1 - out), "%s", name);
-  return true;
-}
-static void sims3LoadSkyTable(Sims3Hook& h) {
-  char path[MAX_PATH] = {};
-  if (!sims3PathNextToDll("sims3sky.txt", path, sizeof path)) return;
-  FILE* f = fopen(path, "rb");
-  if (!f) { Logger::info("Sims 3 camera hook: no sims3sky.txt next to the DLL: the table of the game's light by the hour starts empty"); return; }
-  char line[256];
-  while (fgets(line, sizeof line, f)) sims3cam::skyParseLine(h.skyTable, line);
-  fclose(f);
-  h.skyTable.dirty = false;
-  char msg[260];
-  if (h.skyTable.format != 1) snprintf(msg, sizeof msg, "Sims 3 camera hook: sims3sky.txt is not a table this build reads (no 'sims3sky 1' line): the table by the hour starts empty");
-  else snprintf(msg, sizeof msg, "Sims 3 camera hook: the table of the game's light by the hour read from sims3sky.txt: %u of 288 five-minute entries, for sunrise %.2f and sunset %.2f",
-                h.skyTable.filled, h.skyTable.sunrise, h.skyTable.sunset);
-  Logger::info(msg);
-}
-static void sims3SaveSkyTable(Sims3Hook& h, const char* why) {
-  if (!h.skyTable.dirty || !h.skyTable.filled || !h.skyTable.dayKnown) return;
-  char path[MAX_PATH] = {}, temp[MAX_PATH + 8] = {};
-  if (!sims3PathNextToDll("sims3sky.txt", path, sizeof path)) return;
-  snprintf(temp, sizeof temp, "%s.new", path);
-  const std::string text = sims3cam::skyFormat(h.skyTable);
-  bool ok = false;
-  if (FILE* f = fopen(temp, "wb")) {
-    ok = fwrite(text.data(), 1, text.size(), f) == text.size();
-    ok = fclose(f) == 0 && ok;
-  }
-  ok = ok && MoveFileExA(temp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
-  if (ok) h.skyTable.dirty = false;
-  char msg[260];
-  snprintf(msg, sizeof msg, "Sims 3 camera hook: the table of the game's light by the hour %s sims3sky.txt (%s): %u of 288 entries",
-           ok ? "written to" : "could NOT be written to", why, h.skyTable.filled);
-  Logger::info(msg);
-}
-
 // Called from the client's shutdown path (d3d9_lss.cpp) so the last stretch of the session is reported.
 void sims3LogFinalStats() {
-  if (sims3cam::enabled() && g_sims3.frames > 0) {
-    sims3LogStats(true);
-    sims3SaveSkyTable(g_sims3, "the game closes");
-  }
+  if (sims3cam::enabled() && g_sims3.frames > 0) sims3LogStats(true);
 }
 
 template<bool EnableSync>
@@ -2225,20 +2176,6 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
         Logger::info(msg);
       }
     }
-    // the table by the hour (milestone 47): what the terrain gives is remembered by the game's clock;
-    // in a frame without a lit terrain draw the remembered light for the clock's hour stands in
-    if (!h.skyTableLoaded) { h.skyTableLoaded = true; sims3LoadSkyTable(h); }
-    if (h.clock.known) {
-      const float oldRise = h.skyTable.sunrise, oldSet = h.skyTable.sunset;
-      if (h.skyTable.setDay(h.clock.sunrise, h.clock.sunset)) {
-        char msg[260];
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: the table by the hour was made for another day (sunrise %.2f, sunset %.2f; the game's are %.2f, %.2f): cleared",
-                 oldRise, oldSet, h.clock.sunrise, h.clock.sunset);
-        Logger::info(msg);
-      }
-    }
-    if (h.skyWorldLive && !h.lampReportLive) sims3SaveSkyTable(h, "the world was left");
-    h.skyWorldLive = h.lampReportLive;
     const bool readTerrain = fresh;
     // The game's own light in its memory (milestone 49). Two seconds after a world is live, on the
     // lot, a search finds the records holding what the terrain is handed (sims3cam::lightRecord);
@@ -2301,23 +2238,21 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
         Logger::info(msg);
       }
     }
-    bool fromGame = false, fromTable = false;
+    bool fromGame = false;
     if (!fresh) {
       ++h.framesNoTerrainSun;
       if (h.lightState == 3 && sims3ReadGameLight(h.lightPlaces[h.lightUse].p, game)) { fresh = true; fromGame = true; ++h.framesFromGame; }
-      else if (h.clock.known && h.skyTable.recall(h.clock.hour, game)) { fresh = true; fromTable = true; ++h.framesFromTable; }
     }
-    if ((readTerrain || fromGame) && h.clock.known) h.skyTable.learn(h.clock.hour, game);
     {
       // where the light comes from, logged when it has changed for half a second
-      const int src = readTerrain ? 0 : (fromGame ? 3 : (fromTable ? 1 : 2));
+      const int src = readTerrain ? 0 : (fromGame ? 1 : 2);
       if (src == h.skySrcCand) ++h.skySrcFrames; else { h.skySrcCand = src; h.skySrcFrames = 1; }
       if (h.skySrcFrames == 30u && src != h.skySrcLogged && h.skySrcLogs < 100u) {
         ++h.skySrcLogs; h.skySrcLogged = src;
-        static const char* const kSrc[4] = { "the lit terrain", "the table by the hour (no lit terrain drawn)", "nowhere: held at its last value (no lit terrain drawn, no entry in the table for this hour)", "the game's own light in its memory (no lit terrain drawn)" };
+        static const char* const kSrc[3] = { "the lit terrain", "the game's own light in its memory (no lit terrain drawn)", "nowhere: held at its last value (no lit terrain drawn, the game's light record not found yet)" };
         char msg[320];
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: the sky's light comes from %s since frame %u, clock %.2f h; the table holds %u of 288 five-minute entries",
-                 kSrc[src], h.frames - 29u, h.clock.known ? h.clock.hour : -1.f, h.skyTable.filled);
+        snprintf(msg, sizeof msg, "Sims 3 camera hook: the sky's light comes from %s since frame %u, clock %.2f h",
+                 kSrc[src], h.frames - 29u, h.clock.known ? h.clock.hour : -1.f);
         Logger::info(msg);
       }
     }
@@ -2372,7 +2307,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
         const sims3cam::Sun& s0 = h.sky.shown[0]; const sims3cam::Sun& s1 = h.sky.shown[1];
         char msg[700];
         snprintf(msg, sizeof msg, "Sims 3 camera hook: sky at frame %u, clock %.2f h%s: the game's light%s is the %s's, colour %.3f, %.3f, %.3f (luminance %.3f), the dawn's ease x%.2f; SUN %s colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f; MOON %s colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f; the light of the sky %.3f, the afterglow x%.2f; sky level %.3f",
-                 h.frames, h.clock.known ? h.clock.hour : -1.f, !h.clock.known ? " (unknown)" : (h.clock.night ? " night" : " day"), fromGame ? " (from the game's memory)" : (fromTable ? " (remembered from the table)" : ""), kBody[h.sky.body], game.col[0], game.col[1], game.col[2], sims3cam::luminance(game.col), ease,
+                 h.frames, h.clock.known ? h.clock.hour : -1.f, !h.clock.known ? " (unknown)" : (h.clock.night ? " night" : " day"), fromGame ? " (from the game's memory)" : "", kBody[h.sky.body], game.col[0], game.col[1], game.col[2], sims3cam::luminance(game.col), ease,
                  !h.sky.showing[0] ? "none," : (h.sky.glowing ? "its afterglow," : "as the game's,"), h.sky.showing[0] ? s0.col[0] : 0.f, h.sky.showing[0] ? s0.col[1] : 0.f, h.sky.showing[0] ? s0.col[2] : 0.f, s0.dir[0], s0.dir[1], s0.dir[2],
                  !h.sky.showing[1] ? "none," : (h.sky.body == 0 ? "kept past sunrise," : "the game's by its share, at least its floor,"), h.sky.showing[1] ? s1.col[0] : 0.f, h.sky.showing[1] ? s1.col[1] : 0.f, h.sky.showing[1] ? s1.col[2] : 0.f, s1.dir[0], s1.dir[1], s1.dir[2],
                  lum, h.sky.glowFade, h.skyLevel);
