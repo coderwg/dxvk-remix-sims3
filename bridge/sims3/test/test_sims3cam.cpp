@@ -510,11 +510,17 @@ int main() {
                 "the game's fog: a grey day's curve 0.75 (150 to 1000) matched at half fog by a linear fog from -25 to 1000");
           const float noFog[4] = { 0.001f, 1.f, 5.f, 1.f }, noCurve[4] = { -0.001f, 1.f, 5.f, 0.f }, nanFog[4] = { std::nanf(""), 1.f, 5.f, 1.f };
           CHECK(!fogRangeFromGame(noFog, &fs, &fe) && !fogRangeFromGame(noCurve, &fs, &fe) && !fogRangeFromGame(nanFog, &fs, &fe), "the game's fog: a rising c4.x, no curve or not a number is no fog");
-          uint32_t fc = 0;
+          uint32_t fc = 0; float fb = -1.f;
           const float black[3] = { 0.f, 0.f, 0.f }, white[3] = { 1.f, 1.f, 1.f }, grey[3] = { 0.5f, 0.5f, 0.5f }, wild[3] = { 1.5f, -1.f, 0.5f }, nanCol[3] = { 0.5f, std::nanf(""), 0.5f };
-          CHECK(fogColourFromGame(black, &fc) && fc == 0xFF000000u && fogColourFromGame(white, &fc) && fc == 0xFFFFFFFFu && fogColourFromGame(grey, &fc) && fc == 0xFF373737u,
-                "the game's fog colour: gamma 0, 1 and 0.5 in linear light (0.5 -> 55 of 255)");
-          CHECK(fogColourFromGame(wild, &fc) && fc == 0xFFFF0037u && !fogColourFromGame(nanCol, &fc), "the game's fog colour: clamped to 0..1 per channel; not a number is no colour");
+          const float tint[3] = { 0.5f, 0.25f, 1.f }, night[3] = { 0.06f, 0.06f, 0.25f };
+          CHECK(fogColourFromGame(black, &fc, &fb) && fc == 0xFF000000u && fb == 0.f && fogColourFromGame(white, &fc, &fb) && fc == 0xFFFFFFFFu && fb == 1.f &&
+                fogColourFromGame(grey, &fc, &fb) && fc == 0xFFFFFFFFu && std::fabs(fb - 0.2140f) < 0.001f,
+                "the game's fog colour: gamma 0, 1 and 0.5 in linear light, the hue at full scale and the brightness apart (0.5 -> 0.214)");
+          CHECK(fogColourFromGame(tint, &fc, &fb) && fc == 0xFF370DFFu && fb == 1.f && fogColourFromGame(night, &fc, &fb) && (fc & 0xFFu) == 0xFFu && ((fc >> 16) & 0xFFu) == 25u && std::fabs(fb - 0.0508f) < 0.001f,
+                "the game's fog colour: a tint keeps its hue; the night's dark blue keeps it too (25 25 255 at brightness 0.051)");
+          CHECK(fogColourFromGame(wild, &fc, &fb) && fc == 0xFFFF0037u && fb == 1.f && !fogColourFromGame(nanCol, &fc, &fb), "the game's fog colour: clamped to 0..1 per channel; not a number is no colour");
+          CHECK(fogLightShare(1.f, 1.f) == 1.f && std::fabs(fogLightShare(0.0032f, 0.16f) - 0.02f) < 1e-4f && fogLightShare(0.1f, 0.f) == 1.f && fogLightShare(0.3f, 0.1f) == 1.f && fogLightShare(0.f, 0.16f) == 0.f,
+                "the fog's light: by day 1, by night the moon's share (0.02), 1 while the game's light is out and the afterglow is not, never above 1, 0 with no light sent");
         }
         const int32_t ids[2] = { (int32_t) 0x55667788u, (int32_t) 0x11223344u };
         CHECK(lampId64(ids) == 0x1122334455667788ull, "reporter: an id from its low and high halves");

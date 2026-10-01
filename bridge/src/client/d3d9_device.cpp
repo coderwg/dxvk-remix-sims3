@@ -88,7 +88,8 @@ namespace {
     float terrainNightSwitch = 0.f;      // the lit terrain's c7.x: the game's night switch as handed to the terrain (milestone 54)
     uint32_t nightSwitchDisagree = 0, streetLogged = 0; int streetSaid = -1; bool nightSwitchBad = false;   // the night switch next to the light record, checked against it
     float terrainFog[8] = {};            // the lit terrain's c2 and c4: the game's fog as handed to the terrain (milestone 56)
-    bool fogReady = false, fogOurs = false, fogScaleSent = false, fogBad = false; DWORD fogSaved[5] = {};   // the game's fog for the runtime (milestone 56)
+    bool fogReady = false, fogOurs = false, fogBad = false, fogApiWarned = false; DWORD fogSaved[5] = {};   // the game's fog for the runtime (milestone 56)
+    float fogBright = 0.f, fogShare = 0.f, fogScaleNow = -1.f, fogScaleLogged = -1.f; uint32_t fogScaleFrame = 0, fogScaleSends = 0;   // its brightness, lit as the scene is lit (milestone 57)
     uint32_t fogColour = 0, fogLoggedColour = 0, fogFrameDraws = 0, fogDraws = 0, gameFogDraws = 0, fogLogged = 0, fogDisagree = 0;
     float fogStart = 0.f, fogEnd = 0.f, fogCurve = 1.f, fogLoggedEnd = -1.f;
     sims3cam::Sun sun = {}, moon = {};   // the two lights of the sky as the runtime holds them
@@ -1894,9 +1895,9 @@ static void sims3LogStats(bool withTable) {
              h.lightSearches, h.lightPlaceN, h.framesFromGame);
   }
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   fog: %s; the runtime's fog colour %u %u %u of 255 from %.0f to %.0f (the game's curve %.2f), on %u terrain draws; %u captured draws carried a fog state of the game's own",
-           !sims3cam::fogFromGame() ? "off (fogFromGame 0)" : (h.fogBad ? "OFF: the game's fog did not agree with the terrain's" : (h.fogReady ? "the game's own, from beside its light record" : "waiting for the game's light record")),
-           (unsigned) ((h.fogColour >> 16) & 0xFFu), (unsigned) ((h.fogColour >> 8) & 0xFFu), (unsigned) (h.fogColour & 0xFFu), h.fogStart, h.fogEnd, h.fogCurve, h.fogDraws, h.gameFogDraws);
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   fog: %s; the runtime's fog hue %u %u %u of 255 at brightness %.6f (the colour's %.4f x the light sent over the game's %.3f; %u sends) from %.0f to %.0f (the game's curve %.2f), on %u terrain draws; %u captured draws carried a fog state of the game's own",
+           !sims3cam::fogFromGame() ? "off (fogFromGame 0)" : (h.fogBad ? "OFF: the game's fog did not agree with the terrain's" : (!GlobalOptions::getExposeRemixApi() ? "OFF: the Remix API is off" : (h.fogReady ? "the game's own, from beside its light record" : "waiting for the game's light record"))),
+           (unsigned) ((h.fogColour >> 16) & 0xFFu), (unsigned) ((h.fogColour >> 8) & 0xFFu), (unsigned) (h.fogColour & 0xFFu), h.fogScaleNow, h.fogBright, h.fogShare, h.fogScaleSends, h.fogStart, h.fogEnd, h.fogCurve, h.fogDraws, h.gameFogDraws);
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   lamp reporter: %s; %u lamps reported, %u lit, %u of those without a definition in the light table, %u beyond the budget of %u; %u readings (%u while it was writing), %u searches (the last through %u regions, %u MB)",
            h.lampReportLive ? "live" : (g_sims3LampBlock.load() ? "found, no world loaded" : "NOT FOUND: no lamp gives light (the script mod Sims3RtxLamps.package is not in Mods\\Packages, is an older version, or no world has loaded yet)"),
@@ -2446,15 +2447,39 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
     // The game's fog (milestone 56): its colour (the terrain's c2) and its range (c4), read from beside
     // its light record in every view, go to the runtime as D3D9 linear fog on the next frame's first
     // base terrain draws (sims3BeginDraw); the runtime lays it over the ray-traced picture (its
-    // composite fog, used while rtx.volumetrics.enable is off). The colour goes in linear light, and
-    // rtx.fogColorScale is set once to fogColourScale (1: as bright as the sky the game draws).
+    // composite fog, used while rtx.volumetrics.enable is off). The colour goes in linear light, its
+    // hue as the D3DCOLOR and its brightness as rtx.fogColorScale, lit as the scene is lit (milestone
+    // 57: x the light of the sky as sent over the game's own, so the night's fog is as dim as the
+    // night's moon; run 166 saw a blue veil with the game's full fog colour against a 2 % moon). The
+    // fog waits until its first brightness has been sent.
     h.fogReady = false; h.fogFrameDraws = 0;
-    if (sims3cam::fogFromGame() && h.lightState == 3 && !h.fogBad) {
+    if (sims3cam::fogFromGame() && h.lightState == 3 && !h.fogBad && !GlobalOptions::getExposeRemixApi()) {
+      if (!h.fogApiWarned) { h.fogApiWarned = true; Logger::warn("Sims 3 camera hook: the game's fog is not sent: the Remix API is off (its brightness goes through it)"); }
+    } else if (sims3cam::fogFromGame() && h.lightState == 3 && !h.fogBad) {
       const float* rec = h.lightPlaces[h.lightUse].p;
       float c2[4] = {}, c4[4] = {};
       if (sims3LightRead(rec - 64, c2, 4) && sims3LightRead(rec - 20, c4, 4) &&
-          sims3cam::fogColourFromGame(c2, &h.fogColour) && sims3cam::fogRangeFromGame(c4, &h.fogStart, &h.fogEnd)) {
-        h.fogReady = true; h.fogCurve = c4[3];
+          sims3cam::fogColourFromGame(c2, &h.fogColour, &h.fogBright) && sims3cam::fogRangeFromGame(c4, &h.fogStart, &h.fogEnd)) {
+        h.fogCurve = c4[3];
+        h.fogShare = sims3cam::fogLightShare(h.skySet ? h.sky.level() : 0.f, sims3cam::luminance(h.gameLight.col));
+        const float scale = sims3cam::fogColourScale() * h.fogBright * h.fogShare;
+        const bool sentBefore = h.fogScaleNow >= 0.f;
+        const float stepScale = 0.05f * h.fogScaleNow > 1.0e-6f ? 0.05f * h.fogScaleNow : 1.0e-6f;   // a twentieth, as the exposure
+        if (!sentBefore || (std::fabs(scale - h.fogScaleNow) > stepScale && h.frames - h.fogScaleFrame >= 10u)) {
+          char val[32];
+          snprintf(val, sizeof val, "%.6f", scale);
+          remixapi::remixapi_SetConfigVariable("rtx.fogColorScale", val);
+          h.fogScaleNow = scale; h.fogScaleFrame = h.frames; ++h.fogScaleSends;
+          const bool step = h.fogScaleLogged < 0.f || std::fabs(scale - h.fogScaleLogged) > 0.2f * h.fogScaleLogged;
+          if (step && h.fogLogged < 200u) {
+            h.fogScaleLogged = scale; ++h.fogLogged;
+            char msg[300];
+            snprintf(msg, sizeof msg, "Sims 3 camera hook: fog brightness %.6f sent at frame %u (the fog colour's brightest channel %.4f x the light sent over the game's %.3f x fogColourScale %.2f; clock %.2f h)",
+                     scale, h.frames, h.fogBright, h.fogShare, sims3cam::fogColourScale(), h.clock.known ? h.clock.hour : -1.f);
+            Logger::info(msg);
+          }
+        }
+        h.fogReady = sentBefore;
         int moved = 0;
         for (int k = 0; k < 3; ++k) {
           const int a = (int) ((h.fogColour >> (8 * k)) & 0xFFu), b = (int) ((h.fogLoggedColour >> (8 * k)) & 0xFFu);
@@ -2464,20 +2489,11 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
         if ((step || h.markDump == 2) && h.fogLogged < 200u) {
           h.fogLoggedColour = h.fogColour; h.fogLoggedEnd = h.fogEnd; ++h.fogLogged;
           char msg[340];
-          snprintf(msg, sizeof msg, "Sims 3 camera hook: the game's fog at frame %u, clock %.2f h: colour %.3f %.3f %.3f, from %.0f to %.0f (curve %.2f) -> the runtime's fog colour %u %u %u of 255 (linear), from %.0f to %.0f",
+          snprintf(msg, sizeof msg, "Sims 3 camera hook: the game's fog at frame %u, clock %.2f h: colour %.3f %.3f %.3f, from %.0f to %.0f (curve %.2f) -> the runtime's fog colour %u %u %u of 255 (linear hue), from %.0f to %.0f",
                    h.frames, h.clock.known ? h.clock.hour : -1.f, c2[0], c2[1], c2[2], (1.f - c4[1]) / c4[0], -c4[1] / c4[0], c4[3],
                    (unsigned) ((h.fogColour >> 16) & 0xFFu), (unsigned) ((h.fogColour >> 8) & 0xFFu), (unsigned) (h.fogColour & 0xFFu), h.fogStart, h.fogEnd);
           Logger::info(msg);
         }
-      }
-      if (h.fogReady && !h.fogScaleSent && GlobalOptions::getExposeRemixApi()) {
-        h.fogScaleSent = true;
-        char val[32];
-        snprintf(val, sizeof val, "%.3f", sims3cam::fogColourScale());
-        remixapi::remixapi_SetConfigVariable("rtx.fogColorScale", val);
-        char msg[200];
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: fog colour scale %s sent (rtx.fogColorScale; at 1 the game's fog colour is as bright as the sky it draws)", val);
-        Logger::info(msg);
       }
     }
   }

@@ -980,8 +980,8 @@ inline int exposureFromLight() { static int s = -1; if (s < 0) s = hookOption("e
 // The game's fog (milestone 56): fogFromGame = 1 hands the game's own fog (its colour and range, read
 // beside its light record) to the runtime as D3D9 linear fog, which the runtime lays over the
 // ray-traced picture (its composite fog, used while rtx.volumetrics.enable is off); fogColourScale =
-// rtx.fogColorScale in thousandths (1000: the game's fog colour as bright as the sky the game draws;
-// the runtime's default is 250), sent once through the Remix API.
+// the fog's brightness in thousandths (1000: the game's fog colour as bright as the sky the game
+// draws, lit as the scene is lit, milestone 57), sent as rtx.fogColorScale through the Remix API.
 inline int fogFromGame() { static int s = -1; if (s < 0) s = hookOption("fogFromGame", 1) != 0; return s; }
 inline float fogColourScale() { static float s = -1.f; if (s < 0.f) { int v = hookOption("fogColourScale", 1000); if (v < 0) v = 0; if (v > 10000) v = 10000; s = (float) v / 1000.f; } return s; }
 inline float dayEvMax() { static float s = -99.f; if (s < -98.f) { int v = hookOption("dayEvMax", 500); if (v < -1000) v = -1000; if (v > 1000) v = 1000; s = (float) v / 100.f; } return s; }
@@ -1190,18 +1190,31 @@ inline bool fogRangeFromGame(const float* c4, float* start, float* end) {
   *end = e;
   return true;
 }
-// The game's fog colour (c2: gamma, as its shaders blend it) in the runtime's linear light, as an
-// opaque D3DCOLOR (the runtime reads it as 0..1 and scales it by rtx.fogColorScale).
-inline bool fogColourFromGame(const float* c2, uint32_t* out) {
+// The game's fog colour (c2: gamma, as its shaders blend it) in the runtime's linear light: an opaque
+// D3DCOLOR with its brightest channel at 255 (the hue, kept precise however dark the night) and that
+// channel's linear value in *bright (the brightness, sent as rtx.fogColorScale; milestone 57).
+inline bool fogColourFromGame(const float* c2, uint32_t* out, float* bright) {
   if (!finiteFloats(c2, 3)) return false;
-  uint32_t v = 0xFF000000u;
+  float lin[3], top = 0.f;
   for (int k = 0; k < 3; ++k) {
-    float x = c2[k] < 0.f ? 0.f : (c2[k] > 1.f ? 1.f : c2[k]);
-    x = x <= 0.04045f ? x / 12.92f : std::pow((x + 0.055f) / 1.055f, 2.4f);
-    v |= (uint32_t) (x * 255.f + 0.5f) << (16 - 8 * k);
+    const float x = c2[k] < 0.f ? 0.f : (c2[k] > 1.f ? 1.f : c2[k]);
+    lin[k] = x <= 0.04045f ? x / 12.92f : std::pow((x + 0.055f) / 1.055f, 2.4f);
+    if (lin[k] > top) top = lin[k];
   }
+  uint32_t v = 0xFF000000u;
+  if (top > 0.f) for (int k = 0; k < 3; ++k) v |= (uint32_t) (lin[k] / top * 255.f + 0.5f) << (16 - 8 * k);
   *out = v;
+  *bright = top;
   return true;
+}
+// The fog's light (milestone 57): the game's fog colour goes with the game's own light, while the hook
+// sends the sun and the moon at other strengths (the moon's share, the dawn's ease, the afterglow).
+// The fog is lit in the same proportion: the light of the sky as sent over the game's own (both as
+// luminance), at most 1; 1 while the game's light is out and the hook's is not; 0 with no light sent.
+inline float fogLightShare(float sent, float game) {
+  if (!(sent > 0.f)) return 0.f;
+  if (!(game > 0.f) || sent >= game) return 1.f;
+  return sent / game;
 }
 
 inline constexpr uint32_t kDxsoRegSampler = 10u, kDxsoRegColorOut = 8u, kDxsoOpMov = 1u, kDxsoOpMad = 4u;
