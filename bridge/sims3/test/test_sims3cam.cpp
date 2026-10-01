@@ -519,6 +519,17 @@ int main() {
           CHECK(fogColourFromGame(tint, &fc, &fb) && fc == 0xFF370DFFu && fb == 1.f && fogColourFromGame(night, &fc, &fb) && (fc & 0xFFu) == 0xFFu && ((fc >> 16) & 0xFFu) == 25u && std::fabs(fb - 0.0508f) < 0.001f,
                 "the game's fog colour: a tint keeps its hue; the night's dark blue keeps it too (25 25 255 at brightness 0.051)");
           CHECK(fogColourFromGame(wild, &fc, &fb) && fc == 0xFFFF0037u && fb == 1.f && !fogColourFromGame(nanCol, &fc, &fb), "the game's fog colour: clamped to 0..1 per channel; not a number is no colour");
+          {
+            // a square's ground: 0..3 a quad of two triangles; 4, 5 skirt vertices under 0 and 1; 6 on the line through 0 and 1
+            const std::vector<int32_t> gx = { 0, 64, 0, 64, 0, 64, 128 }, gz = { 0, 0, 64, 64, 0, 0, 0 };
+            const std::vector<uint32_t> gi = { 0, 1, 2,  1, 3, 2,  0, 4, 5,  0, 5, 1,  0, 1, 6,  1, 2, 9 };
+            std::vector<uint32_t> kept; MergeStats ms;
+            mergeGroundTriangles(gx, gz, gi, kept, ms);
+            CHECK(ms.in == 6 && ms.kept == 2 && ms.skirts == 2 && ms.flat == 1 && ms.outside == 1 && kept == std::vector<uint32_t>({ 0, 1, 2, 1, 3, 2 }),
+                  "a square's shape: the ground's two triangles kept; the skirt's two, the one on a line and the one past the vertices left out");
+            CHECK(rangesOverlap((0ull << 32) | 10u, (29ull << 32) | 1u) && !rangesOverlap((0ull << 32) | 10u, (30ull << 32) | 5u) && rangesOverlap((30ull << 32) | 5u, (40ull << 32) | 2u),
+                  "a square's pieces: index ranges overlap when they share an index, not when one starts where the other ends");
+          }
           CHECK(fogLightShare(1.f, 1.f) == 1.f && std::fabs(fogLightShare(0.0032f, 0.16f) - 0.02f) < 1e-4f && fogLightShare(0.1f, 0.f) == 1.f && fogLightShare(0.3f, 0.1f) == 1.f && fogLightShare(0.f, 0.16f) == 0.f,
                 "the fog's light: by day 1, by night the moon's share (0.02), 1 while the game's light is out and the afterglow is not, never above 1, 0 with no light sent");
         }

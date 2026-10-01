@@ -1116,13 +1116,15 @@ inline const TerrainShader kTerrainShaders[] = {
 // atlas texels, which shift whenever the cascades re-centre on a moving camera -- run 87's
 // flicker during camera movement). The blended composite keeps the shader's alpha.
 inline uint8_t terrainAlphaMode(const TerrainShader* t, uint8_t kind, DWORD alphaBlendEnable) {
-  if (kind == 1) return (t && t->coverageAlpha) ? 2 : 1;
+  if (kind == 1 || kind == 3) return (t && t->coverageAlpha) ? 2 : 1;   // kind 3: a square's piece that only paints (milestone 60), opaque like a base draw
   if (t && t->lotFamily && !t->layerPass && alphaBlendEnable == 0) return 1;
   return 0;
 }
 inline const TerrainShader* findTerrainShader(uint64_t hash) { return findByHash(kTerrainShaders, hash); }
 
-// 0 not a terrain draw, 1 base terrain (baked and ray-traced), 2 layer pass (baked, hidden).
+// 0 not a terrain draw, 1 base terrain (baked and ray-traced), 2 layer pass (baked, hidden); the
+// device makes a square's opaque piece kind 3 (baked with alpha 1, hidden) once the square's
+// merged shape is traced instead (milestone 60, design B).
 inline uint8_t terrainDrawKind(const TerrainShader* t, DWORD alphaBlendEnable, bool furtherLotCopy) {
   if (!t) return 0;
   return (t->layerPass || alphaBlendEnable != 0 || furtherLotCopy) ? 2 : 1;
@@ -1138,6 +1140,37 @@ inline bool wantsUnlitPatch(uint64_t psHash) { for (uint64_t h : kUnlitPatches) 
 // milestone 40; the terrain is outdoors, so nothing attenuates it as a room does an object's
 // light). The hook's sun is this light (skyLightFrom, milestone 41).
 inline bool isLitTerrainPs(uint64_t psHash) { return wantsUnlitPatch(psHash); }
+
+// ---- the town ground's squares (milestone 60, design B) ----------------------------------
+// terrainMerge = 1: each 256-unit square of the town ground goes to the ray tracer as ONE shape,
+// the union of the game's opaque pieces without the skirts; the pieces themselves only paint.
+// 0: every opaque piece is traced as it comes, skirts and all (before milestone 60).
+inline bool terrainMerge() { static int s = -1; if (s < 0) s = hookOption("terrainMerge", 1) != 0 ? 1 : 0; return s == 1; }
+// The ground's triangles of a square: a skirt hangs 2 units down from the ground's edge, so two of
+// its corners stand on the same point of the ground (the same raw x and z: run 168 found every
+// near-vertical triangle of the town ground to be such a 2.0-unit wall); a heightfield's own
+// triangles never do. A triangle with no area seen from above (three corners on a line) is left out
+// as well, and so is one whose index falls outside the vertices. x, z: the raw SHORT4 x and z of
+// every vertex; idx: triangle lists of vertex numbers; out: the kept ones.
+struct MergeStats { uint32_t in = 0, kept = 0, skirts = 0, flat = 0, outside = 0; };
+inline void mergeGroundTriangles(const std::vector<int32_t>& x, const std::vector<int32_t>& z, const std::vector<uint32_t>& idx, std::vector<uint32_t>& out, MergeStats& st) {
+  const size_t n = x.size();
+  for (size_t t = 0; t + 2 < idx.size(); t += 3) {
+    const uint32_t a = idx[t], b = idx[t + 1], c = idx[t + 2];
+    ++st.in;
+    if (a >= n || b >= n || c >= n) { ++st.outside; continue; }
+    if ((x[a] == x[b] && z[a] == z[b]) || (x[b] == x[c] && z[b] == z[c]) || (x[c] == x[a] && z[c] == z[a])) { ++st.skirts; continue; }
+    const int64_t area2 = (int64_t) (x[b] - x[a]) * (z[c] - z[a]) - (int64_t) (z[b] - z[a]) * (x[c] - x[a]);
+    if (area2 == 0) { ++st.flat; continue; }
+    out.push_back(a); out.push_back(b); out.push_back(c);
+    ++st.kept;
+  }
+}
+// Two pieces' index ranges (start << 32 | triangle count) share indices.
+inline bool rangesOverlap(uint64_t r, uint64_t q) {
+  const uint64_t a0 = r >> 32, a1 = a0 + 3ull * (uint32_t) r, b0 = q >> 32, b1 = b0 + 3ull * (uint32_t) q;
+  return a0 < b1 && b0 < a1;
+}
 // ---- the game's own light in its memory (milestone 49) ----------------------------------
 // The game keeps the light it computes in a record of eight floats: the direction toward the
 // light, 0, the colour, 1 (run 161's search: a record that kept moving with the clock in the

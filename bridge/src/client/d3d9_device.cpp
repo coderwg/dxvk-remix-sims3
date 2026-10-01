@@ -285,6 +285,20 @@ namespace {
     DWORD atSaved[3] = {}; bool atOurs = false;    // the game's ALPHATESTENABLE / ALPHAFUNC / ALPHAREF while the coverage test is set
     IDirect3DSurface9* rt0 = nullptr;               // render target 0 as the game set it (pointer only, no reference held)
     uint32_t terrainBaseDraws = 0, terrainLayerDraws = 0, terrainLotCopyDraws = 0, terrainNoVariant = 0, terrainLogged = 0, psVariantsMade = 0, psVariantsUnlit = 0, psVariantsAlpha = 0, psVariantLogged = 0, samplerCopies = 0, srgbOffs = 0;
+    // the town ground's squares (milestone 60, design B): per square (one vertex buffer), the
+    // opaque pieces the merged shape is made of and the shape's own index buffer
+    struct Square {
+      IDirect3DVertexBuffer9* vb = nullptr; uint32_t vbId = 0, vbVersion = 0; UINT offset = 0, stride = 0; uint16_t posOffset = 0;
+      IDirect3DIndexBuffer9* ib = nullptr; uint32_t ibId = 0, ibVersion = 0; bool ib32 = false; INT base = 0;
+      std::vector<uint64_t> ranges, frameRanges;   // the shape's pieces (sorted) and this frame's: start << 32 | triangle count
+      uint32_t frameSeen = 0xFFFFFFFFu, mergedFrame = 0xFFFFFFFFu, lastFrame = 0;
+      uint32_t builtVbVersion = 0, builtIbId = 0, builtIbVersion = 0; INT builtBase = 0;
+      IDirect3DIndexBuffer9* merged = nullptr; uint32_t mergedPrims = 0, minIndex = 0, numVertices = 0, vertexCount = 0; bool ready = false;
+      uint32_t kept = 0, skirts = 0, flat = 0, outside = 0;
+    };
+    std::vector<Square> squares; int mergePending = -1;
+    uint32_t terrainPaintDraws = 0, mergedDraws = 0, mergePaintPieces = 0, mergeFallbackPieces = 0, mergeBuilds = 0, mergeBuildFailed = 0, mergeLogged = 0, mergeEvicted = 0, mergeSkipped = 0;
+    bool drawIndexed = false; D3DPRIMITIVETYPE drawType = D3DPT_TRIANGLELIST; INT drawBase = 0; UINT drawStart = 0, drawPrims = 0;   // the indexed draw call's arguments, for the squares
     // Camera variety within a frame (run 69: the far view broken at a horizon tilt): the frame's
     // first main camera, and every main camera upload that differs from it in lens or position,
     // with the vertex shader it came with.
@@ -311,6 +325,7 @@ namespace {
   std::atomic<uint32_t> g_sims3LightHitCount { 0 }, g_sims3LightHitOverflow { 0 }, g_sims3LightScanRegions { 0 }, g_sims3LightScanMegabytes { 0 }, g_sims3LightSkippedMapped { 0 };
 
   template<typename Dev> void sims3TerrainBlockEnd(Sims3Hook& h, Dev* dev);   // defined with the terrain path (milestone 18g)
+  template<typename Dev> uint8_t sims3SquarePiece(Sims3Hook& h, Dev* dev);    // defined with the squares (milestone 60)
 
   // The hook's facts about a bound object, from the object (milestone 17w; defined after the
   // vertex shader and declaration headers are included). The setters call them, and so does
@@ -832,7 +847,7 @@ namespace {
     // changes each frame), and a hidden or blended draw landing on the lot's instance flickered or
     // blanked the whole lot (runs 85-91).
     const bool lotFamily = h.vsTerrain && h.vsTerrain->lotFamily;
-    const int markerIdx = composite ? 2 : kind == 2 ? 1 : 0;
+    const int markerIdx = composite ? 2 : (kind == 2 || kind == 3) ? 1 : 0;   // kind 3: a square's piece that only paints (milestone 60), hidden
     // textures: the game's stage 0 moves to the free stage (with stage 0's sampler states), the marker takes stage 0
     h.freeStageRestore = h.boundTex[freeStage]; if (h.freeStageRestore) h.freeStageRestore->AddRef();
     h.terrainFreeStage = freeStage;
@@ -892,10 +907,10 @@ namespace {
     // the pixel shader variant; the game's shader held until sims3EndDraw
     h.psRestore = h.psBound; h.psRestore->AddRef();
     h.swappingPs = true; dev->SetPixelShader(variant); h.swappingPs = false;
-    if (kind == 2) ++h.terrainLayerDraws; else ++h.terrainBaseDraws;
+    if (kind == 2) ++h.terrainLayerDraws; else if (kind == 3) ++h.terrainPaintDraws; else ++h.terrainBaseDraws;
     if (h.terrainLogged < 8) {
       ++h.terrainLogged; char fb[16]; char msg[320];
-      snprintf(msg, sizeof msg, "Sims 3 camera hook: terrain draw for the baker at frame %u -> VS %016llx PS %016llx, %s, game's stage 0 (%s %ux%u) read from s%d, marker at stage 0%s", h.frames + 1, (unsigned long long) h.vsHash, (unsigned long long) h.psHash, kind == 2 ? (h.splitDraw ? (h.lotFurtherCopy ? "lot chunk copy (hidden, two halves)" : "lot re-submission (hidden, two halves)") : "layer pass (hidden)") : "base terrain", (h.boundKind[0] & 0x7F) == 2 ? "CUBE" : sims3FormatName(h.boundFmt[0], fb, sizeof fb), (unsigned) h.boundW[0], (unsigned) h.boundH[0], freeStage, h.markersConfigSent ? "" : " (markers untagged: nothing is baked until they are tagged in the menu)");
+      snprintf(msg, sizeof msg, "Sims 3 camera hook: terrain draw for the baker at frame %u -> VS %016llx PS %016llx, %s, game's stage 0 (%s %ux%u) read from s%d, marker at stage 0%s", h.frames + 1, (unsigned long long) h.vsHash, (unsigned long long) h.psHash, kind == 2 ? (h.splitDraw ? (h.lotFurtherCopy ? "lot chunk copy (hidden, two halves)" : "lot re-submission (hidden, two halves)") : "layer pass (hidden)") : kind == 3 ? "square piece (paints only, hidden)" : (h.reissue ? "a square's merged shape" : "base terrain"), (h.boundKind[0] & 0x7F) == 2 ? "CUBE" : sims3FormatName(h.boundFmt[0], fb, sizeof fb), (unsigned) h.boundW[0], (unsigned) h.boundH[0], freeStage, h.markersConfigSent ? "" : " (markers untagged: nothing is baked until they are tagged in the menu)");
       Logger::info(msg);
     }
     return true;
@@ -1100,6 +1115,8 @@ namespace {
   // released, the bound-shader and bound-texture facts are forgotten (the device state is back to
   // defaults; the game's shaders themselves survive a Reset), and the runtime is back to default state.
   inline void sims3OnReset(Sims3Hook& h) {
+    for (auto& s : h.squares) if (s.merged) s.merged->Release();   // the squares' merged shapes (milestone 60)
+    h.squares.clear(); h.mergePending = -1;
     for (uint32_t i = 0; i < h.wallCacheCount; ++i) sims3ReleaseWallEntry(h.wallCache[i]);
     h.wallCacheCount = 0; for (auto& m : h.masks) m = Sims3Hook::MaskEntry(); h.maskNext = 0;
     for (auto& e : h.bufHashes) e = Sims3Hook::HashEntry(); h.bufHashNext = 0;
@@ -1194,6 +1211,10 @@ namespace {
   template<typename Dev>
   bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
     if (!h.reissue) ++h.frameDraws;
+    if (h.mergePending >= 0 && !h.reissue) {   // a square's shape that was not sent after its piece (the piece took another way out): next piece then
+      if ((size_t) h.mergePending < h.squares.size()) h.squares[(size_t) h.mergePending].mergedFrame = 0xFFFFFFFFu;
+      h.mergePending = -1; ++h.mergeSkipped;
+    }
     h.lastKind = 0;
     const bool want = sims3ApplyForDraw(h, dev, rs);
     h.drawCaptured = want;
@@ -1212,7 +1233,10 @@ namespace {
     // stage 0 and the game's pixel shader variant; no albedo stage, no vertex shader variant
     uint8_t terrainKind = sims3cam::terrainEnabled() ? sims3cam::terrainDrawKind(h.vsTerrain, rs[D3DRS_ALPHABLENDENABLE], h.lotFurtherCopy) : (uint8_t) 0;
     const bool lotFamilyDraw = terrainKind != 0 && h.vsTerrain && h.vsTerrain->lotFamily;
-    if (terrainKind != 0 && h.reissue) terrainKind = h.reissueKind ? h.reissueKind : 2;   // the hook's own re-issue (the composite's second pass): hidden
+    // the town ground's squares (milestone 60, design B): an opaque piece of a square whose merged
+    // shape is ready only paints (3); the shape follows it (sims3MergedSquareDraw)
+    if (terrainKind == 1 && !h.reissue && !lotFamilyDraw && sims3cam::terrainMerge()) terrainKind = sims3SquarePiece(h, dev);
+    if (terrainKind != 0 && h.reissue) terrainKind = h.reissueKind ? h.reissueKind : 2;   // the hook's own re-issue: the composite's second pass (hidden), a square's merged shape (1)
     h.lastKind = terrainKind;
     h.compositeSecond = false;
     // a lot's ground goes out in place (milestone 19): nothing overwrites its paint in the atlas (run 119's paint test)
@@ -1362,6 +1386,182 @@ namespace {
 #define GET_PRES_PARAM() (m_pSwapchain->getPresentationParameters())
 
 namespace {
+  // ---- the town ground's squares (milestone 60, design B) -------------------------------------
+  // The game draws each 256-unit square of the town ground from one vertex buffer, in several
+  // pieces -- one per paint-layer mix, the unlit world shader dfaf82cf, or the lit lot-area shader
+  // 55c99586 near lots -- that tile the square exactly, and it hangs 2-unit skirts from the
+  // square's and the lots' edges (run 168's census). The ray tracer gets each square's SHAPE as one
+  // draw of the hook's own: the union of its opaque pieces without the skirts, sent right after the
+  // square's first piece of a frame with the state that piece set up, as a visible terrain draw;
+  // the game's pieces only PAINT (kind 3: baked with alpha 1, hidden). The shape's bake paints the
+  // first piece's paint over the whole square and the following pieces cover their parts with
+  // their own (the first piece's part gets the same paint twice: the same shader variant, and both
+  // markers' red is 0x80). A piece that is not in the shape yet (a new square, a re-cut piece) is
+  // traced as before for that frame; the shape is rebuilt at Present.
+  template<typename Dev>
+  uint8_t sims3SquarePiece(Sims3Hook& h, Dev* dev) {
+    if (!h.drawIndexed || h.drawType != D3DPT_TRIANGLELIST || h.drawPrims == 0) return 1;
+    IDirect3DVertexBuffer9* vb = nullptr; UINT off = 0, stride = 0;
+    if (FAILED(dev->GetStreamSource(0, &vb, &off, &stride)) || !vb) return 1;
+    vb->Release();   // the device state holds it
+    IDirect3DIndexBuffer9* ib = nullptr;
+    if (FAILED(dev->GetIndices(&ib)) || !ib) return 1;
+    ib->Release();
+    auto* lvb = bridge_cast<Direct3DVertexBuffer9_LSS*>(vb);
+    auto* lib = bridge_cast<Direct3DIndexBuffer9_LSS*>(ib);
+    if (!lvb || !lib || stride == 0) return 1;
+    const uint32_t vbId = (uint32_t) lvb->getId();
+    int si = -1;
+    for (size_t i = 0; i < h.squares.size(); ++i) {
+      const Sims3Hook::Square& q = h.squares[i];
+      if (q.vb == vb && q.vbId == vbId && q.offset == off && q.stride == stride) { si = (int) i; break; }
+    }
+    if (si < 0) {
+      if (h.squares.size() >= 1024u) return 1;   // the town has far fewer squares
+      // the position: SHORT4 x, height, z, morph (run 168); any other layout is not merged
+      IDirect3DVertexDeclaration9* decl = nullptr; int posOffset = -1;
+      if (SUCCEEDED(dev->GetVertexDeclaration(&decl)) && decl) {
+        auto* ld = bridge_cast<Direct3DVertexDeclaration9_LSS*>(decl);
+        const D3DVERTEXELEMENT9* e = ld ? ld->sims3Elements() : nullptr;
+        for (int i = 0; e && i < 32 && e[i].Stream != 0xFF; ++i)
+          if (e[i].Stream == 0 && e[i].Usage == D3DDECLUSAGE_POSITION && e[i].UsageIndex == 0 && e[i].Type == D3DDECLTYPE_SHORT4) posOffset = e[i].Offset;
+        decl->Release();
+      }
+      if (posOffset < 0 || (UINT) posOffset + 8u > stride) return 1;
+      h.squares.emplace_back();
+      si = (int) h.squares.size() - 1;
+      Sims3Hook::Square& n = h.squares.back();
+      n.vb = vb; n.vbId = vbId; n.offset = off; n.stride = stride; n.posOffset = (uint16_t) posOffset;
+    }
+    Sims3Hook::Square& s = h.squares[(size_t) si];
+    if (s.frameSeen != h.frames) { s.frameSeen = h.frames; s.frameRanges.clear(); }
+    s.lastFrame = h.frames;
+    s.vbVersion = lvb->sims3Version; s.ib = ib; s.ibId = (uint32_t) lib->getId(); s.ibVersion = lib->sims3Version; s.ib32 = lib->getDesc().Format == D3DFMT_INDEX32; s.base = h.drawBase;
+    const uint64_t range = ((uint64_t) h.drawStart << 32) | (uint64_t) h.drawPrims;
+    s.frameRanges.push_back(range);
+    const bool inShape = s.ready && s.merged && s.builtVbVersion == s.vbVersion && s.builtIbId == s.ibId && s.builtIbVersion == s.ibVersion && s.builtBase == s.base &&
+                         std::binary_search(s.ranges.begin(), s.ranges.end(), range);
+    if (!inShape) { ++h.mergeFallbackPieces; return 1; }
+    ++h.mergePaintPieces;
+    if (s.mergedFrame != h.frames) { s.mergedFrame = h.frames; h.mergePending = si; }
+    return 3;
+  }
+  template<typename Dev>
+  IDirect3DIndexBuffer9* sims3MakeIndexBufferAny(Dev* dev, const std::vector<uint32_t>& indices, uint32_t maxIndex) {
+    IDirect3DIndexBuffer9* ib = nullptr;
+    const bool wide = maxIndex >= 0xFFFFu;
+    const size_t bytes = indices.size() * (wide ? 4u : 2u);
+    if (indices.empty() || FAILED(dev->CreateIndexBuffer((UINT) bytes, D3DUSAGE_WRITEONLY, wide ? D3DFMT_INDEX32 : D3DFMT_INDEX16, D3DPOOL_DEFAULT, &ib, nullptr)) || !ib) return nullptr;
+    void* p = nullptr;
+    if (FAILED(ib->Lock(0, 0, &p, 0)) || !p) { ib->Release(); return nullptr; }
+    if (wide) memcpy(p, indices.data(), bytes);
+    else { uint16_t* q = (uint16_t*) p; for (size_t i = 0; i < indices.size(); ++i) q[i] = (uint16_t) indices[i]; }
+    ib->Unlock();
+    return ib;
+  }
+  // The square's shape from the game's buffers as they are now (the square was drawn this frame).
+  template<typename Dev>
+  void sims3SquareBuild(Sims3Hook& h, Dev* dev, Sims3Hook::Square& s, const std::vector<uint64_t>& ranges) {
+    ++h.mergeBuilds;
+    if (s.merged) { s.merged->Release(); s.merged = nullptr; }
+    s.ready = false;
+    auto* lvb = bridge_cast<Direct3DVertexBuffer9_LSS*>(s.vb);
+    auto* lib = bridge_cast<Direct3DIndexBuffer9_LSS*>(s.ib);
+    const uint8_t* vd = lvb ? lvb->sims3Data() : nullptr;
+    const uint8_t* id = lib ? lib->sims3Data() : nullptr;
+    if (!vd || !id) { ++h.mergeBuildFailed; return; }
+    const uint32_t vbSize = lvb->sims3Size(), ibSize = lib->sims3Size();
+    const uint32_t count = vbSize > s.offset ? (vbSize - s.offset) / s.stride : 0;
+    std::vector<int32_t> x(count), z(count);
+    for (uint32_t v = 0; v < count; ++v) {
+      int16_t c[4]; memcpy(c, vd + s.offset + (size_t) v * s.stride + s.posOffset, sizeof c);
+      x[v] = c[0]; z[v] = c[2];
+    }
+    const uint32_t isz = s.ib32 ? 4u : 2u, ibCount = ibSize / isz;
+    std::vector<uint32_t> idx;
+    for (uint64_t r : ranges) {
+      const uint32_t start = (uint32_t) (r >> 32);
+      uint32_t n = 3u * (uint32_t) r;
+      if (start >= ibCount) continue;
+      if (start + n > ibCount) n = (ibCount - start) / 3u * 3u;
+      for (uint32_t k = 0; k < n; ++k) {
+        uint32_t i;
+        if (s.ib32) { uint32_t v; memcpy(&v, id + (size_t) (start + k) * 4u, 4); i = v; } else { uint16_t v; memcpy(&v, id + (size_t) (start + k) * 2u, 2); i = v; }
+        const int64_t vtx = (int64_t) s.base + (int64_t) i;
+        idx.push_back(vtx < 0 ? 0xFFFFFFFFu : (uint32_t) vtx);   // a vertex before the buffer: left out as outside
+      }
+    }
+    std::vector<uint32_t> out; sims3cam::MergeStats st;
+    sims3cam::mergeGroundTriangles(x, z, idx, out, st);
+    s.kept = st.kept; s.skirts = st.skirts; s.flat = st.flat; s.outside = st.outside; s.vertexCount = count;
+    s.ranges = ranges; s.builtVbVersion = s.vbVersion; s.builtIbId = s.ibId; s.builtIbVersion = s.ibVersion; s.builtBase = s.base;
+    if (out.empty()) { ++h.mergeBuildFailed; return; }
+    uint32_t lo = 0xFFFFFFFFu, hi = 0;
+    for (uint32_t v : out) { if (v < lo) lo = v; if (v > hi) hi = v; }
+    s.merged = sims3MakeIndexBufferAny(dev, out, hi);
+    if (!s.merged) { ++h.mergeBuildFailed; return; }
+    s.mergedPrims = (uint32_t) (out.size() / 3); s.minIndex = lo; s.numVertices = hi - lo + 1; s.ready = true;
+    if (h.mergeLogged < 60u) {
+      ++h.mergeLogged; char msg[320];
+      snprintf(msg, sizeof msg, "Sims 3 camera hook: terrain square merged at frame %u -> vertex buffer %u (%u vertices), %u pieces: %u triangles kept, %u skirt and %u flat ones left out%s",
+               h.frames, s.vbId, count, (unsigned) ranges.size(), st.kept, st.skirts, st.flat, st.outside ? " (and some outside the vertices)" : "");
+      Logger::info(msg);
+    }
+  }
+  // At Present: each square drawn this frame keeps its shape when the frame's pieces are in it;
+  // a new piece joins the shape unless it overlaps one already there (the pieces were re-cut:
+  // the frame's own pieces then); a written buffer means the frame's pieces from scratch.
+  template<typename Dev>
+  void sims3SquaresFrameEnd(Sims3Hook& h, Dev* dev) {
+    h.mergePending = -1;
+    const uint32_t drawn = h.frames - 1;   // Present has counted the frame already: its draws saw frames - 1
+    for (auto& s : h.squares) {
+      if (s.frameSeen != drawn || s.frameRanges.empty()) continue;
+      std::sort(s.frameRanges.begin(), s.frameRanges.end());
+      s.frameRanges.erase(std::unique(s.frameRanges.begin(), s.frameRanges.end()), s.frameRanges.end());
+      const bool sameBuffers = s.builtVbVersion == s.vbVersion && s.builtIbId == s.ibId && s.builtIbVersion == s.ibVersion && s.builtBase == s.base && (s.ready || !s.ranges.empty());
+      std::vector<uint64_t> shape;
+      if (sameBuffers) {
+        shape = s.ranges;
+        bool recut = false;
+        for (uint64_t r : s.frameRanges) {
+          if (std::binary_search(s.ranges.begin(), s.ranges.end(), r)) continue;
+          for (uint64_t q : shape) if (sims3cam::rangesOverlap(r, q)) { recut = true; break; }
+          if (recut) break;
+          shape.push_back(r);
+        }
+        if (recut) shape = s.frameRanges; else std::sort(shape.begin(), shape.end());
+      } else {
+        shape = s.frameRanges;
+      }
+      if (!sameBuffers || shape != s.ranges) sims3SquareBuild(h, dev, s, shape);
+    }
+    for (size_t i = 0; i < h.squares.size();) {   // a square not drawn for a minute: its shape released
+      if (h.frames - h.squares[i].lastFrame > 3600u) { if (h.squares[i].merged) h.squares[i].merged->Release(); h.squares.erase(h.squares.begin() + (ptrdiff_t) i); ++h.mergeEvicted; }
+      else ++i;
+    }
+  }
+  // Right after a square's first piece of the frame: the square's shape, through the ordinary draw
+  // hooks as the hook's own re-issue (kind 1), from the piece's stream and state with the shape's
+  // index buffer; the game's index buffer back afterwards.
+  template<typename Dev>
+  void sims3MergedSquareDraw(Sims3Hook& h, Dev* dev) {
+    const int i = h.mergePending; h.mergePending = -1;
+    if (i < 0 || (size_t) i >= h.squares.size()) return;
+    Sims3Hook::Square& s = h.squares[(size_t) i];
+    if (!s.ready || !s.merged) return;
+    IDirect3DVertexBuffer9* vb = nullptr; UINT off = 0, stride = 0;
+    if (FAILED(dev->GetStreamSource(0, &vb, &off, &stride)) || vb != s.vb || off != s.offset || stride != s.stride) { if (vb) vb->Release(); ++h.mergeSkipped; return; }
+    vb->Release();
+    IDirect3DIndexBuffer9* game = nullptr; dev->GetIndices(&game);
+    dev->SetIndices(s.merged);
+    h.reissue = true; h.reissueKind = 1;
+    dev->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, s.minIndex, s.numVertices, 0, s.mergedPrims);
+    h.reissue = false; h.reissueKind = 0;
+    dev->SetIndices(game); if (game) game->Release();
+    ++h.mergedDraws;
+  }
+
   // ---- the terrain census (milestone 59, a diagnostic: removed once it has answered) ----------
   // For the one frame after each of the first eight marks: a line for every draw -- what the game
   // drew and what the hook made of it -- and, for every draw of a terrain vertex shader, a file with
@@ -1509,7 +1709,7 @@ namespace {
   inline void sims3CensusAfter(Sims3Hook& h) {
     if (!h.censusPending) return;
     const char what = h.reissue ? 'R' : h.drawDropped ? 'D' : h.drawCaptured ? 'C' : 'U';
-    const char* kind = !h.drawCaptured ? "" : (h.lastKind == 1 ? " kind 1 (terrain, ray-traced)" : (h.lastKind == 2 ? " kind 2 (terrain, baked and hidden)" : ""));
+    const char* kind = !h.drawCaptured ? "" : (h.lastKind == 1 ? " kind 1 (terrain, ray-traced)" : (h.lastKind == 2 ? " kind 2 (terrain, baked and hidden)" : (h.lastKind == 3 ? " kind 3 (terrain piece, paints only)" : "")));
     char t[160];
     snprintf(t, sizeof t, "hook: %c%s, camera %d%s", what, kind, (int) h.held.kind, h.camMirrored ? " mirrored" : "");
     sims3CensusFlush(h, t);
@@ -2072,6 +2272,14 @@ static void sims3LogStats(bool withTable) {
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   terrain: %u base draws and %u layer passes (%u lot chunk copies) for the baker, %u without a variant; %u pixel shader variants (%u unlit, %u with alpha forced to 1), %u sampler states copied, sRGB sampling turned off %u times, both held across %u terrain blocks (%u holds cancelled by the game, %u uncaptured draws let through); markers %s; %u lot chunk copies dropped",
            h.terrainBaseDraws, h.terrainLayerDraws, h.terrainLotCopyDraws, h.terrainNoVariant, h.psVariantsMade, h.psVariantsUnlit, h.psVariantsAlpha, h.samplerCopies, h.srgbOffs, h.tblockFlushes, h.tblockCancelled, h.tblockKept, h.markersConfigSent ? "tagged in rtx.conf" : (h.marker[0] ? "made, NOT tagged in rtx.conf" : "not made yet"), h.lotCopyDrops);
   Logger::info(msg);
+  {
+    uint32_t ready = 0; uint64_t kept = 0, skirts = 0, flat = 0;
+    for (const auto& s : h.squares) if (s.ready) { ++ready; kept += s.kept; skirts += s.skirts; flat += s.flat; }
+    snprintf(msg, sizeof msg, "Sims 3 camera hook:   terrain squares (design B): %s; %u squares known, %u with a merged shape (%llu triangles kept, %llu skirt and %llu flat ones left out); %u merged draws, %u pieces painting only, %u pieces traced as before (no shape yet), %u shapes built (%u failed), %u skipped, %u released",
+             sims3cam::terrainMerge() ? "on" : "off (terrainMerge 0)", (unsigned) h.squares.size(), ready, (unsigned long long) kept, (unsigned long long) skirts, (unsigned long long) flat,
+             h.mergedDraws, h.mergePaintPieces, h.mergeFallbackPieces, h.mergeBuilds, h.mergeBuildFailed, h.mergeSkipped, h.mergeEvicted);
+    Logger::info(msg);
+  }
   MEMORYSTATUSEX ms = {}; ms.dwLength = sizeof ms; GlobalMemoryStatusEx(&ms);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   lot paint: %u composite second passes, %u lot re-submissions split in two; %u changes seen on the lot paint textures; client copies of surfaces %u MB, address space in use %u of %u MB",
            h.compositePasses, h.splitDraws, h.lotPaintChanges, (unsigned) (Direct3DSurface9_LSS::sims3ShadowBytes() >> 20), (unsigned) ((ms.ullTotalVirtual - ms.ullAvailVirtual) >> 20), (unsigned) (ms.ullTotalVirtual >> 20));
@@ -2155,6 +2363,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
     }
     h.frameCamSet = false; h.frameMainUploads = 0; h.frameAltUploads = 0; h.frameAltCount = 0;
     h.lotCopies.clear();   // the lot meshes drawn this frame (milestone 16)
+    sims3SquaresFrameEnd(h, this);   // the squares' shapes for the next frame (milestone 60)
     sims3TerrainBlockEnd(h, this);   // the frame is over: the game's sampler states back (milestone 18g)
     {
       char t[80];
@@ -4759,6 +4968,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawPrimitive(D3DPRIMITIVETYPE Primit
   LogFunctionCall();
   const bool census_ = sims3cam::enabled() && !g_sims3.ourDraw && g_sims3.markDump == 2 && g_sims3.censusMark >= 1u && g_sims3.censusMark <= 8u;   // the terrain census (milestone 59)
   if (census_) sims3CensusBefore(g_sims3, m_state, "DP", PrimitiveType, 0, 0, 0, StartVertex, PrimitiveCount, false);
+  if (sims3cam::enabled()) g_sims3.drawIndexed = false;
   SIMS3_BEGIN_DRAW();
   if (census_) sims3CensusAfter(g_sims3);
   UID currentUID = 0;
@@ -4783,6 +4993,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
   LogFunctionCall();
   const bool census_ = sims3cam::enabled() && !g_sims3.ourDraw && g_sims3.markDump == 2 && g_sims3.censusMark >= 1u && g_sims3.censusMark <= 8u;   // the terrain census (milestone 59)
   if (census_) sims3CensusBefore(g_sims3, m_state, "DIP", Type, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount, true);
+  if (sims3cam::enabled()) { g_sims3.drawIndexed = true; g_sims3.drawType = Type; g_sims3.drawBase = BaseVertexIndex; g_sims3.drawStart = startIndex; g_sims3.drawPrims = primCount; }   // for the squares (milestone 60)
   SIMS3_BEGIN_DRAW();
   if (census_) sims3CensusAfter(g_sims3);
   // The Sims 3 camera hook: the directional light a lit terrain shader is handed for this draw, c0
@@ -4980,8 +5191,9 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
       }
     }
   }
-  if (sims3cam::enabled() && g_sims3.compositeSecond) { SIMS3_END_DRAW(); sims3CompositeSecondPass(g_sims3, this, true, Type, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount); } else
-  SIMS3_END_DRAW();
+  if (sims3cam::enabled() && g_sims3.compositeSecond) { SIMS3_END_DRAW(); sims3CompositeSecondPass(g_sims3, this, true, Type, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount); }
+  else if (sims3cam::enabled() && g_sims3.mergePending >= 0 && !g_sims3.reissue) { SIMS3_END_DRAW(); sims3MergedSquareDraw(g_sims3, this); }   // the square's merged shape (milestone 60)
+  else SIMS3_END_DRAW();
   WAIT_FOR_OPTIONAL_SERVER_RESPONSE("DrawIndexedPrimitive()", D3DERR_INVALIDCALL, currentUID);
 }
 
@@ -4989,6 +5201,7 @@ template<bool EnableSync>
 HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawPrimitiveUP(D3DPRIMITIVETYPE PrimitiveType, UINT PrimitiveCount, CONST void* pVertexStreamZeroData, UINT VertexStreamZeroStride) {
   ZoneScoped;
   LogFunctionCall();
+  if (sims3cam::enabled()) g_sims3.drawIndexed = false;
   SIMS3_BEGIN_DRAW();
   UID currentUID = 0;
   {
@@ -5010,6 +5223,7 @@ template<bool EnableSync>
 HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitiveUP(D3DPRIMITIVETYPE PrimitiveType, UINT MinIndex, UINT NumVertices, UINT PrimitiveCount, CONST void* pIndexData, D3DFORMAT IndexDataFormat, CONST void* pVertexStreamZeroData, UINT VertexStreamZeroStride) {
   ZoneScoped;
   LogFunctionCall();
+  if (sims3cam::enabled()) g_sims3.drawIndexed = false;
   SIMS3_BEGIN_DRAW();
   UID currentUID = 0;
   {
