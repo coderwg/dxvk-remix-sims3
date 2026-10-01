@@ -1133,25 +1133,31 @@ inline bool wantsUnlitPatch(uint64_t psHash) { for (uint64_t h : kUnlitPatches) 
 // milestone 40; the terrain is outdoors, so nothing attenuates it as a room does an object's
 // light). The hook's sun is this light (sunFromTerrain, milestone 41).
 inline bool isLitTerrainPs(uint64_t psHash) { return wantsUnlitPatch(psHash); }
-// The search for the game's own copy of its light (milestone 48, a diagnostic): three floats in
-// memory match a direction when each is within tol of it (+1), or of its opposite (-1); 0 otherwise.
+// ---- the game's own light in its memory (milestone 49) ----------------------------------
+// The game keeps the light it computes in a record of eight floats: the direction toward the
+// light, 0, the colour, 1 (run 161's search: a record that kept moving with the clock in the
+// neighbourhood view, where no lit terrain is drawn, and agreed with the terrain to five
+// decimals on the lot). The hook finds it by what the terrain is handed (lightRecord) and reads it
+// wherever no lit terrain is drawn.
 // (Not-a-number and infinite floats are told by their bits: the compiler may assume none exist.)
 inline bool finiteFloats(const float* q, int n) {
   for (int k = 0; k < n; ++k) { uint32_t u; std::memcpy(&u, q + k, 4); if ((u & 0x7f800000u) == 0x7f800000u) return false; }
   return true;
 }
+inline bool floatBits(const float* q, uint32_t bits) { uint32_t u; std::memcpy(&u, q, 4); return u == bits; }
+// Three floats within tol of a direction (+1), or of its opposite (-1); 0 otherwise.
 inline int tripletMatch(const float* q, const float* t, float tol) {
   if (!finiteFloats(q, 3)) return 0;
   if (std::fabs(q[0] - t[0]) < tol && std::fabs(q[1] - t[1]) < tol && std::fabs(q[2] - t[2]) < tol) return 1;
   if (std::fabs(q[0] + t[0]) < tol && std::fabs(q[1] + t[1]) < tol && std::fabs(q[2] + t[2]) < tol) return -1;
   return 0;
 }
-// How far three floats, taken with their sign, stand from a direction: the largest difference.
-inline float tripletDeviation(const float* v, const float* t, int sign) {
-  if (!finiteFloats(v, 3)) return 1e30f;
-  float d = 0.f;
-  for (int q = 0; q < 3; ++q) { const float e = std::fabs((float) sign * v[q] - t[q]); if (!(e <= d)) d = e; }
-  return d;
+// Eight floats are the game's light record holding this direction and colour (each within tol).
+inline bool lightRecord(const float* q, const float* dir, const float* col, float tol) {
+  if (!finiteFloats(q, 8) || !floatBits(q + 3, 0u) || !floatBits(q + 7, 0x3f800000u)) return false;
+  if (tripletMatch(q, dir, tol) != 1) return false;
+  for (int k = 0; k < 3; ++k) if (!(std::fabs(q[4 + k] - col[k]) < tol)) return false;
+  return true;
 }
 
 inline constexpr uint32_t kDxsoRegSampler = 10u, kDxsoRegColorOut = 8u, kDxsoOpMov = 1u, kDxsoOpMad = 4u;

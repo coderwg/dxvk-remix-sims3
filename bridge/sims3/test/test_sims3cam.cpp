@@ -480,11 +480,20 @@ int main() {
         CHECK(!clockFromRecord(frameRec).known, "clock: without sunrise and sunset it is not a clock");
         CHECK(isLitTerrainPs(0x17eabad58f650687ull) && isLitTerrainPs(0xd63bf505ec4a44a0ull) && !isLitTerrainPs(0x028ce2dde691b739ull) && !isLitTerrainPs(0x99ee53ff6ef1b0b6ull), "terrain light: the four lit terrain shaders carry it; the unlit world terrain and the composite do not");
         {
-          const float dir[3] = { 0.397f, 0.868f, 0.297f }, same[3] = { 0.401f, 0.86f, 0.30f }, opposite[3] = { -0.39f, -0.87f, -0.3f }, other[3] = { 0.397f, 0.868f, 0.5f };
-          CHECK(tripletMatch(same, dir, 0.02f) == 1 && tripletMatch(opposite, dir, 0.02f) == -1 && tripletMatch(other, dir, 0.02f) == 0, "light search: three floats near the direction match, near its opposite match with sign -1, others not");
-          const float nan3[3] = { std::nanf(""), 0.868f, 0.297f };
-          CHECK(tripletMatch(nan3, dir, 0.02f) == 0 && !(tripletDeviation(nan3, dir, 1) < 1.f), "light search: a float that is not a number matches nothing and counts as far off");
-          CHECK(nearf(tripletDeviation(same, dir, 1), 0.008f) && nearf(tripletDeviation(opposite, dir, -1), 0.007f), "light search: the deviation is the largest difference, the sign applied");
+          // the game's light record as run 161 found it: direction toward the light, 0, colour, 1
+          const float dir[3] = { -0.5065f, 0.8159f, 0.2790f }, col[3] = { 0.1373f, 0.1373f, 0.4674f };
+          const float rec[8] = { -0.5065f, 0.8159f, 0.2790f, 0.f, 0.1373f, 0.1373f, 0.4674f, 1.f };
+          float noZero[8], noOne[8], otherCol[8], opposite[8], moved[8];
+          std::memcpy(noZero, rec, sizeof rec); noZero[3] = 1e-7f;
+          std::memcpy(noOne, rec, sizeof rec); noOne[7] = 0.999f;
+          std::memcpy(otherCol, rec, sizeof rec); otherCol[6] = 0.6f;
+          std::memcpy(opposite, rec, sizeof rec); for (int q = 0; q < 3; ++q) opposite[q] = -rec[q];
+          std::memcpy(moved, rec, sizeof rec); moved[0] += 0.01f;
+          CHECK(lightRecord(rec, dir, col, 0.001f) && !lightRecord(noZero, dir, col, 0.001f) && !lightRecord(noOne, dir, col, 0.001f) && !lightRecord(otherCol, dir, col, 0.001f) && !lightRecord(opposite, dir, col, 0.02f),
+                "the game's light record: the direction, exactly 0, the colour, exactly 1; another colour or the opposite direction is not it");
+          CHECK(!lightRecord(moved, dir, col, 0.001f) && lightRecord(moved, dir, col, 0.02f), "the game's light record: a light that moved while the search ran is found within 0.02, and confirmed only within 0.001");
+          float nan8[8]; std::memcpy(nan8, rec, sizeof rec); nan8[5] = std::nanf("");
+          CHECK(!lightRecord(nan8, dir, col, 0.02f) && tripletMatch(opposite, dir, 0.02f) == -1, "the game's light record: a float that is not a number is no record; the opposite direction matches with sign -1");
         }
         const int32_t ids[2] = { (int32_t) 0x55667788u, (int32_t) 0x11223344u };
         CHECK(lampId64(ids) == 0x1122334455667788ull, "reporter: an id from its low and high halves");
