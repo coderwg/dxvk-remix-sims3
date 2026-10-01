@@ -91,6 +91,10 @@ namespace {
     sims3cam::Sun gameLight = {};        // the game's light as last handed over
     sims3cam::SkyTable skyTable;         // the game's light by the hour, from what the terrain gave (milestone 47)
     bool skyTableLoaded = false, skyWorldLive = false; uint32_t framesFromTable = 0, skySrcFrames = 0, skySrcLogs = 0; int skySrcCand = -1, skySrcLogged = -1;
+    // the search for the game's own copy of its light (milestone 48, a diagnostic): each place found, how well it follows the terrain's light
+    struct LightHit { const float* p; int8_t sign; bool alive; uint32_t checked, matched; float maxDev, last[3]; };
+    LightHit lightHits[512] = {}; uint32_t lightHitN = 0, lightSurvivors = 0, lightLogs = 0, lightOffFrames = 0, lightCheckFrames = 0, lightLiveFrames = 0;
+    bool lightScanStarted = false, lightTaken = false, lightJudged = false, lightOff = false;
     void* moonApi = nullptr; uint32_t twilightLogged = 0; float skyLoggedB = -1.f;
     uint64_t statsTick = 0; uint32_t statsFrame = 0;   // the last statistics, for the frame rate
     uint32_t sunChanges = 0, sunLogged = 0, framesNoTerrainSun = 0, sunRefused = 0, sunLogFrame = 0; float sunLogLum = -1.f, sunLogDir[3] = {};   // the sun trace (milestone 19d)
@@ -286,6 +290,15 @@ namespace {
   std::atomic<bool> g_sims3LampScanBusy { false };
   std::atomic<uint32_t> g_sims3LampScans { 0 };
   std::atomic<uint32_t> g_sims3LampScanRegions { 0 }, g_sims3LampScanMegabytes { 0 };   // what the last search read through
+
+  // the search for the game's own copy of its light (milestone 48, a diagnostic): the direction the
+  // terrain was handed when the search began, the hook's own memory not to be counted, what was found
+  constexpr uint32_t kSims3LightHitsMax = 512;
+  std::atomic<bool> g_sims3LightScanBusy { false }, g_sims3LightScanDone { false };
+  float g_sims3LightTarget[3] = {};
+  const uint8_t* g_sims3LightExcludeFrom[2] = {}; const uint8_t* g_sims3LightExcludeTo[2] = {};
+  const float* g_sims3LightHitAt[kSims3LightHitsMax] = {}; int8_t g_sims3LightHitSign[kSims3LightHitsMax] = {};
+  std::atomic<uint32_t> g_sims3LightHitCount { 0 }, g_sims3LightHitOverflow { 0 }, g_sims3LightScanRegions { 0 }, g_sims3LightScanMegabytes { 0 }, g_sims3LightSkippedMapped { 0 };
 
   template<typename Dev> void sims3TerrainBlockEnd(Sims3Hook& h, Dev* dev);   // defined with the terrain path (milestone 18g)
 
@@ -1851,6 +1864,9 @@ static void sims3LogStats(bool withTable) {
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   clock: %s %.2f h, sunrise %.2f, sunset %.2f; %u lit lamps of world lights alone left dark by day",
            !h.clock.known ? "unknown," : (h.clock.night ? "night," : "day,"), h.clock.hour, h.clock.sunrise, h.clock.sunset, h.lampsWorldDark);
   Logger::info(msg);
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   light search (diagnostic): %s; %u places found, %u follow the terrain's light; %u frames checked on the lot, %u log lines",
+           !h.lightScanStarted ? "not begun" : (!h.lightTaken ? "searching" : (h.lightJudged ? "judged" : "following")), h.lightHitN, h.lightSurvivors, h.lightCheckFrames, h.lightLogs);
+  Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   lamp reporter: %s; %u lamps reported, %u lit, %u of those without a definition in the light table, %u beyond the budget of %u; %u readings (%u while it was writing), %u searches (the last through %u regions, %u MB)",
            h.lampReportLive ? "live" : (g_sims3LampBlock.load() ? "found, no world loaded" : "NOT FOUND: no lamp gives light (the script mod Sims3RtxLamps.package is not in Mods\\Packages, is an older version, or no world has loaded yet)"),
            h.lampReported, h.lampsOn, h.lampsUndefined, h.lampsBeyondBudget, sims3cam::lampMax(), h.lampReportReads, h.lampReportStale, g_sims3LampScans.load(), g_sims3LampScanRegions.load(), g_sims3LampScanMegabytes.load());
@@ -2297,6 +2313,106 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Present(CONST RECT* pSourceRect, CONS
         Logger::info(msg);
       }
     }
+    // The search for the game's own copy of its light (milestone 48, a diagnostic): begun on the lot
+    // two seconds after the world is live; what it finds is followed while the terrain is drawn
+    // and logged while it is not, against the clock and the table's light for the hour.
+    if (h.lampReportLive) ++h.lightLiveFrames; else h.lightLiveFrames = 0;
+    if (!h.lightScanStarted && readTerrain && h.clock.known && h.lightLiveFrames > 120u && !g_sims3LightScanBusy.load()) {
+      h.lightScanStarted = true;
+      for (int q = 0; q < 3; ++q) g_sims3LightTarget[q] = h.terrainSunDir[q];
+      g_sims3LightExcludeFrom[0] = (const uint8_t*) &g_sims3; g_sims3LightExcludeTo[0] = (const uint8_t*) (&g_sims3 + 1);
+      g_sims3LightExcludeFrom[1] = (const uint8_t*) this; g_sims3LightExcludeTo[1] = (const uint8_t*) (this + 1);
+      g_sims3LightScanBusy = true;
+      std::thread(sims3LightScan).detach();
+      char msg[260];
+      snprintf(msg, sizeof msg, "Sims 3 camera hook: light search begun at frame %u, clock %.2f h: three floats within 0.02 of the terrain's direction toward the light %.5f, %.5f, %.5f, or of its opposite",
+               h.frames, h.clock.hour, g_sims3LightTarget[0], g_sims3LightTarget[1], g_sims3LightTarget[2]);
+      Logger::info(msg);
+    }
+    if (g_sims3LightScanDone.load() && !h.lightTaken) {
+      h.lightTaken = true;
+      h.lightHitN = g_sims3LightHitCount.load();
+      for (uint32_t k = 0; k < h.lightHitN; ++k) { Sims3Hook::LightHit& L = h.lightHits[k]; L = {}; L.p = g_sims3LightHitAt[k]; L.sign = g_sims3LightHitSign[k]; L.alive = true; }
+      char msg[300];
+      snprintf(msg, sizeof msg, "Sims 3 camera hook: light search done at frame %u: %u places found (%u more not kept) in %u regions, %u MB (%u mapped regions skipped); now followed against the terrain's light",
+               h.frames, h.lightHitN, g_sims3LightHitOverflow.load(), g_sims3LightScanRegions.load(), g_sims3LightScanMegabytes.load(), g_sims3LightSkippedMapped.load());
+      Logger::info(msg);
+    }
+    if (h.lightTaken && h.lightHitN) {
+      if (readTerrain) {
+        // on the lot: each place against the direction the terrain is handed this frame
+        ++h.lightCheckFrames;
+        for (uint32_t k = 0; k < h.lightHitN; ++k) {
+          Sims3Hook::LightHit& L = h.lightHits[k];
+          if (!L.alive) continue;
+          float v[3];
+          if (!sims3LightRead(L.p, v, 3)) { L.alive = false; continue; }
+          const float dev = sims3cam::tripletDeviation(v, h.terrainSunDir, L.sign);
+          ++L.checked; if (dev < 0.001f) ++L.matched; if (dev > L.maxDev) L.maxDev = dev;
+        }
+        if (!h.lightJudged && h.lightCheckFrames >= 300u) {
+          // after five seconds on the lot: the places that followed the light in nine frames of ten
+          h.lightJudged = true; h.lightSurvivors = 0;
+          for (uint32_t k = 0; k < h.lightHitN; ++k) {
+            Sims3Hook::LightHit& L = h.lightHits[k];
+            L.alive = L.alive && L.checked > 0 && L.matched * 10u >= L.checked * 9u;
+            if (!L.alive) continue;
+            ++h.lightSurvivors;
+            if (h.lightSurvivors <= 24u) {
+              float around[16] = {}; const bool ok = sims3LightRead(L.p - 4, around, 16);
+              char where[160]; sims3DescribeAddress(L.p, where, sizeof where);
+              char msg[700];
+              snprintf(msg, sizeof msg, "Sims 3 camera hook: light search: place %u at %p (%s), sign %+d, followed the terrain's light in %u of %u frames (largest difference %.5f); the 16 floats from 4 before it: %s %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f",
+                       k, (const void*) L.p, where, (int) L.sign, L.matched, L.checked, L.maxDev, ok ? "" : "(unreadable)",
+                       around[0], around[1], around[2], around[3], around[4], around[5], around[6], around[7], around[8], around[9], around[10], around[11], around[12], around[13], around[14], around[15]);
+              Logger::info(msg);
+            }
+          }
+          char msg[200];
+          snprintf(msg, sizeof msg, "Sims 3 camera hook: light search: %u of %u places follow the terrain's light on the lot (after %u frames)", h.lightSurvivors, h.lightHitN, h.lightCheckFrames);
+          Logger::info(msg);
+        }
+        if (h.lightOff && h.lightJudged && h.lightLogs < 400u) {
+          // back on the lot after a time without lit terrain: does each place agree with the terrain again?
+          ++h.lightLogs;
+          int n = 0; char msg[900];
+          n += snprintf(msg + n, sizeof msg - n, "Sims 3 camera hook: light search: back on the lot at frame %u, clock %.2f h; the places against the terrain's light:", h.frames, h.clock.hour);
+          uint32_t shown = 0;
+          for (uint32_t k = 0; k < h.lightHitN && shown < 12u && n > 0 && n < (int) sizeof msg - 60; ++k) {
+            const Sims3Hook::LightHit& L = h.lightHits[k];
+            if (!L.alive) continue;
+            float v[3]; if (!sims3LightRead(L.p, v, 3)) continue;
+            ++shown; n += snprintf(msg + n, sizeof msg - n, " [%u: %.5f]", k, sims3cam::tripletDeviation(v, h.terrainSunDir, L.sign));
+          }
+          Logger::info(msg);
+        }
+        h.lightOff = false; h.lightOffFrames = 0;
+      } else if (h.lightJudged && h.clock.known) {
+        // without lit terrain: does each place keep moving with the clock?
+        ++h.lightOffFrames;
+        if (h.lightOffFrames == 30u || h.lightOffFrames % 120u == 0u) {
+          if (!h.lightOff) h.lightOff = true;
+          sims3cam::Sun want = {}; const bool haveWant = h.skyTable.recall(h.clock.hour, want);
+          uint32_t shown = 0;
+          for (uint32_t k = 0; k < h.lightHitN && shown < 12u && h.lightLogs < 400u; ++k) {
+            Sims3Hook::LightHit& L = h.lightHits[k];
+            if (!L.alive) continue;
+            float v[7] = {};
+            if (!sims3LightRead(L.p, v, 7)) { L.alive = false; continue; }
+            float moved = 0.f; for (int q = 0; q < 3; ++q) { const float e = std::fabs(v[q] - L.last[q]); if (e > moved) moved = e; }
+            const bool first = h.lightOffFrames == 30u;
+            ++shown; ++h.lightLogs;
+            char msg[400];
+            snprintf(msg, sizeof msg, "Sims 3 camera hook: light search, no lit terrain, frame %u, clock %.2f h: place %u = %.5f, %.5f, %.5f (sign %+d), %s; the 4 floats after it %.4f %.4f %.4f %.4f; %s %.5f",
+                     h.frames, h.clock.hour, k, v[0], v[1], v[2], (int) L.sign, first ? "first look" : (moved > 0.00001f ? format_string("MOVED by %.5f", moved).c_str() : "unchanged"),
+                     v[3], v[4], v[5], v[6], haveWant ? "against the table's light for this hour" : "no table entry for this hour", haveWant ? sims3cam::tripletDeviation(v, want.dir, L.sign) : 0.f);
+            Logger::info(msg);
+            for (int q = 0; q < 3; ++q) L.last[q] = v[q];
+          }
+        }
+      }
+      if (readTerrain) for (uint32_t k = 0; k < h.lightHitN; ++k) { Sims3Hook::LightHit& L = h.lightHits[k]; if (L.alive) sims3LightRead(L.p, L.last, 3); }
+    }
     h.terrainSunDrawsLast = h.terrainSunDraws; h.terrainSunDraws = 0;
     const bool haveSky = h.skySet;   // for the night below
     if (h.sunApi && h.sunSet && h.sky.showing[0] && sims3cam::luminance(h.sun.col) > 0.001f) remixapi::remixapi_DrawLightInstance((remixapi_LightHandle) h.sunApi);   // every frame it gives light (milestone 20b)
@@ -2441,6 +2557,73 @@ static void sims3LampScan() {
   ++g_sims3LampScans;
   g_sims3LampScanBusy = false;
 }
+// The search for the game's own copy of its light (milestone 48, a diagnostic). The game hands its lit
+// terrain shaders the light's direction with every draw; somewhere in its memory it keeps the light
+// it computes. Every committed writable region of the process is searched for three consecutive
+// floats within 0.02 of the direction the terrain was handed (or of its opposite), except the
+// hook's own state and the bridge's shared memory (mapped regions: the command queue to the server
+// holds copies of every upload). What is found is then followed frame by frame (in Present).
+static void sims3LightScanRegion(const uint8_t* base, size_t size, uint32_t& count) {
+  __try {
+    if (size < 16) return;
+    const float* q = (const float*) base;
+    const float* end = (const float*) (base + (size & ~(size_t) 3)) - 3;
+    const float* t = g_sims3LightTarget;
+    for (; q <= end; ++q) {
+      const int m = sims3cam::tripletMatch(q, t, 0.02f);
+      if (!m) continue;
+      const uint8_t* at = (const uint8_t*) q;
+      bool own = false;
+      for (int k = 0; k < 2; ++k) if (at >= g_sims3LightExcludeFrom[k] && at < g_sims3LightExcludeTo[k]) own = true;
+      if (own) continue;
+      if (count < kSims3LightHitsMax) { g_sims3LightHitAt[count] = q; g_sims3LightHitSign[count] = (int8_t) m; ++count; }
+      else ++g_sims3LightHitOverflow;
+    }
+  } __except (EXCEPTION_EXECUTE_HANDLER) { }
+}
+static void sims3LightScan() {
+  const uint8_t* a = (const uint8_t*) 0x10000;
+  MEMORY_BASIC_INFORMATION mbi;
+  uint32_t regions = 0, count = 0, mapped = 0; uint64_t bytes = 0;
+  while (VirtualQuery(a, &mbi, sizeof mbi) == sizeof mbi) {
+    const DWORD prot = mbi.Protect & 0xFF;
+    const bool writable = prot == PAGE_READWRITE || prot == PAGE_EXECUTE_READWRITE || prot == PAGE_WRITECOPY || prot == PAGE_EXECUTE_WRITECOPY;
+    if (mbi.State == MEM_COMMIT && writable && !(mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS))) {
+      if (mbi.Type == MEM_MAPPED) ++mapped;
+      else { ++regions; bytes += mbi.RegionSize; sims3LightScanRegion((const uint8_t*) mbi.BaseAddress, mbi.RegionSize, count); }
+    }
+    const uint8_t* next = (const uint8_t*) mbi.BaseAddress + mbi.RegionSize;
+    if (next <= a) break;
+    a = next;
+  }
+  g_sims3LightScanRegions = regions; g_sims3LightScanMegabytes = (uint32_t) (bytes >> 20); g_sims3LightSkippedMapped = mapped;
+  g_sims3LightHitCount = count;
+  g_sims3LightScanDone = true;
+  g_sims3LightScanBusy = false;
+}
+// Floats read from a place found, or false when it cannot be read any more.
+static bool sims3LightRead(const float* p, float* out, int n) {
+  __try {
+    for (int k = 0; k < n; ++k) out[k] = p[k];
+    return true;
+  } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+// What a place in memory belongs to: a module and the offset into it, or the kind of memory.
+static void sims3DescribeAddress(const void* p, char* out, size_t cap) {
+  HMODULE mod = nullptr;
+  if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR) p, &mod) && mod) {
+    char path[MAX_PATH] = {};
+    GetModuleFileNameA(mod, path, MAX_PATH);
+    const char* name = strrchr(path, '\\'); name = name ? name + 1 : path;
+    snprintf(out, cap, "%s+0x%x", name, (unsigned) ((const uint8_t*) p - (const uint8_t*) mod));
+    return;
+  }
+  MEMORY_BASIC_INFORMATION mbi = {};
+  if (VirtualQuery(p, &mbi, sizeof mbi) == sizeof mbi)
+    snprintf(out, cap, "%s memory, allocation %p + 0x%x", mbi.Type == MEM_PRIVATE ? "private" : (mbi.Type == MEM_MAPPED ? "mapped" : "image"), mbi.AllocationBase, (unsigned) ((const uint8_t*) p - (const uint8_t*) mbi.AllocationBase));
+  else snprintf(out, cap, "unknown memory");
+}
+
 // The block read whole: its head checked, its records copied, and its sequence the same before and
 // after (an odd one means the reporter is writing). 0 read, 1 being written, 2 not the block any more.
 static int sims3LampRead(const uint8_t* block, float* floats, int32_t* ints, sims3cam::LampHead& head) {

@@ -1133,6 +1133,26 @@ inline bool wantsUnlitPatch(uint64_t psHash) { for (uint64_t h : kUnlitPatches) 
 // milestone 40; the terrain is outdoors, so nothing attenuates it as a room does an object's
 // light). The hook's sun is this light (sunFromTerrain, milestone 41).
 inline bool isLitTerrainPs(uint64_t psHash) { return wantsUnlitPatch(psHash); }
+// The search for the game's own copy of its light (milestone 48, a diagnostic): three floats in
+// memory match a direction when each is within tol of it (+1), or of its opposite (-1); 0 otherwise.
+// (Not-a-number and infinite floats are told by their bits: the compiler may assume none exist.)
+inline bool finiteFloats(const float* q, int n) {
+  for (int k = 0; k < n; ++k) { uint32_t u; std::memcpy(&u, q + k, 4); if ((u & 0x7f800000u) == 0x7f800000u) return false; }
+  return true;
+}
+inline int tripletMatch(const float* q, const float* t, float tol) {
+  if (!finiteFloats(q, 3)) return 0;
+  if (std::fabs(q[0] - t[0]) < tol && std::fabs(q[1] - t[1]) < tol && std::fabs(q[2] - t[2]) < tol) return 1;
+  if (std::fabs(q[0] + t[0]) < tol && std::fabs(q[1] + t[1]) < tol && std::fabs(q[2] + t[2]) < tol) return -1;
+  return 0;
+}
+// How far three floats, taken with their sign, stand from a direction: the largest difference.
+inline float tripletDeviation(const float* v, const float* t, int sign) {
+  if (!finiteFloats(v, 3)) return 1e30f;
+  float d = 0.f;
+  for (int q = 0; q < 3; ++q) { const float e = std::fabs((float) sign * v[q] - t[q]); if (!(e <= d)) d = e; }
+  return d;
+}
 
 inline constexpr uint32_t kDxsoRegSampler = 10u, kDxsoRegColorOut = 8u, kDxsoOpMov = 1u, kDxsoOpMad = 4u;
 

@@ -479,6 +479,13 @@ int main() {
         frameRec[8] = 12.f; frameRec[9] = 0.f; frameRec[10] = 0.f;
         CHECK(!clockFromRecord(frameRec).known, "clock: without sunrise and sunset it is not a clock");
         CHECK(isLitTerrainPs(0x17eabad58f650687ull) && isLitTerrainPs(0xd63bf505ec4a44a0ull) && !isLitTerrainPs(0x028ce2dde691b739ull) && !isLitTerrainPs(0x99ee53ff6ef1b0b6ull), "terrain light: the four lit terrain shaders carry it; the unlit world terrain and the composite do not");
+        {
+          const float dir[3] = { 0.397f, 0.868f, 0.297f }, same[3] = { 0.401f, 0.86f, 0.30f }, opposite[3] = { -0.39f, -0.87f, -0.3f }, other[3] = { 0.397f, 0.868f, 0.5f };
+          CHECK(tripletMatch(same, dir, 0.02f) == 1 && tripletMatch(opposite, dir, 0.02f) == -1 && tripletMatch(other, dir, 0.02f) == 0, "light search: three floats near the direction match, near its opposite match with sign -1, others not");
+          const float nan3[3] = { std::nanf(""), 0.868f, 0.297f };
+          CHECK(tripletMatch(nan3, dir, 0.02f) == 0 && !(tripletDeviation(nan3, dir, 1) < 1.f), "light search: a float that is not a number matches nothing and counts as far off");
+          CHECK(nearf(tripletDeviation(same, dir, 1), 0.008f) && nearf(tripletDeviation(opposite, dir, -1), 0.007f), "light search: the deviation is the largest difference, the sign applied");
+        }
         const int32_t ids[2] = { (int32_t) 0x55667788u, (int32_t) 0x11223344u };
         CHECK(lampId64(ids) == 0x1122334455667788ull, "reporter: an id from its low and high halves");
         //                      x      y      z     r    g    b   intens dimmer on  preset emits level
