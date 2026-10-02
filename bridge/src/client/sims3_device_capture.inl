@@ -323,5 +323,7 @@ bool sims3EnsureMarker(Dev* dev, IDirect3DTexture9*& marker, uint64_t& hash, boo
 template<typename Dev>
 bool sims3EnsureGlassMarker(Sims3Hook& h, Dev* dev) { return sims3EnsureMarker(dev, h.glassMarker, h.glassMarkerHash, h.glassMarkerFailed, sims3cam::kGlassMarkerColour, sims3cam::kGlassMarkerHash, "glass"); }
 template<typename Dev>
+bool sims3EnsureFrostedMarker(Sims3Hook& h, Dev* dev) { return sims3EnsureMarker(dev, h.frostedMarker, h.frostedMarkerHash, h.frostedMarkerFailed, sims3cam::kFrostedMarkerColour, sims3cam::kFrostedMarkerHash, "frosted glass"); }
+template<typename Dev>
 bool sims3EnsureWaterMarker(Sims3Hook& h, Dev* dev) { return sims3EnsureMarker(dev, h.waterMarker, h.waterMarkerHash, h.waterMarkerFailed, sims3cam::kWaterMarkerColour, sims3cam::kWaterMarkerHash, "water"); }
 

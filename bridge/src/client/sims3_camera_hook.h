@@ -1867,6 +1867,11 @@ inline const TexturedGlass kTexturedGlass[] = {
                            "read through the normal map, colour s3 (VS b51f1577, skinned: the door swings; drawn opaque; runs 192-194)" },
 };
 inline bool isTexturedGlass(uint64_t hash) { return findByHash(kTexturedGlass, hash) != nullptr; }
+// Frosted glass (milestone 88): the shower door's glass gets its own marker and the mod's frosted
+// material (the translucent glass with a diffuse layer); its game colour texture is a frosting.
+inline bool isFrostedGlass(uint64_t hash) { return hash == 0x572773cfbd618a3aull; }
+inline constexpr uint32_t kFrostedMarkerColour = 0xFFE0E6EAu;          // ARGB frosted pale grey: what it shows if the mod is not loaded
+inline constexpr uint64_t kFrostedMarkerHash = 0x6FBC67AF0CD76F66ull;  // XXH3-64 of its level 0; the mod's material name
 inline bool isGlassPs(const PsAnalysis& a, uint64_t hash) { return isGlassShader(a) || isTexturedGlass(hash); }
 // Test (milestone 87; goes once answered): the water draws carry the GLASS marker. If pools and
 // ponds turn see-through, the water material's settings are at fault; if they show the glass

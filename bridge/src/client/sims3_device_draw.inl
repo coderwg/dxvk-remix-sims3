@@ -32,7 +32,8 @@ inline void sims3OnReset(Sims3Hook& h) {
   for (int i = 0; i < sims3cam::kTerrainMarkers; ++i) { if (h.marker[i]) h.marker[i]->Release(); h.marker[i] = nullptr; h.markerHash[i] = 0; }
   if (h.glassMarker) { h.glassMarker->Release(); h.glassMarker = nullptr; }
   if (h.waterMarker) { h.waterMarker->Release(); h.waterMarker = nullptr; }
-  h.glassMarkerHash = 0; h.glassMarkerFailed = false; h.waterMarkerHash = 0; h.waterMarkerFailed = false; h.blendOurs = false;
+  if (h.frostedMarker) { h.frostedMarker->Release(); h.frostedMarker = nullptr; }
+  h.glassMarkerHash = 0; h.glassMarkerFailed = false; h.waterMarkerHash = 0; h.waterMarkerFailed = false; h.frostedMarkerHash = 0; h.frostedMarkerFailed = false; h.blendOurs = false;
   h.markerFailed = false; h.markersConfigSent = false; h.terrainFreeStage = -1; h.tblockActive = false; h.tblockStage = -1; h.tblockSet = 0; h.tblockSrgb = 0; h.ourSampler = false; h.psBound = nullptr; h.vsTerrain = nullptr; h.lotFurtherCopy = false; h.swappingPs = false;
   h.cwOurs = false; h.atOurs = false; h.fogOurs = false;
   h.compositePass = 0; h.extraActive = false; h.splitDraw = false; h.ourConsts = false; h.reissue = false; h.reissueKind = 0; h.compositeSecond = false;
@@ -120,15 +121,16 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
     // off; its material is the hook's Remix mod's translucent glass or water (sims3cam::isGlassShader,
     // isGlassPs, isWaterPs)
     const bool water = sims3cam::isWaterPs(h.psHash) && (sims3cam::kWaterTestWithGlass ? sims3EnsureGlassMarker(h, dev) : sims3EnsureWaterMarker(h, dev));
-    const bool glass = !water && h.psAuto && (sims3cam::isTexturedGlass(h.psHash) || (rs[D3DRS_ALPHABLENDENABLE] && sims3cam::isGlassShader(*h.psAuto))) && sims3EnsureGlassMarker(h, dev);
-    if (water || glass) {
+    const bool frosted = !water && sims3cam::isFrostedGlass(h.psHash) && sims3EnsureFrostedMarker(h, dev);
+    const bool glass = !water && !frosted && h.psAuto && (sims3cam::isTexturedGlass(h.psHash) || (rs[D3DRS_ALPHABLENDENABLE] && sims3cam::isGlassShader(*h.psAuto))) && sims3EnsureGlassMarker(h, dev);
+    if (water || frosted || glass) {
       h.drawGlass = true;
       h.remapRestore = h.boundTex[0]; if (h.remapRestore) h.remapRestore->AddRef();   // held until sims3EndDraw, as for an albedo remap
       h.remapActive = true;
-      h.inRemap = true; dev->SetTexture(0, (water && !sims3cam::kWaterTestWithGlass) ? h.waterMarker : h.glassMarker); h.inRemap = false;
+      h.inRemap = true; dev->SetTexture(0, frosted ? h.frostedMarker : (water && !sims3cam::kWaterTestWithGlass) ? h.waterMarker : h.glassMarker); h.inRemap = false;
       h.blendSaved = rs[D3DRS_ALPHABLENDENABLE]; h.blendOurs = true;
       h.ourState = true; dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE); h.ourState = false;
-      if (water) ++h.waterDraws; else ++h.glassDraws;
+      if (water) ++h.waterDraws; else if (frosted) ++h.frostedDraws; else ++h.glassDraws;
       bool seen = false; for (uint32_t i = 0; i < h.glassLogged; ++i) if (h.glassLoggedPs[i] == h.psHash) seen = true;
       if (!seen && h.glassLogged < 8) {
         h.glassLoggedPs[h.glassLogged++] = h.psHash; char msg[224];

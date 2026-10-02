@@ -1057,6 +1057,13 @@ int main() {
       CHECK(wh == kWaterMarkerHash && wat != std::string::npos && u.find("ior_constant = 1.33", wat) != std::string::npos && kWaterMarkerHash != kGlassMarkerHash
             && isWaterPs(0xf74b4657dbfd60bcull) && isWaterPs(0x387e1a15c63c120aull) && !isWaterPs(0x3197bfdef2330503ull),
             "water (M86): the marker's level-0 hash 0x%016llX names the water material %s (IOR 1.33); water PS f74b4657 and 387e1a15, not the glass", (unsigned long long) wh, wname);
+      // milestone 88: the frosted marker's hash names the frosted material (a diffuse layer)
+      for (auto& p : gm) p = kFrostedMarkerColour;
+      const uint64_t fh = (uint64_t) XXH3_64bits(gm, sizeof gm);
+      char fname[32]; snprintf(fname, sizeof fname, "mat_%016llX", (unsigned long long) kFrostedMarkerHash);
+      const size_t fat = u.find(fname);
+      CHECK(fh == kFrostedMarkerHash && fat != std::string::npos && u.find("use_diffuse_layer = 1", fat) != std::string::npos && isFrostedGlass(0x572773cfbd618a3aull) && !isFrostedGlass(0x3197bfdef2330503ull),
+            "frosted glass (M88): the marker's level-0 hash 0x%016llX names the frosted material %s (diffuse layer); the shower door's 572773cf", (unsigned long long) fh, fname);
     }
     CHECK(kLotCompositePs == 0x99ee53ff6ef1b0b6ull && lotCompositeStage(0) == 0 && lotCompositeStage(1) == 4 && lotCompositeStage(2) == 3, "lot composite: pass 1 reads the mask from s4 (layer 4 out), pass 2 from s3 (layer 3 out)");
     std::vector<DWORD> lit, world, layer, comp, lit2, lit3, lit4;

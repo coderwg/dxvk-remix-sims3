@@ -209,6 +209,7 @@ struct Sims3Hook {
   // glass (milestone 80): the glass marker, and the draw's blending the hook switched off
   IDirect3DTexture9* glassMarker = nullptr; uint64_t glassMarkerHash = 0; bool glassMarkerFailed = false;
   IDirect3DTexture9* waterMarker = nullptr; uint64_t waterMarkerHash = 0; bool waterMarkerFailed = false; uint32_t waterDraws = 0;   // water (milestone 86)
+  IDirect3DTexture9* frostedMarker = nullptr; uint64_t frostedMarkerHash = 0; bool frostedMarkerFailed = false; uint32_t frostedDraws = 0;   // frosted glass (milestone 88)
   DWORD blendSaved = 0; bool blendOurs = false;
   uint32_t glassDraws = 0, glassLogged = 0; uint64_t glassLoggedPs[8] = {};
   uint32_t mirrorSurfaceDropped = 0;   // the planar-reflection surface passes left out (milestone 82)
