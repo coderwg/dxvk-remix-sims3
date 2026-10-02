@@ -216,7 +216,7 @@ struct Sims3Hook {
   // versions and range), and this frame's kept wall triangles per vertex buffer
   std::unordered_map<uint64_t, std::vector<uint64_t>> wallPieceTris;
   std::unordered_map<uint32_t, std::unordered_set<uint64_t>> wallFrameTris;
-  uint32_t wallBackDropped = 0, wallBackLogged = 0;
+  uint32_t wallBackDropped = 0, wallBackLogged = 0, wallDumpFiles = 0;   // ... and the mark's wall-piece files (milestone 97b, a diagnostic)
   DWORD blendSaved = 0; bool blendOurs = false;
   uint32_t glassDraws = 0, glassLogged = 0; uint64_t glassLoggedPs[8] = {};
   uint32_t mirrorSurfaceDropped = 0;   // the planar-reflection surface passes left out (milestone 82)

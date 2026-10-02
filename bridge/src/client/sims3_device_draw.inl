@@ -97,6 +97,39 @@ bool sims3WallBackSide(Sims3Hook& h, Dev* dev) {
     }
     it = h.wallPieceTris.emplace(pieceKey, std::move(tris)).first;
   }
+  // Diagnostic (milestone 97b; goes once answered): at the mark key, each wall piece of the frame's
+  // vertex data -- its indices and the raw stream-0 bytes of the vertices they use -- to
+  // rtx-remix\logs\sims3-walls\f<frame>_vb<id>_b<base>_s<start>.txt, to see how a pool wall's sides differ.
+  if (h.markDump == 2 && h.wallDumpFiles < 96u) {
+    const uint8_t* vd = lvb->sims3Data(); const uint8_t* id = lib->sims3Data();
+    const bool ib32 = lib->getDesc().Format == D3DFMT_INDEX32;
+    const size_t isz = ib32 ? 4u : 2u, n = (size_t) h.drawPrims * 3u;
+    if (vd && id && ((size_t) h.drawStart + n) * isz <= lib->sims3Size()) {
+      static char dir[MAX_PATH] = {};
+      if (!dir[0]) { GetModuleFileNameA(nullptr, dir, MAX_PATH); char* q = strrchr(dir, '\\'); if (q) *q = 0; strncat_s(dir, "\\rtx-remix\\logs\\sims3-walls", _TRUNCATE); CreateDirectoryA(dir, nullptr); }
+      char path[MAX_PATH + 96];
+      snprintf(path, sizeof path, "%s\\f%u_vb%u_b%d_s%u.txt", dir, h.frames + 1, vbId, (int) h.drawBase, (unsigned) h.drawStart);
+      FILE* f = nullptr;
+      if (fopen_s(&f, path, "w") == 0 && f) {
+        ++h.wallDumpFiles;
+        fprintf(f, "VS %016llx PS %016llx vb %u off %u stride %u ib %u base %d start %u prims %u posOff %d\n", (unsigned long long) h.vsHash, (unsigned long long) h.psHash,
+                vbId, off, stride, (unsigned) lib->getId(), (int) h.drawBase, (unsigned) h.drawStart, (unsigned) h.drawPrims, (int) h.wallLayout.posOff);
+        for (uint8_t e = 0; e < h.wallLayout.elemCount; ++e) fprintf(f, "elem stream %u type %u offset %u\n", h.wallLayout.elems[e].stream, h.wallLayout.elems[e].type, h.wallLayout.elems[e].offset);
+        uint32_t lo = 0xFFFFFFFFu, hi = 0;
+        fprintf(f, "indices");
+        for (size_t k = 0; k < n; ++k) { const uint32_t i = sims3cam::readIndex(id, (size_t) h.drawStart + k, ib32); if (i < lo) lo = i; if (i > hi) hi = i; fprintf(f, " %u", i); }
+        fprintf(f, "\n");
+        for (uint32_t i = lo; i <= hi && lo <= hi; ++i) {
+          const size_t at = (size_t) off + ((size_t) h.drawBase + i) * stride;
+          if (at + stride > lvb->sims3Size()) break;
+          fprintf(f, "v %u", i);
+          for (UINT bb = 0; bb < stride; ++bb) fprintf(f, " %02x", vd[at + bb]);
+          fprintf(f, "\n");
+        }
+        fclose(f);
+      }
+    }
+  }
   auto& kept = h.wallFrameTris[vbId];
   uint32_t matched = 0;
   if (sims3cam::isWallBackSide(it->second, kept, matched)) {
