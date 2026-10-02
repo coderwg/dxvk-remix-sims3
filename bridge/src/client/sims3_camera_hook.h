@@ -1926,20 +1926,20 @@ inline const NamedGlass* namedGlass(uint64_t hash) { return findByHash(kNamedGla
 // now out of the survey (the user: "remove the survey colors from the known ones - and use the more
 // obvious colors on the unknown ones"): 3197bfde a window's side facing a room, 98e23f47 its side facing
 // outdoors, 85e9c338 a decorative object on a table, efdac7f0 glass furniture, 910a56f2 an unplayable
-// lot's windows, ac4184ce its dome. A window's two sides are two draws: the side facing
+// lot's windows, ac4184ce its dome; run 219 three more: 2b1da1b4 the plumbob over the active Sim,
+// a9336d35 the sound waves from speakers (an effect, not glass), db28eb0c an unplayable lot's windows.
+// At the mark the log names every glass shader drawn in that frame (milestone 113, goes with the
+// survey). A window's two sides are two draws: the side facing
 // a room is 3197bfde, the side facing outdoors 98e23f47 -- a window on an indoor wall is 3197bfde on
 // both sides, one on a free-standing outdoor wall 98e23f47 on both (the user, run 218).
 struct GlassSurvey { uint64_t hash; uint32_t colour; const char* colourName; };
 inline constexpr size_t kGlassSurveyMax = 16;
 inline const GlassSurvey kGlassSurvey[] = {
-  { 0x2b1da1b45f51d3f9ull, 0xFFFF0000u, "RED" },       // the scene behind, ps_2_0, 966k draws (run 218: elsewhere than home)
-  { 0xdb28eb0c60fdb2fbull, 0xFF00FF00u, "GREEN" },     // cube only, 55k (run 218: at home)
-  { 0x8ff495765d26a6fdull, 0xFF0000FFu, "BLUE" },      // the scene behind, 12k (run 218: at home; VS d251510d)
-  { 0xd03ebab11453bca1ull, 0xFFFFFF00u, "YELLOW" },    // a small glass on a car's atlas (run 218: at home)
-  { 0x7eeb349a23cbefefull, 0xFFFF00FFu, "MAGENTA" },   // the scene behind + a colour texture (run 218: mid-session)
-  { 0x8fe3ce7c5fbc6234ull, 0xFF00FFFFu, "CYAN" },      // bumpy (never drawn in run 218)
-  { 0xa9336d35a25143aeull, 0xFFFF8000u, "ORANGE" },    // bumpy, ps_2_0 (never drawn in run 218)
-  { 0x29c6b22234617c1aull, 0xFFFFFFFFu, "WHITE" },     // textured glass (never drawn in run 218)
+  { 0x8fe3ce7c5fbc6234ull, 0xFFFF0000u, "RED" },       // bumpy (run 219, cyan: an oil bottle? -- recoloured to be sure)
+  { 0x29c6b22234617c1aull, 0xFF00FF00u, "GREEN" },     // textured glass (run 219, white: the liquid in that bottle? -- recoloured)
+  { 0x8ff495765d26a6fdull, 0xFF0000FFu, "BLUE" },      // the scene behind (run 218: at home; VS d251510d; run 219: not spotted)
+  { 0xd03ebab11453bca1ull, 0xFFFFFF00u, "YELLOW" },    // a small glass on a car's atlas (run 218: at home; run 219: not spotted)
+  { 0x7eeb349a23cbefefull, 0xFFFF00FFu, "MAGENTA" },   // the scene behind + a colour texture (runs 218-219: not spotted)
 };
 static_assert(sizeof kGlassSurvey / sizeof kGlassSurvey[0] <= kGlassSurveyMax, "the hook keeps 16 survey markers");
 inline const GlassSurvey* glassSurvey(uint64_t hash) { return findByHash(kGlassSurvey, hash); }

@@ -330,6 +330,17 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
       h.ourState = true; dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE); h.ourState = false;
       if (water) ++h.waterDraws[waterMat]; else if (mirror) ++h.mirrorDraws; else if (carGlass) ++h.carGlassDraws; else ++h.glassDraws;
       if (carGlass || glass) sims3GlassOneSide(h, dev);   // a sheet's back side left out (milestone 104)
+      // at the mark (milestone 113, with the survey): every glass shader drawn in the marked frame, once
+      if (h.markDump == 2) {
+        bool listed = false; for (uint32_t i = 0; i < h.markGlassCount; ++i) if (h.markGlassPs[i] == h.psHash) listed = true;
+        if (!listed && h.markGlassCount < 32u) {
+          h.markGlassPs[h.markGlassCount++] = h.psHash;
+          const sims3cam::GlassSurvey* sv = survey ? sims3cam::glassSurvey(h.psHash) : nullptr;
+          const char* kind = sv ? sv->colourName : water ? sims3cam::kWaterMaterial[waterMat].name : mirror ? "mirror" : carGlass ? "car glass" : bump ? "bumpy glass" : "glass";
+          Logger::info(format_string("Sims 3 camera hook: glass at the mark, frame %u: PS %016llx (VS %016llx) -- %s%s", h.frames + 1, (unsigned long long) h.psHash, (unsigned long long) h.vsHash,
+                                     sv ? "survey " : "", kind));
+        }
+      }
       bool seen = false; for (uint32_t i = 0; i < h.glassLogged; ++i) if (h.glassLoggedPs[i] == h.psHash) seen = true;
       if (!seen && h.glassLogged < 32) {
         h.glassLoggedPs[h.glassLogged++] = h.psHash; char msg[224];

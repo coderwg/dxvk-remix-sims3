@@ -218,6 +218,7 @@ struct Sims3Hook {
   // the glass survey (milestone 110; one run): a flat marker per sims3cam::kGlassSurvey entry
   IDirect3DTexture9* surveyMarkers[sims3cam::kGlassSurveyMax] = {}; uint64_t surveyHashes[sims3cam::kGlassSurveyMax] = {};
   bool surveyFailed[sims3cam::kGlassSurveyMax] = {}; uint32_t surveyDraws = 0;
+  uint64_t markGlassPs[32] = {}; uint32_t markGlassCount = 0;   // the glass shaders named at the mark (milestone 113, with the survey)
   IDirect3DTexture9* carGlassMarker = nullptr; uint64_t carGlassMarkerHash = 0; bool carGlassMarkerFailed = false; uint32_t carGlassDraws = 0;   // car glass (milestone 105)
   uint32_t waveDumpedIds[32] = {}; uint32_t waveDumped = 0;   // the game's wave maps looked at (milestone 93): the mod's ripple maps' source
   // a zero-thickness wall's back side (milestone 97): each wall piece's triangle keys (cached by buffers,

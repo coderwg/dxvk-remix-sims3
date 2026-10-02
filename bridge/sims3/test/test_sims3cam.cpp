@@ -1132,9 +1132,10 @@ int main() {
         }
         bool knownOut = true;
         for (uint64_t known : { 0x572773cfbd618a3aull, 0x45c7a7cd511b5233ull, 0x66516d5db94ab307ull, 0x86dad57d0dc73989ull, 0x3197bfdef2330503ull,
-                                0x98e23f47d947eb22ull, 0x85e9c3381d5bf054ull, 0xefdac7f048e21b1full, 0x910a56f24813e248ull, 0xac4184cee232ed04ull }) if (glassSurvey(known)) knownOut = false;
-        CHECK(surveyOk && n == 8 && knownOut && kGlassSurvey[0].colour == 0xFFFF0000u,
-              "glass survey (M110, M112): 8 unidentified glass shaders in distinct plain colours, no material marker's; the unnamed ones cube-only glass (%d dumps read); the door, the cars' windows, the mirrors and run 218's six finds not surveyed", surveyRead);
+                                0x98e23f47d947eb22ull, 0x85e9c3381d5bf054ull, 0xefdac7f048e21b1full, 0x910a56f24813e248ull, 0xac4184cee232ed04ull,
+                                0x2b1da1b45f51d3f9ull, 0xa9336d35a25143aeull, 0xdb28eb0c60fdb2fbull }) if (glassSurvey(known)) knownOut = false;
+        CHECK(surveyOk && n == 5 && knownOut && kGlassSurvey[0].colour == 0xFFFF0000u,
+              "glass survey (M110, M112, M113): 5 unidentified glass shaders in distinct plain colours, no material marker's; the unnamed ones cube-only glass (%d dumps read); the door, the cars' windows, the mirrors and runs 218-219's nine finds not surveyed", surveyRead);
       }
       // milestones 82, 101: the reflective sheet's PS 86dad57d reads only a cube; under the stencil test it is a mirror's face
       std::vector<DWORD> mp; PsAnalysis ma;
