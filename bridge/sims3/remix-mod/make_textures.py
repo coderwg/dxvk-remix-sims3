@@ -25,9 +25,10 @@ OUT = os.path.join(HERE, 'Sims3Glass', 'textures')
 
 # the wave maps the normal maps are made from (the hook's dump names), and how much each is flattened:
 # the game adds its two pool layers and +2 to their up component (PS d40999e5 / 85c0a78a), about halving
-# the slopes; one layer at half slope comes close
+# the slopes; one layer at half slope comes close. The pool's: x 0.65 more, the user's choice by eye in
+# run 202 (the runtime's Translucent "Normal Strength" 0.65 scales the decoded slopes the same way)
 WAVES = {
-    'water_clear_n.dds': ('water_85c0a78a614b15d3_s1_256x256_A8R8G8B8.raw', 0.5),
+    'water_clear_n.dds': ('water_85c0a78a614b15d3_s1_256x256_A8R8G8B8.raw', 0.5 * 0.65),
     'water_natural_n.dds': ('water_f74b4657dbfd60bc_s0_256x256_Q8W8V8U8.raw', 0.5),
 }
 
