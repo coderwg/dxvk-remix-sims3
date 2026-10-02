@@ -83,7 +83,7 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
   int k = -1;
   ++h.capturedDraws;
   if (rs[D3DRS_FOGENABLE] && (rs[D3DRS_FOGTABLEMODE] != D3DFOG_NONE || rs[D3DRS_FOGVERTEXMODE] != D3DFOG_NONE)) ++h.gameFogDraws;   // a fog state of the game's own (milestone 56: none expected)
-  h.autoCapturedUv = false; h.pendingPromote = 0;
+  h.autoCapturedUv = false; h.pendingPromote = 0; h.drawGlass = false;
   // a terrain draw (milestone 17): handed to the runtime's terrain baker with the marker at
   // stage 0 and the game's pixel shader variant; no albedo stage, no vertex shader variant
   uint8_t terrainKind = sims3cam::terrainDrawKind(h.vsTerrain, rs[D3DRS_ALPHABLENDENABLE], h.lotFurtherCopy);
@@ -111,7 +111,8 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
   if (!terrain) {
     // glass (milestone 80): the glass marker at stage 0 and the draw's blending off; its material is
     // the hook's Remix mod's translucent glass (sims3cam::isGlassShader)
-    if (h.psAuto && rs[D3DRS_ALPHABLENDENABLE] && sims3cam::isGlassShader(*h.psAuto) && sims3EnsureGlassMarker(h, dev)) {
+    if (h.psAuto && rs[D3DRS_ALPHABLENDENABLE] && sims3cam::isGlassPs(*h.psAuto, h.psHash) && sims3EnsureGlassMarker(h, dev)) {
+      h.drawGlass = true;
       h.remapRestore = h.boundTex[0]; if (h.remapRestore) h.remapRestore->AddRef();   // held until sims3EndDraw, as for an albedo remap
       h.remapActive = true;
       h.inRemap = true; dev->SetTexture(0, h.glassMarker); h.inRemap = false;

@@ -208,6 +208,7 @@ struct Sims3Hook {
   IDirect3DTexture9* glassMarker = nullptr; uint64_t glassMarkerHash = 0; bool glassMarkerFailed = false;
   DWORD blendSaved = 0; bool blendOurs = false;
   uint32_t glassDraws = 0, glassLogged = 0; uint64_t glassLoggedPs[8] = {};
+  bool drawGlass = false; uint32_t glassDiagLines = 0;   // this draw went out as glass; the mark key's reflective-draw lines (diagnostic, milestone 81)
   // the lot paint composite's two passes (milestone 17l, sims3cam::lotCompositeStage): the pass
   // being issued (0 = the game's own draw, pass 1; 2 = the hook's second pass, milestone 19), and
   // pass 2's black marker at stages 1 and 2 (what they held, put back in sims3EndDraw)

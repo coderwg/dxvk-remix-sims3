@@ -1026,6 +1026,12 @@ int main() {
       const bool notObject = !loadShader("ps_0c19795eb80e2e96", ot) || (analyzePixelShader(ot.data(), ot.size(), oa) && !isGlassShader(oa));
       CHECK(found >= 1 && glass == found && notWall && notObject && !isGlassShader(PsAnalysis()),
             "glass (M80): the game's glass shaders read only cube maps (%d of %d dumps found); walls A, the object shader and an empty analysis are not glass", glass, found);
+      // milestone 81: textured glass by name; the Sims' hair pass and the light-beam cards (cube + 2D, blended) are not glass
+      std::vector<DWORD> tg, hair, beam; PsAnalysis tga, ha, ba;
+      const bool tgOk = !loadShader("ps_29c6b22234617c1a", tg) || (analyzePixelShader(tg.data(), tg.size(), tga) && !isGlassShader(tga) && isGlassPs(tga, 0x29c6b22234617c1aull));
+      const bool hairOk = !loadShader("ps_57a5a049ffa47770", hair) || (analyzePixelShader(hair.data(), hair.size(), ha) && !isGlassPs(ha, 0x57a5a049ffa47770ull));
+      const bool beamOk = !loadShader("ps_7304aaea6a75fb3f", beam) || (analyzePixelShader(beam.data(), beam.size(), ba) && !isGlassPs(ba, 0x7304aaea6a75fb3full));
+      CHECK(tgOk && hairOk && beamOk && isGlassPs(PsAnalysis(), 0xac4184cee232ed04ull), "glass (M81): textured glass 29c6b222 / ac4184ce by name; the hair pass 57a5a049 and the light-beam card 7304aaea are not glass");
       static uint32_t gm[kGlassMarkerSize * kGlassMarkerSize]; for (auto& p : gm) p = kGlassMarkerColour;
       const uint64_t gh = (uint64_t) XXH3_64bits(gm, sizeof gm);
       std::vector<uint8_t> usd; char name[32]; snprintf(name, sizeof name, "mat_%016llX", (unsigned long long) kGlassMarkerHash);
