@@ -2460,27 +2460,6 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
   LogFunctionCall();
   if (sims3cam::enabled()) { g_sims3.drawIndexed = true; g_sims3.drawType = Type; g_sims3.drawBase = BaseVertexIndex; g_sims3.drawStart = startIndex; g_sims3.drawPrims = primCount; }   // for the squares (milestone 60)
   SIMS3_BEGIN_DRAW();
-  // The Sims 3 camera hook, diagnostic (milestone 81; goes once answered): at the mark key, every
-  // captured blended draw whose pixel shader reads a cube map, with its geometry, for two frames --
-  // a glass pass and another pass over the same surface show as one buffer range drawn twice.
-  if (sims3cam::enabled() && g_sims3.markDump && g_sims3.drawCaptured && g_sims3.glassDiagLines < 160 && g_sims3.psAuto && g_sims3.psAuto->valid
-      && (g_sims3.drawGlass || m_state.renderStates[D3DRS_ALPHABLENDENABLE])) {
-    bool cube = false; for (const auto& u : g_sims3.psAuto->samplers) if (u.read && u.cube) cube = true;
-    if (cube) {
-      ++g_sims3.glassDiagLines;
-      auto* vb0_ = *m_state.streams[0] ? bridge_cast<Direct3DVertexBuffer9_LSS*>(*m_state.streams[0]) : nullptr;
-      auto* ib_ = *m_state.indices ? bridge_cast<Direct3DIndexBuffer9_LSS*>(*m_state.indices) : nullptr;
-      const DWORD* rs_ = m_state.renderStates.data();
-      char m[360];
-      snprintf(m, sizeof m, "Sims 3 camera hook: reflective draw at frame %u -> VS %016llx PS %016llx %s | vb %u +%u /%u ib %u | base %d min %u verts %u start %u prims %u | cull %lu stencil %lu z %lu/%lu blend %lu/%lu",
-               g_sims3.frames + 1, (unsigned long long) g_sims3.vsHash, (unsigned long long) g_sims3.psHash, g_sims3.drawGlass ? "GLASS" : "as before",
-               vb0_ ? (unsigned) vb0_->getId() : 0u, (unsigned) m_state.streamOffsets[0], (unsigned) m_state.streamStrides[0], ib_ ? (unsigned) ib_->getId() : 0u,
-               BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount,
-               (unsigned long) rs_[D3DRS_CULLMODE], (unsigned long) rs_[D3DRS_STENCILENABLE], (unsigned long) rs_[D3DRS_ZWRITEENABLE], (unsigned long) rs_[D3DRS_ZFUNC],
-               (unsigned long) rs_[D3DRS_SRCBLEND], (unsigned long) rs_[D3DRS_DESTBLEND]);
-      Logger::info(m);
-    }
-  }
   // The Sims 3 camera hook: the directional light a lit terrain shader is handed for this draw, c0
   // its colour and c1 the direction toward it: the sun, or the moon (milestone 41). Present
   // forwards what the frame's last such draw was given.
@@ -2917,6 +2896,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreateVertexShader(CONST DWORD* pFunc
   if (sims3Hooked) {
     pLssVertexShader->sims3Patch = sims3ConstPatch;
     pLssVertexShader->sims3Hash = sims3Hash;
+    pLssVertexShader->sims3ConstRegs = (uint16_t) sims3cam::vsConstRegisterCount(pFunction, sims3Count);
     sims3DumpShader("vs", sims3Hash, pFunction, sims3Count);
     if (pLssVertexShader->sims3Patch) {
       char msg[192];

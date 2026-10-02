@@ -1032,6 +1032,14 @@ int main() {
       const bool hairOk = !loadShader("ps_57a5a049ffa47770", hair) || (analyzePixelShader(hair.data(), hair.size(), ha) && !isGlassPs(ha, 0x57a5a049ffa47770ull));
       const bool beamOk = !loadShader("ps_7304aaea6a75fb3f", beam) || (analyzePixelShader(beam.data(), beam.size(), ba) && !isGlassPs(ba, 0x7304aaea6a75fb3full));
       CHECK(tgOk && hairOk && beamOk && isGlassPs(PsAnalysis(), 0xac4184cee232ed04ull), "glass (M81): textured glass 29c6b222 / ac4184ce by name; the hair pass 57a5a049 and the light-beam card 7304aaea are not glass");
+      // milestone 82: the constants a glass vertex shader reads -- the window pane's c0..c12; an indexed one, all 256
+      std::vector<DWORD> wv, iv, mv;
+      const uint32_t wn = loadShader("vs_5126ba796dbf5622", wv) ? vsConstRegisterCount(wv.data(), wv.size()) : 13u;
+      const uint32_t in_ = loadShader("vs_34a201bbfafb6d8d", iv) ? vsConstRegisterCount(iv.data(), iv.size()) : 256u;
+      const uint32_t mn = loadShader("vs_d79254da1ebb752b", mv) ? vsConstRegisterCount(mv.data(), mv.size()) : 12u;
+      std::vector<DWORD> mp; PsAnalysis ma;
+      const bool mirrorCube = !loadShader("ps_86dad57d0dc73989", mp) || (analyzePixelShader(mp.data(), mp.size(), ma) && isGlassShader(ma));
+      CHECK(wn == 13 && in_ == 256 && mn == 12 && mirrorCube, "glass (M82): constants read -- window pane VS 5126ba79 %u, indexed VS 34a201bb %u, planar-reflection VS d79254da %u; its PS 86dad57d reads only a cube (dropped under the stencil test)", wn, in_, mn);
       static uint32_t gm[kGlassMarkerSize * kGlassMarkerSize]; for (auto& p : gm) p = kGlassMarkerColour;
       const uint64_t gh = (uint64_t) XXH3_64bits(gm, sizeof gm);
       std::vector<uint8_t> usd; char name[32]; snprintf(name, sizeof name, "mat_%016llX", (unsigned long long) kGlassMarkerHash);

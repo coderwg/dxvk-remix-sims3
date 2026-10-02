@@ -86,8 +86,8 @@ static void sims3LogStats(bool withTable) {
     snprintf(msg, sizeof msg, "Sims 3 camera hook:   cut-outs (milestones 67-68): %u pixel shaders read with a cut-out on a sampler's alpha; %u captured draws given it as an alpha test",
              h.cutShaders, h.alphaCutDraws);
     Logger::info(msg);
-    snprintf(msg, sizeof msg, "Sims 3 camera hook:   glass (milestone 80): %u draws presented with the glass marker (hash 0x%016llX%s)",
-             h.glassDraws, (unsigned long long) h.glassMarkerHash, h.glassMarker ? "" : ", not created yet");
+    snprintf(msg, sizeof msg, "Sims 3 camera hook:   glass (milestones 80-82): %u draws presented with the glass marker (hash 0x%016llX%s); left out: %u repeats of a pane already sent in the frame, %u planar-reflection surface passes",
+             h.glassDraws, (unsigned long long) h.glassMarkerHash, h.glassMarker ? "" : ", not created yet", h.glassRepeats, h.mirrorSurfaceDropped);
     Logger::info(msg);
     snprintf(msg, sizeof msg, "Sims 3 camera hook:   albedo sampler states (milestone 68): %u draws moved an albedo to stage 0 with sampler states differing from stage 0's, %u of them its sRGB flag",
              h.remapSamplerDraws, h.remapSrgbDraws);
@@ -148,12 +148,13 @@ void sims3OnPresent(Sims3Hook& h, Dev* dev) {
     sims3LogStats(h.frames == 300 || h.frames % 3600 == 0);
   }
   h.frameCamSet = false;
+  h.glassSent.clear();   // the glass draws of the frame (milestone 82)
   h.lotCopies.clear();   // the lot meshes drawn this frame (milestone 16)
   sims3SquaresFrameEnd(h, dev);   // the squares' shapes for the next frame (milestone 60)
   sims3TerrainBlockEnd(h, dev);   // the frame is over: the game's sampler states back (milestone 18g)
   {
     const bool f9 = ((GetAsyncKeyState(VK_F9) | GetAsyncKeyState(sims3cam::markKey()) | GetAsyncKeyState(VK_OEM_3)) & 0x8000) != 0;   // F9, the configured key (sims3hook.txt markKey) or backtick
-    if (f9 && !h.f9Down) { h.markDump = 2; h.glassDiagLines = 0; }   // the lit lamps and the fog, logged once; the reflective draws of two frames
+    if (f9 && !h.f9Down) h.markDump = 2;   // the lit lamps and the fog, logged once
     else if (h.markDump) --h.markDump;
     h.f9Down = f9;
   }

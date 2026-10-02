@@ -1851,6 +1851,24 @@ inline const TexturedGlass kTexturedGlass[] = {
   { 0xac4184cee232ed04ull, "glass: colour texture s2 x c10, gloss s3, irradiance cube s1 (VS d7fede81)" },
 };
 inline bool isGlassPs(const PsAnalysis& a, uint64_t hash) { return isGlassShader(a) || findByHash(kTexturedGlass, hash) != nullptr; }
+// The float constant registers a vertex shader reads (milestone 82): one past the highest it names,
+// or all 256 when it indexes them (relative addressing: a bone palette or an instance table). Two
+// draws of one shader with the same buffers, range and these constants put the same triangles in
+// the same place.
+inline uint32_t vsConstRegisterCount(const DWORD* tokens, size_t count) {
+  uint32_t n = 0; bool relative = false;
+  dxsoForEach(tokens, count, [&](size_t pos, uint32_t op, uint32_t len) {
+    if (op == kDxsoOpDcl || op == 0x51u || op == 0x30u || op == 0x2Fu) return true;   // DCL, DEF, DEFI, DEFB: no source registers
+    for (uint32_t i = 1; i <= len; ++i) {
+      const uint32_t t = tokens[pos + i];
+      if (dxsoRegType(t) != 2u) continue;                                          // CONST
+      n = (std::max)(n, dxsoRegNum(t) + 1u);
+      if (t & 0x2000u) relative = true;                                            // D3DSHADER_ADDRMODE_RELATIVE
+    }
+    return true;
+  });
+  return relative || n > 256u ? 256u : n;
+}
 inline constexpr uint32_t kGlassMarkerSize = 32;
 inline constexpr uint32_t kGlassMarkerColour = 0xFFB8C8D0u;          // ARGB pale grey-blue: what the panes show if the mod is not loaded
 inline constexpr uint64_t kGlassMarkerHash = 0x5E30D0B82C246E6Cull;  // XXH3-64 of its level 0, as the runtime hashes it; the mod's material name

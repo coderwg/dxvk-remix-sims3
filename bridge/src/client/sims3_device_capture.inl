@@ -316,3 +316,31 @@ bool sims3EnsureGlassMarker(Sims3Hook& h, Dev* dev) {
   Logger::info(msg);
   return true;
 }
+
+// Whether this indexed glass draw repeats one already sent this frame (milestone 82): the same vertex
+// shader, buffers, range and every float constant the shader reads -- the same triangles in the same
+// place. The first is remembered; the list is cleared at Present.
+template<typename Dev>
+bool sims3GlassRepeat(Sims3Hook& h, Dev* dev) {
+  if (!h.drawIndexed) return false;
+  IDirect3DVertexBuffer9* vb = nullptr; UINT off = 0, stride = 0; IDirect3DIndexBuffer9* ib = nullptr;
+  dev->GetStreamSource(0, &vb, &off, &stride); dev->GetIndices(&ib);
+  struct { uint64_t vs; uint64_t vb, ib; uint32_t off, stride; int32_t base; uint32_t start, prims, regs; } head;
+  memset(&head, 0, sizeof head);
+  head.vs = h.vsHash; head.vb = (uint64_t) (uintptr_t) vb; head.ib = (uint64_t) (uintptr_t) ib; head.off = off; head.stride = stride;
+  head.base = h.drawBase; head.start = h.drawStart; head.prims = h.drawPrims; head.regs = h.vsConstRegs;
+  if (vb) vb->Release();
+  if (ib) ib->Release();
+  static float consts[256 * 4];
+  const uint32_t regs = (std::min)((uint32_t) h.vsConstRegs, 256u);
+  if (regs) dev->GetVertexShaderConstantF(0, consts, regs);
+  uint64_t key = sims3cam::fnv1a64(&head, sizeof head);
+#if SIMS3_HAVE_XXHASH
+  key ^= (uint64_t) XXH3_64bits(consts, regs * 16u) * 0x9E3779B97F4A7C15ull;
+#else
+  key ^= sims3cam::fnv1a64(consts, regs * 16u) * 0x9E3779B97F4A7C15ull;
+#endif
+  for (uint64_t k : h.glassSent) if (k == key) return true;
+  h.glassSent.push_back(key);
+  return false;
+}

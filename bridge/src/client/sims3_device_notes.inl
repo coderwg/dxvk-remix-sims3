@@ -13,6 +13,7 @@ void sims3NoteVertexShader(Sims3Hook& h, IDirect3DVertexShader9* pShader) {
   h.vsBound = pShader;
   h.vsNormal = pLssVertexShader ? &pLssVertexShader->sims3Normal : nullptr;
   h.vsWall = pLssVertexShader ? &pLssVertexShader->sims3Wall : nullptr;
+  h.vsConstRegs = pLssVertexShader ? pLssVertexShader->sims3ConstRegs : (uint16_t) 0;
   h.vsTerrain = pLssVertexShader ? sims3cam::findTerrainShader(pLssVertexShader->sims3Hash) : nullptr;
   h.vsTabled = pLssVertexShader && (h.vsCapturedUv || h.vsNeverCapture == 1);   // a blended-only entry still gets its opaque draws' variants
 }
