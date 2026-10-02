@@ -35,6 +35,7 @@ inline void sims3OnReset(Sims3Hook& h) {
   if (h.mirrorMarker) { h.mirrorMarker->Release(); h.mirrorMarker = nullptr; }
   h.mirrorMarkerHash = 0; h.mirrorMarkerFailed = false;
   if (h.carGlassMarker) { h.carGlassMarker->Release(); h.carGlassMarker = nullptr; }
+  for (size_t i = 0; i < sims3cam::kGlassSurveyMax; ++i) { if (h.surveyMarkers[i]) h.surveyMarkers[i]->Release(); h.surveyMarkers[i] = nullptr; h.surveyHashes[i] = 0; h.surveyFailed[i] = false; }
   h.carGlassMarkerHash = 0; h.carGlassMarkerFailed = false;
   h.glassMarkerHash = 0; h.glassMarkerFailed = false; h.blendOurs = false; h.bumpHashes.clear();
   for (auto& g : h.glassSides) if (g.second.ib) g.second.ib->Release();
@@ -309,18 +310,19 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
     const bool carGlass = !water && !h.reflectiveSheet && named && named->material == sims3cam::kCarGlass && sims3EnsureCarGlassMarker(h, dev);
     IDirect3DBaseTexture9* const bump = (!water && !h.reflectiveSheet && !carGlass && named && named->bumpStage >= 0 && h.psAuto && h.psAuto->valid) ? sims3GlassBump(h, dev, *named) : nullptr;
     const bool glass = !water && !h.reflectiveSheet && !carGlass && h.psAuto && (named || (rs[D3DRS_ALPHABLENDENABLE] && sims3cam::isGlassShader(*h.psAuto))) && (bump || sims3EnsureGlassMarker(h, dev));
+    IDirect3DTexture9* const survey = (carGlass || glass) ? sims3SurveyMarker(h, dev) : nullptr;   // the glass survey (milestone 110; one run)
     if (water || mirror || carGlass || glass) {
       h.drawGlass = true;
       h.remapRestore = h.boundTex[0]; if (h.remapRestore) h.remapRestore->AddRef();   // held until sims3EndDraw, as for an albedo remap
       h.remapActive = true;
-      h.inRemap = true; dev->SetTexture(0, water ? h.waterMarkers[waterMat] : mirror ? h.mirrorMarker : carGlass ? h.carGlassMarker : bump ? bump : h.glassMarker); h.inRemap = false;
+      h.inRemap = true; dev->SetTexture(0, survey ? survey : water ? h.waterMarkers[waterMat] : mirror ? h.mirrorMarker : carGlass ? h.carGlassMarker : bump ? bump : (IDirect3DBaseTexture9*) h.glassMarker); h.inRemap = false;
       // water (milestone 94): the sampler states of the game's first wave map (the one its TEXCOORD0
       // reads) on stage 0, where the runtime takes the material's -- the normal map tiles as the game's
       // waves do; back in sims3EndDraw with the albedo remap's
       if (water) for (int s = 0; s < 16; ++s) if (h.boundKind[s] == 1 && sims3cam::isWaveMapFormat(h.boundFmt[s])) { if (s > 0) h.remapSamplerSet = sims3SamplerStatesTo0(h, dev, (DWORD) s, h.remapSamplerSaved); break; }
       // bumpy glass (milestone 109): its bump map's sampler states on stage 0 and the bump map's coordinate
       // as the captured TEXCOORD0 (a promoted variant), so the runtime lays the bumps where the game does
-      if (bump) {
+      if (bump && !survey) {
         if (named->bumpStage > 0) h.remapSamplerSet = sims3SamplerStatesTo0(h, dev, (DWORD) named->bumpStage, h.remapSamplerSaved);
         sims3AutoTexcoord(h, named->bumpStage, -1, false);
       }

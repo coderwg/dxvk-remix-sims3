@@ -317,7 +317,7 @@ bool sims3EnsureMarker(Dev* dev, IDirect3DTexture9*& marker, uint64_t& hash, boo
   hash = (uint64_t) XXH3_64bits(pixels, sizeof pixels);   // the runtime hashes level 0's bytes, rows packed
 #endif
   snprintf(msg, sizeof msg, "Sims 3 camera hook: %s marker created, hash 0x%016llX%s (the hook's Remix mods name mat_%016llX; replacement assets must be on)",
-           what, (unsigned long long) hash, hash == modHash ? "" : " -- NOT the mod's", (unsigned long long) modHash);
+           what, (unsigned long long) hash, !modHash ? " -- no material: its flat colour shows" : hash == modHash ? "" : " -- NOT the mod's", (unsigned long long) modHash);
   Logger::info(msg);
   return true;
 }
@@ -325,6 +325,21 @@ template<typename Dev>
 bool sims3EnsureGlassMarker(Sims3Hook& h, Dev* dev) { return sims3EnsureMarker(dev, h.glassMarker, h.glassMarkerHash, h.glassMarkerFailed, sims3cam::kGlassMarkerColour, sims3cam::kGlassMarkerHash, "glass"); }
 template<typename Dev>
 bool sims3EnsureMirrorMarker(Sims3Hook& h, Dev* dev) { return sims3EnsureMarker(dev, h.mirrorMarker, h.mirrorMarkerHash, h.mirrorMarkerFailed, sims3cam::kMirrorMarkerColour, sims3cam::kMirrorMarkerHash, "mirror"); }
+// The glass survey's marker for the bound pixel shader (milestone 110; one run), or nullptr when it is
+// not surveyed; made on its first draw, the log naming its colour, shader and frame.
+template<typename Dev>
+IDirect3DTexture9* sims3SurveyMarker(Sims3Hook& h, Dev* dev) {
+  const sims3cam::GlassSurvey* s = sims3cam::glassSurvey(h.psHash);
+  if (!s) return nullptr;
+  const size_t i = (size_t) (s - sims3cam::kGlassSurvey);
+  if (!h.surveyMarkers[i] && !h.surveyFailed[i]) {
+    char what[160];
+    snprintf(what, sizeof what, "glass survey: %s = PS %016llx (first drawn at frame %u, VS %016llx);", s->colourName, (unsigned long long) h.psHash, h.frames + 1, (unsigned long long) h.vsHash);
+    sims3EnsureMarker(dev, h.surveyMarkers[i], h.surveyHashes[i], h.surveyFailed[i], s->colour, 0, what);
+  }
+  if (h.surveyMarkers[i]) ++h.surveyDraws;
+  return h.surveyMarkers[i];
+}
 template<typename Dev>
 bool sims3EnsureCarGlassMarker(Sims3Hook& h, Dev* dev) { return sims3EnsureMarker(dev, h.carGlassMarker, h.carGlassMarkerHash, h.carGlassMarkerFailed, sims3cam::kCarGlassMarkerColour, sims3cam::kCarGlassMarkerHash, "car glass"); }
 template<typename Dev>

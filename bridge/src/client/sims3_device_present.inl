@@ -94,6 +94,8 @@ static void sims3LogStats(bool withTable) {
     snprintf(msg, sizeof msg, "Sims 3 camera hook:   bumpy glass (milestone 109): %u draws with their own bump map (%u materials in Sims3GlassBumps%s), %u as the clear glass while their bump map has none (%u bump maps seen without one)",
              h.bumpDraws, (unsigned) h.bumpMaterials.size(), h.bumpModRead ? "" : ", not read yet", h.bumpPending, (unsigned) h.bumpWritten.size());
     Logger::info(msg);
+    snprintf(msg, sizeof msg, "Sims 3 camera hook:   glass survey (milestone 110, one run): %u draws in their survey colour", h.surveyDraws);
+    Logger::info(msg);
     snprintf(msg, sizeof msg, "Sims 3 camera hook:   glass sheets (milestone 104): %u draws sent without their back side (%llu triangles left out), %u draws whose mesh is not read (a second position or an unknown type), %u unblended passes of a twice-drawn glass left out",
              h.glassSideDraws, (unsigned long long) h.glassSideTris, h.glassSideSkipped, h.glassPassDropped);
     Logger::info(msg);

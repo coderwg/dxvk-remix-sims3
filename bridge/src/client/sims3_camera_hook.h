@@ -1916,6 +1916,31 @@ inline const NamedGlass kNamedGlass[] = {
   { 0x66516d5db94ab307ull, "car glass, a passing car's windshield and windows: cube only (VS e79a4bf1, skinned; run 215)", kCarGlass },
 };
 inline const NamedGlass* namedGlass(uint64_t hash) { return findByHash(kNamedGlass, hash); }
+// ---- the glass survey (milestone 110; one run, goes once answered) --------------------------------
+// The user: "can you also color code all the unknown glass so i could identify where they all are?"
+// Every glass shader whose objects are not known yet -- all but the shower door, the cars' windows
+// and the mirrors -- goes out in a flat colour of its own, no material (the runtime shows the marker
+// as an opaque albedo); the hook's log names each colour's shader as it first appears.
+struct GlassSurvey { uint64_t hash; uint32_t colour; const char* colourName; };
+inline constexpr size_t kGlassSurveyMax = 16;
+inline const GlassSurvey kGlassSurvey[] = {
+  { 0x3197bfdef2330503ull, 0xFFFF0000u, "RED" },          // cube only, 7.7M draws
+  { 0x98e23f47d947eb22ull, 0xFF00FF00u, "GREEN" },        // cube only, 6.4M
+  { 0x85e9c3381d5bf054ull, 0xFF0000FFu, "BLUE" },         // the scene behind, 1.1M
+  { 0x2b1da1b45f51d3f9ull, 0xFFFFFF00u, "YELLOW" },       // the scene behind, ps_2_0, 966k
+  { 0xdb28eb0c60fdb2fbull, 0xFFFF00FFu, "MAGENTA" },      // cube only, 55k
+  { 0xefdac7f048e21b1full, 0xFF00FFFFu, "CYAN" },         // cube only, 54k
+  { 0x8ff495765d26a6fdull, 0xFFFF8000u, "ORANGE" },       // the scene behind, 12k
+  { 0x8fe3ce7c5fbc6234ull, 0xFF8000FFu, "PURPLE" },       // bumpy, 4.8k
+  { 0x910a56f24813e248ull, 0xFFFF80C0u, "PINK" },         // bumpy, 4.2k
+  { 0xa9336d35a25143aeull, 0xFFFFFFFFu, "WHITE" },        // bumpy, ps_2_0, 560
+  { 0x7eeb349a23cbefefull, 0xFF804000u, "BROWN" },        // the scene behind + a colour texture, 310
+  { 0x29c6b22234617c1aull, 0xFF808080u, "GREY" },         // textured glass
+  { 0xac4184cee232ed04ull, 0xFF80C0FFu, "LIGHT BLUE" },   // textured glass (the dome?)
+  { 0xd03ebab11453bca1ull, 0xFF006000u, "DARK GREEN" },   // a small glass on a car's atlas (a distant car?)
+};
+static_assert(sizeof kGlassSurvey / sizeof kGlassSurvey[0] <= kGlassSurveyMax, "the hook keeps 16 survey markers");
+inline const GlassSurvey* glassSurvey(uint64_t hash) { return findByHash(kGlassSurvey, hash); }
 // The material hashes a Remix mod names (def Material "mat_<16 hex>"): which of the game's bump maps
 // the Sims3GlassBumps mod has a bumpy glass for (milestone 109).
 inline std::vector<uint64_t> modMaterialHashes(const std::string& usda) {
