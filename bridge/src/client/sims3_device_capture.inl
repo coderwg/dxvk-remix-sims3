@@ -11,6 +11,7 @@ bool sims3ApplyForDraw(Sims3Hook& h, Dev* dev, const DWORD* rs) {
   // a reflection pass's draw (runs 66-68): dropped before it reaches the runtime; the ray tracer
   // renders reflections itself. Nothing is changed on the device for it.
   h.drawDropped = sims3cam::isReflectionDraw(h.camMirrored, h.declIs3D, zEnable, stencil, cull);
+  h.dropWhy = h.drawDropped ? "reflection pass" : "";
   if (h.drawDropped) {
     ++h.reflectionDrops;
     if (!h.camMirrored) ++h.reflectionDropsByStates;
@@ -37,7 +38,7 @@ bool sims3ApplyForDraw(Sims3Hook& h, Dev* dev, const DWORD* rs) {
         if (h.marker[1] != nullptr && !h.markerFailed) {
           h.lotFurtherCopy = true; ++h.terrainLotCopyDraws;
         } else {
-          h.drawDropped = true;
+          h.drawDropped = true; h.dropWhy = "lot copy";
           ++h.lotCopyDrops;
           if (h.lotCopyLogged < 4) {
             ++h.lotCopyLogged; char msg[240];
@@ -317,49 +318,3 @@ bool sims3EnsureGlassMarker(Sims3Hook& h, Dev* dev) {
   return true;
 }
 
-// The place of an indexed draw's triangles (milestone 83): its vertex shader, buffers, range and the
-// constants that place its vertices (sims3cam::vsPositionConstMask). 0 when not an indexed draw or
-// the shader's facts are missing. allConsts: a hash of c0..c31 (the diagnostic's second key).
-template<typename Dev>
-uint64_t sims3PlaceKey(Sims3Hook& h, Dev* dev, uint64_t* allConsts = nullptr) {
-  if (!h.drawIndexed || !h.vsPosConsts) return 0;
-  IDirect3DVertexBuffer9* vb = nullptr; UINT off = 0, stride = 0; IDirect3DIndexBuffer9* ib = nullptr;
-  dev->GetStreamSource(0, &vb, &off, &stride); dev->GetIndices(&ib);
-  struct { uint64_t vs; uint64_t vb, ib; uint32_t off, stride; int32_t base; uint32_t start, prims; } head;
-  memset(&head, 0, sizeof head);
-  head.vs = h.vsHash; head.vb = (uint64_t) (uintptr_t) vb; head.ib = (uint64_t) (uintptr_t) ib; head.off = off; head.stride = stride;
-  head.base = h.drawBase; head.start = h.drawStart; head.prims = h.drawPrims;
-  if (vb) vb->Release();
-  if (ib) ib->Release();
-  static float consts[256 * 4], picked[256 * 4];
-  dev->GetVertexShaderConstantF(0, consts, 256);
-  uint32_t n = 0;
-  for (uint32_t r = 0; r < 256u; ++r) if (h.vsPosConsts->has(r)) { memcpy(&picked[n * 4], &consts[r * 4], 16); ++n; }
-  uint64_t key = sims3cam::fnv1a64(&head, sizeof head);
-#if SIMS3_HAVE_XXHASH
-  key ^= (uint64_t) XXH3_64bits(picked, n * 16u) * 0x9E3779B97F4A7C15ull;
-  if (allConsts) *allConsts = (uint64_t) XXH3_64bits(consts, 32 * 16u);
-#else
-  key ^= sims3cam::fnv1a64(picked, n * 16u) * 0x9E3779B97F4A7C15ull;
-  if (allConsts) *allConsts = sims3cam::fnv1a64(consts, 32 * 16u);
-#endif
-  return key ? key : 1;
-}
-
-// Whether this indexed glass draw repeats one already sent this frame (milestone 82; the place since
-// milestone 83). The first is remembered; the list is cleared at Present.
-template<typename Dev>
-bool sims3GlassRepeat(Sims3Hook& h, Dev* dev) {
-  const uint64_t key = sims3PlaceKey(h, dev);
-  if (!key) return false;
-  for (uint64_t k : h.glassSent) if (k == key) {
-    if (h.markDump && h.diagLines < 200) {
-      ++h.diagLines; char m[192];
-      snprintf(m, sizeof m, "Sims 3 camera hook: diag frame %u -> VS %016llx PS %016llx GLASS REPEAT left out | place %016llx", h.frames + 1, (unsigned long long) h.vsHash, (unsigned long long) h.psHash, (unsigned long long) key);
-      Logger::info(m);
-    }
-    return true;
-  }
-  h.glassSent.push_back(key);
-  return false;
-}

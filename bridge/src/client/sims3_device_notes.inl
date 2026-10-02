@@ -13,7 +13,6 @@ void sims3NoteVertexShader(Sims3Hook& h, IDirect3DVertexShader9* pShader) {
   h.vsBound = pShader;
   h.vsNormal = pLssVertexShader ? &pLssVertexShader->sims3Normal : nullptr;
   h.vsWall = pLssVertexShader ? &pLssVertexShader->sims3Wall : nullptr;
-  h.vsPosConsts = pLssVertexShader ? &pLssVertexShader->sims3PosConsts : nullptr;
   h.vsTerrain = pLssVertexShader ? sims3cam::findTerrainShader(pLssVertexShader->sims3Hash) : nullptr;
   h.vsTabled = pLssVertexShader && (h.vsCapturedUv || h.vsNeverCapture == 1);   // a blended-only entry still gets its opaque draws' variants
 }
@@ -52,4 +51,37 @@ void sims3NoteDecl(Sims3Hook& h, IDirect3DVertexDeclaration9* pDecl) {
   h.declIs3D = pLssVtxDecl ? sims3cam::positionIs3D(pLssVtxDecl->sims3Elements()) : false;
   h.wallLayout = sims3cam::WallLayout(); h.wallDeclId = (uint32_t) id;
   if (pLssVtxDecl) sims3cam::wallLayoutFromDecl(pLssVtxDecl->sims3Elements(), h.wallLayout);
+}
+
+// Diagnostic (milestone 84; goes once answered): at the mark key, one line per draw of the next frame
+// -- what the runtime is handed: sent, sent as glass, not captured, or left out (why); the stage-0
+// texture it sees; the states and the geometry. Two marks of one view (the shower door transparent,
+// then grey) differ by the draws that make the difference.
+template<typename St>
+void sims3DumpDraw(Sims3Hook& h, const St& st) {
+  if (h.markDump != 2 || h.diagLines >= 6000) return;
+  ++h.diagLines;
+  char tex[96] = "none";
+  if (*st.textures[0] != nullptr) {
+    if (st.textureTypes[0] == D3DRTYPE_CUBETEXTURE) snprintf(tex, sizeof tex, "CUBE");
+    else if (st.textureTypes[0] == D3DRTYPE_TEXTURE) {
+      auto* t = bridge_cast<Direct3DTexture9_LSS*>(*st.textures[0]);
+      const D3DSURFACE_DESC d = t->getLevelDesc(0); char fb[16];
+      snprintf(tex, sizeof tex, "%s %ux%u%s id %u", sims3FormatName((uint32_t) d.Format, fb, sizeof fb), d.Width, d.Height, (d.Usage & D3DUSAGE_RENDERTARGET) ? " RT" : "", (unsigned) t->getId());
+    } else snprintf(tex, sizeof tex, "VOLUME");
+  }
+  auto* vb = *st.streams[0] ? bridge_cast<Direct3DVertexBuffer9_LSS*>(*st.streams[0]) : nullptr;
+  auto* ib = *st.indices ? bridge_cast<Direct3DIndexBuffer9_LSS*>(*st.indices) : nullptr;
+  const DWORD* rs = st.renderStates.data();
+  const char* what = h.drawDropped ? h.dropWhy : !h.drawCaptured ? "not captured" : h.drawGlass ? "GLASS" : "sent";
+  char range[64];
+  if (h.drawIndexed) snprintf(range, sizeof range, "base %d start %u prims %u", h.drawBase, h.drawStart, h.drawPrims);
+  else snprintf(range, sizeof range, "DP");
+  char m[440];
+  snprintf(m, sizeof m, "Sims 3 camera hook: dump frame %u #%u -> %s | VS %016llx PS %016llx | stage 0: %s | vb %u +%u /%u ib %u | %s | cull %lu stencil %lu z %lu %lu/%lu blend %lu %lu/%lu atest %lu cw %lx",
+           h.frames + 1, h.diagLines, what, (unsigned long long) h.vsHash, (unsigned long long) h.psHash, tex,
+           vb ? (unsigned) vb->getId() : 0u, (unsigned) st.streamOffsets[0], (unsigned) st.streamStrides[0], ib ? (unsigned) ib->getId() : 0u, range,
+           (unsigned long) rs[D3DRS_CULLMODE], (unsigned long) rs[D3DRS_STENCILENABLE], (unsigned long) rs[D3DRS_ZENABLE], (unsigned long) rs[D3DRS_ZWRITEENABLE], (unsigned long) rs[D3DRS_ZFUNC],
+           (unsigned long) rs[D3DRS_ALPHABLENDENABLE], (unsigned long) rs[D3DRS_SRCBLEND], (unsigned long) rs[D3DRS_DESTBLEND], (unsigned long) rs[D3DRS_ALPHATESTENABLE], (unsigned long) rs[D3DRS_COLORWRITEENABLE]);
+  Logger::info(m);
 }

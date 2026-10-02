@@ -1032,18 +1032,13 @@ int main() {
       const bool hairOk = !loadShader("ps_57a5a049ffa47770", hair) || (analyzePixelShader(hair.data(), hair.size(), ha) && !isGlassPs(ha, 0x57a5a049ffa47770ull));
       const bool beamOk = !loadShader("ps_7304aaea6a75fb3f", beam) || (analyzePixelShader(beam.data(), beam.size(), ba) && !isGlassPs(ba, 0x7304aaea6a75fb3full));
       CHECK(tgOk && hairOk && beamOk && isGlassPs(PsAnalysis(), 0xac4184cee232ed04ull), "glass (M81): textured glass 29c6b222 / ac4184ce by name; the hair pass 57a5a049 and the light-beam card 7304aaea are not glass");
-      // milestone 83: the constants that place a glass vertex shader's vertices -- the window pane's c0..c3
-      // (not its colour c8 or fog c9 / c10); an indexed one, all 256
-      std::vector<DWORD> wv, iv, mv;
-      ConstMask wm, im, mm; wm.set(0); wm.set(1); wm.set(2); wm.set(3); im.all(); mm = wm;
-      if (loadShader("vs_5126ba796dbf5622", wv)) wm = vsPositionConstMask(wv.data(), wv.size());
-      if (loadShader("vs_34a201bbfafb6d8d", iv)) im = vsPositionConstMask(iv.data(), iv.size());
-      if (loadShader("vs_d79254da1ebb752b", mv)) mm = vsPositionConstMask(mv.data(), mv.size());
-      const bool winOk = wm.count() == 4 && wm.has(0) && wm.has(1) && wm.has(2) && wm.has(3) && !wm.has(8);
+      // milestone 82: the planar-reflection surface's PS 86dad57d reads only a cube (left out under the stencil test)
       std::vector<DWORD> mp; PsAnalysis ma;
       const bool mirrorCube = !loadShader("ps_86dad57d0dc73989", mp) || (analyzePixelShader(mp.data(), mp.size(), ma) && isGlassShader(ma));
-      CHECK(winOk && im.count() == 256 && mm.count() == 4 && mm.has(0) && mm.has(3) && mirrorCube,
-            "glass (M83): position constants -- window pane VS 5126ba79 %u (c0..c3), indexed VS 34a201bb %u, planar-reflection VS d79254da %u; its PS 86dad57d reads only a cube", wm.count(), im.count(), mm.count());
+      CHECK(mirrorCube, "glass (M82): the planar-reflection surface PS 86dad57d reads only a cube");
+      // milestone 84: the Sims' soft shadow blob is never captured
+      const NeverCapture* blob = findNeverCapture(0xb7d550c6421e14f4ull);
+      CHECK(blob && !blob->blendedOnly, "never-capture (M84): the Sims' soft shadow blob VS b7d550c6");
       static uint32_t gm[kGlassMarkerSize * kGlassMarkerSize]; for (auto& p : gm) p = kGlassMarkerColour;
       const uint64_t gh = (uint64_t) XXH3_64bits(gm, sizeof gm);
       std::vector<uint8_t> usd; char name[32]; snprintf(name, sizeof name, "mat_%016llX", (unsigned long long) kGlassMarkerHash);

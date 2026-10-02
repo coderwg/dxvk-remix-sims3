@@ -19,7 +19,7 @@ inline void sims3OnReset(Sims3Hook& h) {
   for (uint32_t i = 0; i < h.wallCacheCount; ++i) sims3ReleaseWallEntry(h.wallCache[i]);
   h.wallCacheCount = 0; for (auto& m : h.masks) m = Sims3Hook::MaskEntry(); h.maskUse = 0;
   for (auto& e : h.bufHashes) e = Sims3Hook::HashEntry(); h.bufHashUse = 0;
-  h.vsWall = nullptr; h.vsPosConsts = nullptr; h.wallLayout = sims3cam::WallLayout(); h.wallDeclId = 0;
+  h.vsWall = nullptr; h.wallLayout = sims3cam::WallLayout(); h.wallDeclId = 0;
   for (uint32_t i = 0; i < h.vsVariantCount; ++i) if (h.vsVariants[i].variant) h.vsVariants[i].variant->Release();
   h.vsVariantCount = 0;
   if (h.autoVsRestore) { h.autoVsRestore->Release(); h.autoVsRestore = nullptr; }
@@ -79,16 +79,13 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
     return false;
   }
   // the neighbourhood view's lot picture (milestone 63): a second surface over the lot's ground, left out
-  if (h.vsHash == sims3cam::kLotPictureVs) { h.drawDropped = true; h.drawCaptured = false; ++h.lotPictureDropped; return false; }
-  // glass (milestone 82): (1) the surface pass of the game's planar reflection -- a cube-only
-  // reflection under the stencil test, PS 86dad57d (its colourless passes mark the stencil, the
-  // reflected scene between them is a mirror pass, dropped since milestone 13c) -- is left out: the
-  // ray tracer reflects by itself, and the object's own glass pane stays (run 189: the shower door's
-  // grey was this pass going out untextured); (2) a glass draw repeating one already sent this frame
-  // (the same vertex shader, buffers, range and the constants that place its vertices, milestone 83 --
-  // run 189: a window's pane drawn twice) is left out: two coincident glass surfaces flicker.
-  if (h.psAuto && h.psAuto->valid && rs[D3DRS_STENCILENABLE] && sims3cam::isGlassShader(*h.psAuto)) { h.drawDropped = true; h.drawCaptured = false; ++h.mirrorSurfaceDropped; return false; }
-  if (h.psAuto && rs[D3DRS_ALPHABLENDENABLE] && sims3cam::isGlassPs(*h.psAuto, h.psHash) && sims3GlassRepeat(h, dev)) { h.drawDropped = true; h.drawCaptured = false; ++h.glassRepeats; return false; }
+  if (h.vsHash == sims3cam::kLotPictureVs) { h.drawDropped = true; h.drawCaptured = false; h.dropWhy = "lot picture"; ++h.lotPictureDropped; return false; }
+  // glass (milestone 82): the surface pass of the game's planar reflection -- a cube-only reflection
+  // under the stencil test, PS 86dad57d (its colourless passes mark the stencil, the reflected scene
+  // between them is a mirror pass, dropped since milestone 13c) -- is left out: the ray tracer reflects
+  // by itself, and the object's own glass pane stays. Sent, it went out as glass when blended, as an
+  // untextured sheet when nothing was bound, and dropped by the runtime with the cube bound.
+  if (h.psAuto && h.psAuto->valid && rs[D3DRS_STENCILENABLE] && sims3cam::isGlassShader(*h.psAuto)) { h.drawDropped = true; h.drawCaptured = false; h.dropWhy = "planar-reflection surface"; ++h.mirrorSurfaceDropped; return false; }
   int k = -1;
   ++h.capturedDraws;
   if (rs[D3DRS_FOGENABLE] && (rs[D3DRS_FOGTABLEMODE] != D3DFOG_NONE || rs[D3DRS_FOGVERTEXMODE] != D3DFOG_NONE)) ++h.gameFogDraws;   // a fog state of the game's own (milestone 56: none expected)

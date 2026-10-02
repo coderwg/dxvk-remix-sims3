@@ -151,7 +151,6 @@ struct Sims3Hook {
   sims3cam::WallLayout wallLayout;                // the bound vertex declaration's wall elements (valid when it has them)
   uint32_t wallDeclId = 0;                        // ...and the declaration's id (cache key)
   const sims3cam::WallVsInfo* vsWall = nullptr;   // the bound (game) vertex shader's wall facts
-  const sims3cam::ConstMask* vsPosConsts = nullptr;   // ...and the float constants that place its vertices (milestone 83)
   struct WallEntry { uint64_t key; uint32_t lastFrame; bool changed; IDirect3DVertexBuffer9* vb0; IDirect3DVertexBuffer9* vb1; IDirect3DIndexBuffer9* ib; uint32_t vertexCount, triangleCount; };
   static constexpr uint32_t kWallCacheSize = 256;
   WallEntry wallCache[kWallCacheSize] = {}; uint32_t wallCacheCount = 0;
@@ -209,9 +208,10 @@ struct Sims3Hook {
   IDirect3DTexture9* glassMarker = nullptr; uint64_t glassMarkerHash = 0; bool glassMarkerFailed = false;
   DWORD blendSaved = 0; bool blendOurs = false;
   uint32_t glassDraws = 0, glassLogged = 0; uint64_t glassLoggedPs[8] = {};
-  // the glass draws sent this frame (milestone 82: a repeat of one is left out), what was left out
-  std::vector<uint64_t> glassSent; uint32_t glassRepeats = 0, mirrorSurfaceDropped = 0;
-  bool drawGlass = false; uint32_t diagLines = 0;   // this draw went out as glass; the mark key's draw lines (diagnostic, milestone 83)
+  uint32_t mirrorSurfaceDropped = 0;   // the planar-reflection surface passes left out (milestone 82)
+  bool drawGlass = false;               // this draw went out as glass
+  const char* dropWhy = "";             // why this draw was left out (the mark key's dump)
+  uint32_t diagLines = 0;               // the mark key's dump lines (diagnostic, milestone 84)
   // the lot paint composite's two passes (milestone 17l, sims3cam::lotCompositeStage): the pass
   // being issued (0 = the game's own draw, pass 1; 2 = the hook's second pass, milestone 19), and
   // pass 2's black marker at stages 1 and 2 (what they held, put back in sims3EndDraw)

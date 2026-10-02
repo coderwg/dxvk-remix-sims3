@@ -829,6 +829,11 @@ struct NeverCapture { uint64_t hash; const char* name; bool blendedOnly; };
 inline const NeverCapture kNeverCapture[] = {
   // from the run-15 shader dump
   { 0xc79615c0181b5ef1ull, "drop-shadow decals (instanced quads multiplied over the ground)", false },
+  // The Sims' soft shadow blob (milestone 84): a ground decal lifted 5 mm, its texture a 64x64 render
+  // target of the Sims' shadows (the channel picked by vertex colour), multiplied over the ground
+  // (ZERO / INVSRCALPHA). Captured, the runtime took the render target as an albedo; the ray tracer
+  // casts the Sims' shadows itself.
+  { 0xb7d550c6421e14f4ull, "the Sims' soft shadow blob (a 64x64 render target multiplied over the ground)", false },
   // Close-range grass and flower sprites: camera-relative, faded by distance (hidden
   // instances collapse to the origin), one of four axis orientations per instance, two
   // wind-animated frames blended, alpha cut by texkill. Whole quads under capture -- the
@@ -1851,55 +1856,6 @@ inline const TexturedGlass kTexturedGlass[] = {
   { 0xac4184cee232ed04ull, "glass: colour texture s2 x c10, gloss s3, irradiance cube s1 (VS d7fede81)" },
 };
 inline bool isGlassPs(const PsAnalysis& a, uint64_t hash) { return isGlassShader(a) || findByHash(kTexturedGlass, hash) != nullptr; }
-// The float constant registers that place a vertex shader's vertices (milestone 83): those whose
-// values flow into its position output (oPos; in vs_3_0 the output declared POSITION 0), followed
-// through temporaries register by register (a superset); every register when a relative read or flow
-// control takes part (a palette, an instance table). DEF'd registers are the shader's own literals.
-// Two draws of one shader with the same buffers, range and these constants put the same triangles in
-// the same place, whatever else differs between them (run 190: a window pane's two passes differ in
-// constants the position never reads -- a colour, the fog).
-struct ConstMask {
-  uint64_t bits[4] = {};
-  void set(uint32_t r) { if (r < 256u) bits[r >> 6] |= 1ull << (r & 63u); }
-  void add(const ConstMask& o) { for (int i = 0; i < 4; ++i) bits[i] |= o.bits[i]; }
-  void all() { for (auto& x : bits) x = ~0ull; }
-  bool has(uint32_t r) const { return r < 256u && ((bits[r >> 6] >> (r & 63u)) & 1ull) != 0; }
-  uint32_t count() const { uint32_t n = 0; for (uint32_t r = 0; r < 256u; ++r) n += has(r) ? 1u : 0u; return n; }
-};
-inline ConstMask vsPositionConstMask(const DWORD* tokens, size_t count) {
-  ConstMask result;
-  if (!tokens || count < 2 || (tokens[0] & 0xFFFF0000u) != 0xFFFE0000u) { result.all(); return result; }
-  const bool vs3 = ((tokens[0] >> 8) & 0xFFu) >= 3u;
-  bool defd[256] = {}; int posOut = -1; bool giveUp = false;
-  dxsoForEach(tokens, count, [&](size_t pos, uint32_t op, uint32_t len) {
-    if (op == 0x51u && len >= 1 && dxsoRegType(tokens[pos + 1]) == 2u) { const uint32_t r = dxsoRegNum(tokens[pos + 1]); if (r < 256u) defd[r] = true; }
-    uint32_t u, i, r;
-    if (vs3 && op == kDxsoOpDcl && dxsoDcl(tokens, pos, len, kDxsoRegOutput, u, i, r) && u == kUsagePosition && i == 0) posOut = (int) r;
-    return true;
-  });
-  ConstMask temps[32], addr;
-  dxsoForEach(tokens, count, [&](size_t pos, uint32_t op, uint32_t len) {
-    if (op == kDxsoOpDcl || op == 0x51u || op == 0x30u || op == 0x2Fu || op == 0u) return true;   // DCL, DEF, DEFI, DEFB, NOP
-    if ((op >= 0x19u && op <= 0x1Eu) || (op >= 0x26u && op <= 0x2Du) || op == 0x60u) { giveUp = true; return false; }   // flow control
-    if (len < 1) return true;
-    ConstMask m;
-    for (uint32_t k = 2; k <= len; ++k) {
-      const uint32_t t = tokens[pos + k], type = dxsoRegType(t), n = dxsoRegNum(t);
-      if (t & 0x2000u) { if (type == 2u) { giveUp = true; return false; } m.add(addr); ++k; continue; }   // relative: its address token follows
-      if (type == 0u && n < 32u) m.add(temps[n]);
-      else if (type == 2u) { if (n < 256u && !defd[n]) m.set(n); }
-      else if (type == 3u) m.add(addr);
-    }
-    const uint32_t d = tokens[pos + 1], dtype = dxsoRegType(d), dn = dxsoRegNum(d);
-    const bool full = ((d >> 16) & 0xFu) == 0xFu;
-    if (dtype == 0u && dn < 32u) { if (full) temps[dn] = m; else temps[dn].add(m); }
-    else if (dtype == 3u) addr.add(m);
-    else if ((!vs3 && dtype == 4u && dn == 0u) || (vs3 && dtype == kDxsoRegOutput && (int) dn == posOut)) result.add(m);
-    return true;
-  });
-  if (giveUp) result.all();
-  return result;
-}
 inline constexpr uint32_t kGlassMarkerSize = 32;
 inline constexpr uint32_t kGlassMarkerColour = 0xFFB8C8D0u;          // ARGB pale grey-blue: what the panes show if the mod is not loaded
 inline constexpr uint64_t kGlassMarkerHash = 0x5E30D0B82C246E6Cull;  // XXH3-64 of its level 0, as the runtime hashes it; the mod's material name
