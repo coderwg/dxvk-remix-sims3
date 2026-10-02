@@ -1120,7 +1120,8 @@ int main() {
         const size_t n = sizeof kGlassSurvey / sizeof kGlassSurvey[0];
         for (size_t i = 0; i < n; ++i) {
           const GlassSurvey& e = kGlassSurvey[i];
-          for (size_t j = 0; j < i; ++j) if (kGlassSurvey[j].colour == e.colour || kGlassSurvey[j].hash == e.hash) surveyOk = false;
+          for (size_t j = 0; j < i; ++j) if (kGlassSurvey[j].hash == e.hash) surveyOk = false;
+          if (e.colour != 0xFFFF80C0u) surveyOk = false;   // all pink (milestone 118)
           if (e.colour == kMirrorMarkerColour) surveyOk = false;
           for (int m = 0; m < kGlassMaterials; ++m) if (e.colour == kGlassMaterial[m].colour) surveyOk = false;
           for (int m = 0; m < kWaterMaterials; ++m) if (e.colour == kWaterMaterial[m].colour) surveyOk = false;
@@ -1134,8 +1135,8 @@ int main() {
         for (uint64_t known : { 0x572773cfbd618a3aull, 0x45c7a7cd511b5233ull, 0x66516d5db94ab307ull, 0x86dad57d0dc73989ull, 0x3197bfdef2330503ull,
                                 0x98e23f47d947eb22ull, 0x85e9c3381d5bf054ull, 0xefdac7f048e21b1full, 0x910a56f24813e248ull, 0xac4184cee232ed04ull,
                                 0x2b1da1b45f51d3f9ull, 0xa9336d35a25143aeull, 0xdb28eb0c60fdb2fbull, 0x29c6b22234617c1aull }) if (glassSurvey(known)) knownOut = false;
-        CHECK(surveyOk && n == 4 && knownOut && kGlassSurvey[0].colour == 0xFFFF0000u,
-              "glass survey (M110, M112, M113, M116): 4 unidentified glass shaders in distinct plain colours, no material marker's; the unnamed ones cube-only glass (%d dumps read); the door, the cars' windows, the mirrors and runs 218-221's ten finds not surveyed", surveyRead);
+        CHECK(surveyOk && n == 4 && knownOut,
+              "glass survey (M110-M118): 4 unidentified glass shaders, all pink, no material marker's colour; the unnamed ones cube-only glass (%d dumps read); the door, the cars' windows, the mirrors and runs 218-221's ten finds not surveyed", surveyRead);
       }
       // milestones 82, 101: the reflective sheet's PS 86dad57d reads only a cube; under the stencil test it is a mirror's face
       std::vector<DWORD> mp; PsAnalysis ma;
@@ -1206,7 +1207,7 @@ int main() {
       const size_t cat = u.find(cname);
       const size_t cend = cat == std::string::npos ? cat : u.find("token outputs:out", cat);
       CHECK(ch == kGlassMaterial[kCarGlass].hash && cat != std::string::npos && cend != std::string::npos && u.find("thin_walled = 1", cat) < cend && u.find("use_diffuse_layer = 0", cat) < cend
-            && u.find("transmittance_color = (0.72, 0.78, 0.75)", cat) < cend,
+            && u.find("transmittance_color = (0.72, 0.78, 0.75)", cat) < cend && u.find("thin_wall_thickness = 1\n", cat) < cend,
             "car glass (M105): the marker's level-0 hash 0x%016llX names the tinted thin glass %s in Sims3Glass/mod.usda", (unsigned long long) ch, cname);
       // milestones 114-116: the plumbob's marker names thin green glass, no glow; the three glass markers differ
       for (auto& p : gm) p = kGlassMaterial[kPlumbob].colour;
@@ -1214,7 +1215,7 @@ int main() {
       char pname[32]; snprintf(pname, sizeof pname, "mat_%016llX", (unsigned long long) ph);
       const size_t pat = u.find(pname);
       const size_t pend = pat == std::string::npos ? pat : u.find("token outputs:out", pat);
-      CHECK(ph == kGlassMaterial[kPlumbob].hash && pat != std::string::npos && pend != std::string::npos && u.find("thin_walled = 1", pat) < pend && u.find("transmittance_color = (0.5, 0.92, 0.55)", pat) < pend
+      CHECK(ph == kGlassMaterial[kPlumbob].hash && pat != std::string::npos && pend != std::string::npos && u.find("thin_walled = 1", pat) < pend && u.find("thin_wall_thickness = 1\n", pat) < pend && u.find("transmittance_color = (0.5, 0.92, 0.55)", pat) < pend
             && u.find("enable_emission", pat) > pend && kGlassMaterial[0].hash != kGlassMaterial[1].hash && kGlassMaterial[1].hash != kGlassMaterial[2].hash && kGlassMaterial[0].hash != kGlassMaterial[2].hash,
             "plumbob (M114-M116): the marker's level-0 hash 0x%016llX names the thin green glass %s in Sims3Glass/mod.usda (no glow)", (unsigned long long) ph, pname);
     }

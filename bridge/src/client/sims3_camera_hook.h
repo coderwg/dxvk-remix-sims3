@@ -1950,16 +1950,18 @@ inline const LeftOutPs* leftOutPs(uint64_t hash) { return findByHash(kLeftOutPs,
 // any object, its texture as the albedo, blended as the game draws it. The oil bottle the user
 // suspected is no glass at all (run 220's marks: an ordinary object).
 // At the mark the log names every glass shader drawn in that frame (milestone 113, goes with the
-// survey). A window's two sides are two draws: the side facing
+// survey). Since milestone 118 every glass still unidentified is pink, until the user comes across it
+// (the user: "lets mark them all pink for now until i eventually come across them"); the mark's log
+// line names the shader. A window's two sides are two draws: the side facing
 // a room is 3197bfde, the side facing outdoors 98e23f47 -- a window on an indoor wall is 3197bfde on
 // both sides, one on a free-standing outdoor wall 98e23f47 on both (the user, run 218).
 struct GlassSurvey { uint64_t hash; uint32_t colour; const char* colourName; };
 inline constexpr size_t kGlassSurveyMax = 16;
-inline const GlassSurvey kGlassSurvey[] = {
-  { 0x8fe3ce7c5fbc6234ull, 0xFFFF0000u, "RED" },       // bumpy (run 219, cyan: an oil bottle? -- recoloured to be sure)
-  { 0x8ff495765d26a6fdull, 0xFF0000FFu, "BLUE" },      // the scene behind (run 218: at home; VS d251510d; run 219: not spotted)
-  { 0xd03ebab11453bca1ull, 0xFFFFFF00u, "YELLOW" },    // a small glass on a car's atlas (run 218: at home; run 219: not spotted)
-  { 0x7eeb349a23cbefefull, 0xFFFF00FFu, "MAGENTA" },   // the scene behind + a colour texture (runs 218-219: not spotted)
+inline const GlassSurvey kGlassSurvey[] = {   // all pink since milestone 118: the mark names which
+  { 0x8fe3ce7c5fbc6234ull, 0xFFFF80C0u, "PINK" },   // bumpy glass, its colour s3 x c10 (VS c96f1465 in run 219, as an unplayable lot's windows)
+  { 0x8ff495765d26a6fdull, 0xFFFF80C0u, "PINK" },   // clear, the scene behind, as the table ornament (VS d251510d; at home after loading)
+  { 0xd03ebab11453bca1ull, 0xFFFF80C0u, "PINK" },   // a small glass on a car's atlas (first drawn with a parked car's windows, run 220)
+  { 0x7eeb349a23cbefefull, 0xFFFF80C0u, "PINK" },   // clear, the scene behind, a colour texture over the reflection (VS 6b921b44)
 };
 static_assert(sizeof kGlassSurvey / sizeof kGlassSurvey[0] <= kGlassSurveyMax, "the hook keeps 16 survey markers");
 inline const GlassSurvey* glassSurvey(uint64_t hash) { return findByHash(kGlassSurvey, hash); }

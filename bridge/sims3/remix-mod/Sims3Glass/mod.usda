@@ -1,20 +1,21 @@
 #usda 1.0
 (
     defaultPrim = "RootNode"
-    doc = """The Sims 3 camera hook's glass, car glass and mirrors (milestones 80, 101, 105, 109; the water
-is the Sims3Water mod's since milestone 99, the bumpy glass the generated Sims3GlassBumps mod's since 109):
-the materials of the hook's marker textures. The hook presents every glass draw of the game (a pixel
-shader reading only cube maps, blended, or one of its named glass shaders) with a flat 32x32 glass marker
-at stage 0, its named car glass with a car glass marker and every mirror's face (a cube-only reflective
-sheet under the stencil test) with a mirror marker, blending off; this layer makes the markers' hashes the
-runtime's translucent glass, tinted car glass (about 75 % through, a slight green-grey), the plumbob's
-thin green glass (milestone 116: each pass through lets 0.5 / 0.92 / 0.55 through -- two sides, the gem's green
-of milestone 114; no glow since 115; thin because the solid gem's strong refraction trailed the moving Sim, run 220) and an opaque,
-fully metallic, smooth mirror whose tint is the marker's silver. Each hash is XXH3-64 of the marker's
-level 0 (sims3cam::kGlassMaterial, kMirrorMarkerHash, checked by
-sims3/test/test_sims3cam.cpp). A thin-walled material's transmittance_color is what one pass through the
-wall lets through. (The frosted glass of milestones 88-108 is retired: bumpy glass is the clear glass
-with the game's own bump map.)
+    doc = """The Sims 3 camera hook's glass, car glass, plumbob and mirrors (milestones 80, 101, 105, 109, 114-118;
+the water is the Sims3Water mod's since milestone 99, the bumpy glass the generated Sims3GlassBumps mod's
+since 109): the materials of the hook's marker textures. The hook presents every glass draw of the game (a
+pixel shader reading only cube maps, blended, or one of its named glass shaders) with a flat 32x32 marker
+of its glass material at stage 0 and every mirror's face (a cube-only reflective sheet under the stencil
+test) with a mirror marker, blending off; this layer makes the markers' hashes the runtime's thin clear
+glass, tinted car glass (about 75 % through a pass, a slight green-grey), the plumbob's thin green glass
+(each pass 0.5 / 0.92 / 0.55, two sides about the solid gem of milestone 114; no glow since 115) and an
+opaque, fully metallic, smooth mirror whose tint is the marker's silver. Each hash is XXH3-64 of the
+marker's level 0 (sims3cam::kGlassMaterial, kMirrorMarkerHash, checked by sims3/test/test_sims3cam.cpp).
+A thin-walled material's tint is taken over its thin_wall_thickness (the runtime passes the thickness in
+the measurement distance's place): at 0.005 the car glass and the plumbob showed no tint (run 222: the
+plumbob "lost its green color"), so the tinted ones are 1 thick and one pass lets transmittance_color
+through (milestone 118); the clear glass keeps 0.005. (The frosted glass of milestones 88-108 is retired:
+bumpy glass is the clear glass with the game's own bump map.)
 Deployed to Game/Bin/rtx-remix/mods/Sims3Glass/mod.usda; the runtime reads it while
 rtx.enableReplacementAssets is on."""
     metersPerUnit = 1
@@ -61,7 +62,7 @@ def Xform "RootNode"
                 color3f inputs:transmittance_color = (0.72, 0.78, 0.75)
                 float inputs:transmittance_measurement_distance = 1
                 bool inputs:thin_walled = 1
-                float inputs:thin_wall_thickness = 0.005
+                float inputs:thin_wall_thickness = 1
                 bool inputs:use_diffuse_layer = 0
                 token outputs:out
             }
@@ -82,7 +83,7 @@ def Xform "RootNode"
                 color3f inputs:transmittance_color = (0.5, 0.92, 0.55)
                 float inputs:transmittance_measurement_distance = 1
                 bool inputs:thin_walled = 1
-                float inputs:thin_wall_thickness = 0.005
+                float inputs:thin_wall_thickness = 1
                 bool inputs:use_diffuse_layer = 0
                 token outputs:out
             }
