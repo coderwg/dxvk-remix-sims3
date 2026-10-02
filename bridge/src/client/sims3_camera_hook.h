@@ -1854,52 +1854,61 @@ inline bool chooseAutoAlbedo(const PsAnalysis& a, const bool color2D[16], const 
   return stage >= 0;
 }
 
-// ---- glass (milestone 80) ------------------------------------------------------------------
-// The game's glass -- window panes, shower doors, glass tables -- is drawn by pixel shaders that
-// read only an environment cube map: a reflection with a Fresnel term and sharp highlights, no
-// colour texture, blended over what lies behind (five such shaders in runs 150-187). The runtime
-// drops such a draw (a cube map at stage 0 has no hash: the windows looked empty) or, with nothing
-// bound, makes it an untextured sheet (the showers flickered opaque). A blended draw of such a
-// shader is presented with the hook's glass marker at stage 0 and blending off; the hook's Remix
-// mod (sims3/remix-mod/Sims3Glass/mod.usda) makes the marker's hash the runtime's translucent glass.
+// ---- glass (milestones 80-107) -----------------------------------------------------------------
+// The game's glass is one family of pixel shaders: the view reflected about the normal into an
+// environment cube, sharp highlights from the four lights, a Fresnel term. It comes in three forms:
+//  1. cube only, blended over what lies behind -- window panes, shower stalls, glass tables, a passing
+//     car's windows (isGlassShader, milestone 80);
+//  2. with the scene behind -- the 1024 render target read at the pixel, shifted by the normal --
+//     drawn opaque: clear, a colour texture over the reflection, or a normal map bending the scene
+//     behind (the game's frosting: the shower door);
+//  3. glass passes of other shaders: a parked car's paint shader drawn blended for its windows, a
+//     distant car's small glass shader with a constant alpha, two textured glass shaders.
+// The runtime drops a draw whose stage 0 is a cube map (no hash: the panes looked empty) and takes a
+// 2D texture there as an opaque albedo, so every glass draw goes out with one of the hook's markers at
+// stage 0 and blending off; the Sims3Glass mod (sims3/remix-mod/Sims3Glass/mod.usda) makes each
+// marker's hash a glass: clear (thin, IOR 1.5), frosted (a 40 % diffuse layer: the normal-mapped
+// form), car glass (tinted, about 75 % through). Forms 2 and 3 share their samplers' signature with
+// the Sims' hair and skin passes and with objects fading in (an object's own shader lerping the scene
+// behind by a constant: e.g. 7b3cb6be, a8c64e11, the cars' 834b2191 -- not glass), so they are named,
+// each read from its bytecode. The table is the survey of milestone 107: every pixel shader the logs
+// recorded through run 217 (3210 dumped) that reads an environment cube and the scene behind or only
+// cubes; 2b1da1b4 and 8ff49576, unnamed until then, were dropped (a cube at stage 0).
+// (Not glass, though alike: the light-beam cards 7304aaea / 8d3a3a22 -- their cube lookup has a
+// constant direction, no normal.)
 inline bool isGlassShader(const PsAnalysis& a) {
   if (!a.valid) return false;
   int cubes = 0;
   for (const PsSamplerUse& u : a.samplers) { if (!u.read) continue; if (!u.cube) return false; ++cubes; }
   return cubes > 0;
 }
-// Named glass (milestones 81, 87, 88, 100, 102): the same reflection, Fresnel term and highlights, with
-// a colour texture over it or a picture of the scene behind. Its signature (a cube map and 2D textures)
-// is shared by the Sims' hair and skin passes, so these are named, each read from its bytecode, and go
-// out as glass whether the game blends them or not (the shower door's is opaque, its see-through look
-// faked from a picture of the scene behind), each with its material: the clear glass, or the frosted
-// glass (its own marker and the mod's translucent glass with a diffuse layer; the door's game colour
-// texture is a frosting). Seen right in game: the door (run 201); a glass dome building on a community
-// lot drawn by one of the first two (run 212's survey, magenta; which one the log did not say), the
-// other its kin by bytecode. 85e9c338 is the door's shader without the frosting and the bump map
-// (reflection, Fresnel, the scene behind): drawn with the door in runs 201-214 but not by this door
-// (runs 215-216, the door alone on a lot), so clear glass (left out until milestone 102: no colour
-// texture). Car glass (milestone 105) is tinted, about 75 % through, a slight green-grey: a passing
-// car's windshield and windows, a cube-only shader (66516d5d, VS e79a4bf1, run 215); a parked car's
-// windows, the car's own paint shader drawn a second time, blended, the colour texture's alpha the
-// see-through amount (in step with the opaque body pass, VS 710f9a33 / PS 0c2df3be); a distant car's,
-// a small glass shader with a constant alpha. The parked cars' windows are drawn twice a frame, the same mesh
-// unblended with depth writes, then blended (run 215): only the blended pass goes out as glass, the
-// other is left out (blendedPassOnly; milestone 104), or the windows are two sheets in one place.
-// (Not glass, though alike: the light-beam cards 7304aaea / 8d3a3a22 -- their cube lookup has a
-// constant direction, no normal.)
 inline constexpr uint8_t kClearGlass = 0, kFrostedGlass = 1, kCarGlass = 2;
+// blendedPassOnly: the game draws the glass twice a frame, the same mesh unblended with depth writes,
+// then blended (a parked car's windows, run 215); only the blended pass goes out (milestone 104),
+// or the windows are two sheets in one place.
 struct NamedGlass { uint64_t hash; const char* name; uint8_t material; bool blendedPassOnly = false; };
 inline const NamedGlass kNamedGlass[] = {
-  { 0x29c6b22234617c1aull, "glass: colour texture s1 x c8, mask s2 (VS 5b18d2ce; drawn near the shower in run 188)", kClearGlass },
-  { 0xac4184cee232ed04ull, "glass: colour texture s2 x c10, gloss s3, irradiance cube s1 (VS d7fede81; drawn unblended, run 201)", kClearGlass },
-  { 0x572773cfbd618a3aull, "frosted glass, a shower door: normal map s2, reflection, Fresnel, the scene behind (render target s1) "
-                           "read through the normal map, colour s3 (VS b51f1577, skinned: the door swings; drawn opaque; runs 192-194)", kFrostedGlass },
-  { 0x85e9c3381d5bf054ull, "glass: reflection, Fresnel, the scene behind (render target s1), no normal map, no colour "
-                           "(VS b3e88e28, skinned; also VS d251510d; drawn opaque; runs 201-214)", kClearGlass },
+  // form 2, clear: the scene behind, no normal map
+  { 0x2b1da1b45f51d3f9ull, "glass, ps_2_0: reflection, highlights, Fresnel, the scene behind (s1) x c10 (VS ddc6be9f; 966k draws in 155 runs)", kClearGlass },
+  { 0x85e9c3381d5bf054ull, "glass: reflection, Fresnel, the scene behind (s1) lerped to c10 (VS b3e88e28, skinned; also VS d251510d; runs 201-214)", kClearGlass },
+  { 0x8ff495765d26a6fdull, "glass: as 85e9c338 (VS 2 kinds; 21 runs)", kClearGlass },
+  { 0x7eeb349a23cbefefull, "glass: as 85e9c338, a colour texture s2 x c11 over the reflection (4 runs)", kClearGlass },
+  // form 2, frosted: a normal map bends the scene behind
+  { 0x572773cfbd618a3aull, "frosted glass, a shower door: normal map s2, the scene behind (s1) read through it, colour s3 over the reflection "
+                           "(VS b51f1577, skinned: the door swings; runs 192-217)", kFrostedGlass },
+  { 0x8fe3ce7c5fbc6234ull, "frosted glass: as 572773cf, its colour s3 x c10 tinting the scene behind (16 runs)", kFrostedGlass },
+  { 0x910a56f24813e248ull, "frosted glass: as 572773cf, its colour s3 x c10 tinting the scene behind (3 runs)", kFrostedGlass },
+  { 0xa9336d35a25143aeull, "frosted glass, ps_2_0: signed normal map s2, the scene behind (s1) tinted by colour s3 and the vertex colour, "
+                           "a cut-out on s3's alpha (6 runs)", kFrostedGlass },
+  // form 3
+  { 0x29c6b22234617c1aull, "glass: colour texture s1 x c8, mask s2 (VS 5b18d2ce; run 188)", kClearGlass },
+  { 0xac4184cee232ed04ull, "glass: colour texture s2 x c10, gloss s3, irradiance cube s1 (VS d7fede81; a glass dome building, run 212)", kClearGlass },
+  { 0x45c7a7cd511b5233ull, "car glass, a parked car's windows: the car's paint shader blended, colour atlas s2 with its alpha, normal map s3, "
+                           "reflection cube s6 (VS a77613ea; run 213)", kCarGlass, true },
+  { 0xd03ebab11453bca1ull, "car glass, a distant car's windows: ps_2_0 reflection, Fresnel, highlights, the car's atlas s1 at a decoded UV, "
+                           "constant alpha c6.w (VS 4e9298de; runs 159, 205)", kCarGlass },
+  // form 1, named for its material
   { 0x66516d5db94ab307ull, "car glass, a passing car's windshield and windows: cube only (VS e79a4bf1, skinned; run 215)", kCarGlass },
-  { 0x45c7a7cd511b5233ull, "car glass, a parked car's windows: the car's paint shader blended, colour atlas s2 with its alpha, normal map s3, reflection cube s6 (VS a77613ea; run 213)", kCarGlass, true },
-  { 0xd03ebab11453bca1ull, "car glass, a distant car's windows: ps_2_0 reflection, Fresnel, highlights, the car's atlas s1 at a decoded UV, constant alpha c6.w (VS 4e9298de; runs 159, 205)", kCarGlass },
 };
 inline const NamedGlass* namedGlass(uint64_t hash) { return findByHash(kNamedGlass, hash); }
 // ---- a glass sheet's back side (milestone 104) -------------------------------------------------

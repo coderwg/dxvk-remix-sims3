@@ -1052,9 +1052,10 @@ int main() {
       CHECK(tgOk && hairOk && beamOk && namedGlass(0xac4184cee232ed04ull) && namedGlass(0xac4184cee232ed04ull)->material == kClearGlass && !namedGlass(0x3197bfdef2330503ull)
             && door && door->material == kFrostedGlass,
             "glass (M81, M87, M88, M100): named glass 29c6b222 / ac4184ce clear, the shower door 572773cf frosted; the hair pass 57a5a049, the light-beam card 7304aaea and the cube-only pane 3197bfde are not named");
-      // milestone 102: the door from a little further frosted, the car windows clear; none of the three cube-only, so the name is what makes them glass
+      // milestones 102, 105, 107: the named forms 2 and 3 are not cube-only, so the name is what makes them glass
       bool farOk = true;
-      for (uint64_t hsh : { 0x85e9c3381d5bf054ull, 0x45c7a7cd511b5233ull, 0xd03ebab11453bca1ull }) {
+      for (uint64_t hsh : { 0x85e9c3381d5bf054ull, 0x45c7a7cd511b5233ull, 0xd03ebab11453bca1ull, 0x2b1da1b45f51d3f9ull, 0x8ff495765d26a6fdull,
+                            0x7eeb349a23cbefefull, 0x8fe3ce7c5fbc6234ull, 0x910a56f24813e248ull, 0xa9336d35a25143aeull }) {
         char n[32]; snprintf(n, sizeof n, "ps_%016llx", (unsigned long long) hsh);
         std::vector<DWORD> sb; PsAnalysis sa;
         if (loadShader(n, sb) && (!analyzePixelShader(sb.data(), sb.size(), sa) || isGlassShader(sa))) farOk = false;
@@ -1063,6 +1064,12 @@ int main() {
       const NamedGlass* passing = namedGlass(0x66516d5db94ab307ull);
       CHECK(farOk && doorKin && doorKin->material == kClearGlass && car && car->material == kCarGlass && carFar && carFar->material == kCarGlass && passing && passing->material == kCarGlass && !namedGlass(0x0c2df3be933b2117ull),
             "glass (M102, M105): 85e9c338 clear glass; car glass: a passing car's 66516d5d, a parked car's 45c7a7cd, a distant car's d03ebab1; the car body 0c2df3be not named; 85e9c338 / 45c7a7cd / d03ebab1 not cube-only");
+      // milestone 107: the survey's glass -- clear without a normal map, frosted with one; objects fading in are not glass
+      auto glassMat = [](uint64_t hsh) { const NamedGlass* g = namedGlass(hsh); return g ? (int) g->material : -1; };
+      CHECK(farOk && glassMat(0x2b1da1b45f51d3f9ull) == kClearGlass && glassMat(0x8ff495765d26a6fdull) == kClearGlass && glassMat(0x7eeb349a23cbefefull) == kClearGlass
+            && glassMat(0x8fe3ce7c5fbc6234ull) == kFrostedGlass && glassMat(0x910a56f24813e248ull) == kFrostedGlass && glassMat(0xa9336d35a25143aeull) == kFrostedGlass
+            && glassMat(0x7b3cb6be7d73e3b4ull) == -1 && glassMat(0xa8c64e11b251a0cbull) == -1 && glassMat(0x834b21919e9f8d8aull) == -1 && glassMat(0x3661ea706449953cull) == -1,
+            "glass (M107): the survey's 2b1da1b4 / 8ff49576 / 7eeb349a clear, 8fe3ce7c / 910a56f2 / a9336d35 frosted, none cube-only; the fading objects 7b3cb6be / a8c64e11 / 834b2191 / 3661ea70 not named");
       // milestone 104: a sheet with a back side keeps one facing per plane; a pane with a thickness keeps both sides
       {
         auto tri = [](std::vector<float>& v, std::initializer_list<float> p) { v.insert(v.end(), p); };
