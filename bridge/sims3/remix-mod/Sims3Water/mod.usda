@@ -1,0 +1,105 @@
+#usda 1.0
+(
+    defaultPrim = "RootNode"
+    doc = """The Sims 3 camera hook's water (milestones 86, 93, 94, 99): one material per look -- a lot
+pool, a pond, the sea (the town's water), an object's water -- named by the XXH3-64 of the hook's marker for
+it (sims3cam::kWaterMaterial, checked by sims3/test/test_sims3cam.cpp). Each is a translucent water volume,
+IOR 1.33 (refraction; an absorption that deepens with the depth to the bed), with its own tint and its own
+ripple map, textures/water_<material>_n.dds -- made by ../make_textures.py --waves from the game's own wave
+maps, its strength baked in; game data, made locally and not in the repository. The ripples move with the
+game's own scrolling wave coordinates (the draw's captured TEXCOORD0).
+Deployed to Game/Bin/rtx-remix/mods/Sims3Water/mod.usda; the runtime reads it while
+rtx.enableReplacementAssets is on."""
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+def Xform "RootNode"
+{
+    def Scope "Looks"
+    {
+        def Material "mat_2723DD62C28E1456"
+        {
+            token outputs:mdl:displacement.connect = </RootNode/Looks/mat_2723DD62C28E1456/Shader.outputs:out>
+            token outputs:mdl:surface.connect = </RootNode/Looks/mat_2723DD62C28E1456/Shader.outputs:out>
+            token outputs:mdl:volume.connect = </RootNode/Looks/mat_2723DD62C28E1456/Shader.outputs:out>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:mdl:sourceAsset = @AperturePBR_Translucent.mdl@
+                uniform token info:mdl:sourceAsset:subIdentifier = "AperturePBR_Translucent"
+                float inputs:ior_constant = 1.33
+                color3f inputs:transmittance_color = (0.6, 0.88, 0.94)
+                float inputs:transmittance_measurement_distance = 1
+                bool inputs:thin_walled = 0
+                bool inputs:use_diffuse_layer = 0
+                asset inputs:normalmap_texture = @./textures/water_pool_n.dds@
+                token outputs:out
+            }
+        }
+
+        def Material "mat_52B04DF3E566CA55"
+        {
+            token outputs:mdl:displacement.connect = </RootNode/Looks/mat_52B04DF3E566CA55/Shader.outputs:out>
+            token outputs:mdl:surface.connect = </RootNode/Looks/mat_52B04DF3E566CA55/Shader.outputs:out>
+            token outputs:mdl:volume.connect = </RootNode/Looks/mat_52B04DF3E566CA55/Shader.outputs:out>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:mdl:sourceAsset = @AperturePBR_Translucent.mdl@
+                uniform token info:mdl:sourceAsset:subIdentifier = "AperturePBR_Translucent"
+                float inputs:ior_constant = 1.33
+                color3f inputs:transmittance_color = (0.55, 0.75, 0.66)
+                float inputs:transmittance_measurement_distance = 1
+                bool inputs:thin_walled = 0
+                bool inputs:use_diffuse_layer = 0
+                asset inputs:normalmap_texture = @./textures/water_pond_n.dds@
+                token outputs:out
+            }
+        }
+
+        def Material "mat_DDC84353084D6462"
+        {
+            token outputs:mdl:displacement.connect = </RootNode/Looks/mat_DDC84353084D6462/Shader.outputs:out>
+            token outputs:mdl:surface.connect = </RootNode/Looks/mat_DDC84353084D6462/Shader.outputs:out>
+            token outputs:mdl:volume.connect = </RootNode/Looks/mat_DDC84353084D6462/Shader.outputs:out>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:mdl:sourceAsset = @AperturePBR_Translucent.mdl@
+                uniform token info:mdl:sourceAsset:subIdentifier = "AperturePBR_Translucent"
+                float inputs:ior_constant = 1.33
+                color3f inputs:transmittance_color = (0.55, 0.75, 0.66)
+                float inputs:transmittance_measurement_distance = 1
+                bool inputs:thin_walled = 0
+                bool inputs:use_diffuse_layer = 0
+                asset inputs:normalmap_texture = @./textures/water_sea_n.dds@
+                token outputs:out
+            }
+        }
+
+        def Material "mat_109A6039DC3F71F1"
+        {
+            token outputs:mdl:displacement.connect = </RootNode/Looks/mat_109A6039DC3F71F1/Shader.outputs:out>
+            token outputs:mdl:surface.connect = </RootNode/Looks/mat_109A6039DC3F71F1/Shader.outputs:out>
+            token outputs:mdl:volume.connect = </RootNode/Looks/mat_109A6039DC3F71F1/Shader.outputs:out>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:mdl:sourceAsset = @AperturePBR_Translucent.mdl@
+                uniform token info:mdl:sourceAsset:subIdentifier = "AperturePBR_Translucent"
+                float inputs:ior_constant = 1.33
+                color3f inputs:transmittance_color = (0.6, 0.88, 0.94)
+                float inputs:transmittance_measurement_distance = 1
+                bool inputs:thin_walled = 0
+                bool inputs:use_diffuse_layer = 0
+                asset inputs:normalmap_texture = @./textures/water_object_n.dds@
+                token outputs:out
+            }
+        }
+    }
+}

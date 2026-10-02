@@ -3,9 +3,10 @@
 frost.dds            the shower door's frosting: the translucent material's diffuse layer takes its colour and
                      its opacity from transmittance_texture (rgb, alpha) -- without a texture the layer is off
                      (translucent_surface_material_interaction: diffuseOpacity 0), so M88's door stayed clear.
-water_clear_n.dds    the ripples of clear water (lot pools): the game's own first wave map of the pool shader
-water_natural_n.dds  the ripples of natural water (ponds, the sea): the game's wave map of the town's water
-                     Both are made from the hook's wave-map dumps (rtx-remix/logs/sims3-textures, milestone 93):
+Sims3Water/textures/water_<material>_n.dds (milestone 99): each water material's ripples, its strength baked in
+                     -- pool: the game's own first wave map of the pool shader; pond, sea, object water: the
+                     game's wave map of the town's water (the object water's own map was never dumped).
+                     All are made from the hook's wave-map dumps (rtx-remix/logs/sims3-textures, milestone 93):
                      game data, so they are not in the repository; pass the dump folder with --waves.
                      The runtime samples a translucent material's normal map with the draw's TEXCOORD0 -- for
                      the game's water its scrolling wave coordinate, so the game's motion drives the ripples --
@@ -21,15 +22,19 @@ import os
 import struct
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUT = os.path.join(HERE, 'Sims3Glass', 'textures')
+OUT = os.path.join(HERE, 'Sims3Glass', 'textures')          # the frosting
+WATER_OUT = os.path.join(HERE, 'Sims3Water', 'textures')   # the ripples
 
 # the wave maps the normal maps are made from (the hook's dump names), and how much each is flattened:
 # the game adds its two pool layers and +2 to their up component (PS d40999e5 / 85c0a78a), about halving
 # the slopes; one layer at half slope comes close. The pool's: x 0.65 more, the user's choice by eye in
 # run 202 (the runtime's Translucent "Normal Strength" 0.65 scales the decoded slopes the same way)
+TOWN_WAVES = 'water_f74b4657dbfd60bc_s0_256x256_Q8W8V8U8.raw'
 WAVES = {
-    'water_clear_n.dds': ('water_85c0a78a614b15d3_s1_256x256_A8R8G8B8.raw', 0.5 * 0.65),
-    'water_natural_n.dds': ('water_f74b4657dbfd60bc_s0_256x256_Q8W8V8U8.raw', 0.5),
+    'water_pool_n.dds': ('water_85c0a78a614b15d3_s1_256x256_A8R8G8B8.raw', 0.5 * 0.65),
+    'water_pond_n.dds': (TOWN_WAVES, 0.5),
+    'water_sea_n.dds': (TOWN_WAVES, 0.5),
+    'water_object_n.dds': (TOWN_WAVES, 0.5),
 }
 
 
@@ -121,12 +126,13 @@ def main():
     if not args.waves:
         print('no --waves: the water normal maps are not made')
         return
+    os.makedirs(WATER_OUT, exist_ok=True)
     for name, (src, flatten) in WAVES.items():
         path = os.path.join(args.waves, src)
         w, h = 256, 256
         normals = [normalize((x * flatten, y * flatten, z)) for x, y, z in read_wave_map(path, w, h)]
-        write_dds_rgba8(os.path.join(OUT, name), normal_levels(normals, w, h))
-        print('wrote', os.path.join(OUT, name), 'from', src)
+        write_dds_rgba8(os.path.join(WATER_OUT, name), normal_levels(normals, w, h))
+        print('wrote', os.path.join(WATER_OUT, name), 'from', src)
 
 
 if __name__ == '__main__':

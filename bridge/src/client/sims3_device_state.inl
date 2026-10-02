@@ -208,9 +208,10 @@ struct Sims3Hook {
   bool markerFailed = false, markersConfigSent = false;
   // glass (milestone 80): the glass marker, and the draw's blending the hook switched off
   IDirect3DTexture9* glassMarker = nullptr; uint64_t glassMarkerHash = 0; bool glassMarkerFailed = false;
-  IDirect3DTexture9* waterMarker = nullptr; uint64_t waterMarkerHash = 0; bool waterMarkerFailed = false; uint32_t waterDraws = 0;   // water (milestone 86)
+  // the water materials' markers (milestones 86, 99), per sims3cam::kWaterMaterial
+  IDirect3DTexture9* waterMarkers[sims3cam::kWaterMaterials] = {}; uint64_t waterMarkerHashes[sims3cam::kWaterMaterials] = {};
+  bool waterMarkerFailed[sims3cam::kWaterMaterials] = {}; uint32_t waterDraws[sims3cam::kWaterMaterials] = {};
   IDirect3DTexture9* frostedMarker = nullptr; uint64_t frostedMarkerHash = 0; bool frostedMarkerFailed = false; uint32_t frostedDraws = 0;   // frosted glass (milestone 88)
-  IDirect3DTexture9* naturalWaterMarker = nullptr; uint64_t naturalWaterMarkerHash = 0; bool naturalWaterMarkerFailed = false; uint32_t naturalWaterDraws = 0;   // natural water (milestone 93)
   uint32_t waveDumpedIds[32] = {}; uint32_t waveDumped = 0;   // the game's wave maps looked at (milestone 93): the mod's ripple maps' source
   // a zero-thickness wall's back side (milestone 97): each wall piece's triangle keys (cached by buffers,
   // versions and range), and this frame's kept wall triangles per vertex buffer

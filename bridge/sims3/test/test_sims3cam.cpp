@@ -1082,27 +1082,26 @@ int main() {
       const std::string u(usd.begin(), usd.end());
       CHECK(gh == kGlassMarkerHash && haveUsd && u.find(name) != std::string::npos && u.find("AperturePBR_Translucent.mdl") != std::string::npos && u.find("/RootNode/Looks/") != std::string::npos,
             "glass (M80): the marker's level-0 hash 0x%016llX names the translucent material %s in sims3/remix-mod/Sims3Glass/mod.usda", (unsigned long long) gh, name);
-      // milestone 86: the water marker's hash names the water material; the two water shaders by name
-      for (auto& p : gm) p = kWaterMarkerColour;
-      const uint64_t wh = (uint64_t) XXH3_64bits(gm, sizeof gm);
-      char wname[32]; snprintf(wname, sizeof wname, "mat_%016llX", (unsigned long long) kWaterMarkerHash);
-      const size_t wat = u.find(wname);
-      const size_t wend = wat == std::string::npos ? wat : u.find("token outputs:out", wat);
-      CHECK(wh == kWaterMarkerHash && wat != std::string::npos && wend != std::string::npos && u.find("ior_constant = 1.33", wat) < wend && u.find("thin_walled = 0", wat) < wend && kWaterMarkerHash != kGlassMarkerHash
-            && isWaterPs(0xf74b4657dbfd60bcull) && isWaterPs(0x387e1a15c63c120aull) && isWaterPs(0xd40999e5838e8b05ull) && isWaterPs(0x85c0a78a614b15d3ull)
-            && isWaterPs(0x11a6bdfd3e77d03aull) && !isWaterPs(0xf45e6c607bb94189ull) && !isWaterPs(0x3197bfdef2330503ull),
-            "water (M86, M91-M93): the marker's level-0 hash 0x%016llX names the water material %s (IOR 1.33, a volume); the town's water f74b4657, 387e1a15, the pool's surface d40999e5 / 85c0a78a, the pond's 11a6bdfd; not the pool floor f45e6c60 nor the glass", (unsigned long long) wh, wname);
-      // milestone 93: natural water (ponds, the sea) has its own marker and material
-      for (auto& p : gm) p = kNaturalWaterMarkerColour;
-      const uint64_t nh = (uint64_t) XXH3_64bits(gm, sizeof gm);
-      char nname[32]; snprintf(nname, sizeof nname, "mat_%016llX", (unsigned long long) kNaturalWaterMarkerHash);
-      const size_t nat = u.find(nname);
-      const size_t nend = nat == std::string::npos ? nat : u.find("token outputs:out", nat);
-      CHECK(nh == kNaturalWaterMarkerHash && nat != std::string::npos && nend != std::string::npos && u.find("ior_constant = 1.33", nat) < nend && u.find("thin_walled = 0", nat) < nend
-            && u.find("@./textures/water_natural_n.dds@", nat) < nend && wat != std::string::npos && u.find("@./textures/water_clear_n.dds@", wat) < wend
-            && waterKind(0xf74b4657dbfd60bcull) == kNaturalWater && waterKind(0x11a6bdfd3e77d03aull) == kNaturalWater && waterKind(0xd40999e5838e8b05ull) == kClearWater
-            && waterKind(0x85c0a78a614b15d3ull) == kClearWater && waterKind(0x387e1a15c63c120aull) == kClearWater && waterKind(0x3197bfdef2330503ull) == -1,
-            "natural water (M93, M94): the marker's level-0 hash 0x%016llX names %s (a volume); ponds and the sea natural, pools and bowls clear; each with its ripple normal map", (unsigned long long) nh, nname);
+      // milestones 86, 93, 99: each water material's marker hash names its material in the water mod -- a volume
+      // with its own ripple map -- and no material of the glass mod; the water shaders by name
+      std::vector<uint8_t> wusd; const bool haveWater = loadBytes("../remix-mod/Sims3Water/mod.usda", wusd);
+      const std::string uw(wusd.begin(), wusd.end());
+      for (int m = 0; m < kWaterMaterials; ++m) {
+        const WaterMaterial& w = kWaterMaterial[m];
+        for (auto& p : gm) p = w.colour;
+        const uint64_t hm = (uint64_t) XXH3_64bits(gm, sizeof gm);
+        char mname[32]; snprintf(mname, sizeof mname, "mat_%016llX", (unsigned long long) w.hash);
+        char ripples[64]; snprintf(ripples, sizeof ripples, "@./textures/%s@", w.ripples);
+        const size_t at = uw.find(mname), end = at == std::string::npos ? at : uw.find("token outputs:out", at);
+        bool distinct = true; for (int o = 0; o < m; ++o) if (kWaterMaterial[o].hash == w.hash) distinct = false;
+        CHECK(haveWater && hm == w.hash && at != std::string::npos && end != std::string::npos && uw.find("ior_constant = 1.33", at) < end && uw.find("thin_walled = 0", at) < end
+              && uw.find(ripples, at) < end && u.find(mname) == std::string::npos && distinct && w.hash != kGlassMarkerHash,
+              "water (M99): the %s marker's level-0 hash 0x%016llX names %s in Sims3Water/mod.usda (IOR 1.33, a volume, %s), not in the glass mod", w.name, (unsigned long long) hm, mname, w.ripples);
+      }
+      CHECK(waterMaterial(0xd40999e5838e8b05ull) == kWaterPool && waterMaterial(0x85c0a78a614b15d3ull) == kWaterPool && waterMaterial(0x11a6bdfd3e77d03aull) == kWaterPond
+            && waterMaterial(0xf74b4657dbfd60bcull) == kWaterSea && waterMaterial(0x387e1a15c63c120aull) == kWaterObject
+            && waterMaterial(0xf45e6c607bb94189ull) == -1 && waterMaterial(0x3197bfdef2330503ull) == -1 && isWaterPs(0x11a6bdfd3e77d03aull) && !isWaterPs(0xf45e6c607bb94189ull),
+            "water (M86-M99): the pool's surfaces d40999e5 / 85c0a78a, the pond's 11a6bdfd, the town's water f74b4657 (the sea), the instanced 387e1a15 (object water); not the pool floor f45e6c60 nor the glass");
       // milestone 88: the frosted marker's hash names the frosted material (a diffuse layer)
       for (auto& p : gm) p = kFrostedMarkerColour;
       const uint64_t fh = (uint64_t) XXH3_64bits(gm, sizeof gm);

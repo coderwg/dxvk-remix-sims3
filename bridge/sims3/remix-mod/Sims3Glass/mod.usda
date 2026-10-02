@@ -1,17 +1,14 @@
 #usda 1.0
 (
     defaultPrim = "RootNode"
-    doc = """The Sims 3 camera hook's glass, frosted glass and water (milestones 80, 86, 88, 89): the
-materials of the hook's marker textures. The hook presents every glass draw of the game (a pixel shader
-reading only cube maps, blended, or one of its named textured glass shaders) with a flat 32x32 glass
-marker at stage 0, its named frosted glass (the shower door) with a frosted marker, and every water
-draw (its named water shaders) with a clear-water marker (lot pools, bowls) or a natural-water marker
-(ponds, the sea), blending off; this layer makes the markers' hashes the runtime's translucent glass,
-frosted glass (a diffuse layer from textures/frost.dds) and two water volumes (refraction, absorption
-by depth, ripples from normal maps made from the game's own wave maps: textures/water_*_n.dds, game
-data, made locally and not in the repository). Each hash is XXH3-64 of the marker's level 0 (sims3cam::kGlassMarkerHash,
-kFrostedMarkerHash, kWaterMarkerHash, kNaturalWaterMarkerHash, checked by sims3/test/test_sims3cam.cpp).
-textures/ is written by ../make_textures.py.
+    doc = """The Sims 3 camera hook's glass and frosted glass (milestones 80, 88; the water is the
+Sims3Water mod's since milestone 99): the materials of the hook's marker textures. The hook presents
+every glass draw of the game (a pixel shader reading only cube maps, blended, or one of its named
+textured glass shaders) with a flat 32x32 glass marker at stage 0 and its named frosted glass (the
+shower door) with a frosted marker, blending off; this layer makes the markers' hashes the runtime's
+translucent glass and frosted glass (a 40 % diffuse layer from textures/frost.dds). Each hash is
+XXH3-64 of the marker's level 0 (sims3cam::kGlassMarkerHash, kFrostedMarkerHash, checked by
+sims3/test/test_sims3cam.cpp). textures/ is written by ../make_textures.py.
 Deployed to Game/Bin/rtx-remix/mods/Sims3Glass/mod.usda; the runtime reads it while
 rtx.enableReplacementAssets is on."""
     metersPerUnit = 1
@@ -61,48 +58,6 @@ def Xform "RootNode"
                 float inputs:thin_wall_thickness = 0.005
                 bool inputs:use_diffuse_layer = 1
                 asset inputs:transmittance_texture = @./textures/frost.dds@
-                token outputs:out
-            }
-        }
-
-        def Material "mat_2723DD62C28E1456"
-        {
-            token outputs:mdl:displacement.connect = </RootNode/Looks/mat_2723DD62C28E1456/Shader.outputs:out>
-            token outputs:mdl:surface.connect = </RootNode/Looks/mat_2723DD62C28E1456/Shader.outputs:out>
-            token outputs:mdl:volume.connect = </RootNode/Looks/mat_2723DD62C28E1456/Shader.outputs:out>
-
-            def Shader "Shader"
-            {
-                uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:mdl:sourceAsset = @AperturePBR_Translucent.mdl@
-                uniform token info:mdl:sourceAsset:subIdentifier = "AperturePBR_Translucent"
-                float inputs:ior_constant = 1.33
-                color3f inputs:transmittance_color = (0.6, 0.88, 0.94)
-                float inputs:transmittance_measurement_distance = 1
-                bool inputs:thin_walled = 0
-                bool inputs:use_diffuse_layer = 0
-                asset inputs:normalmap_texture = @./textures/water_clear_n.dds@
-                token outputs:out
-            }
-        }
-
-        def Material "mat_52B04DF3E566CA55"
-        {
-            token outputs:mdl:displacement.connect = </RootNode/Looks/mat_52B04DF3E566CA55/Shader.outputs:out>
-            token outputs:mdl:surface.connect = </RootNode/Looks/mat_52B04DF3E566CA55/Shader.outputs:out>
-            token outputs:mdl:volume.connect = </RootNode/Looks/mat_52B04DF3E566CA55/Shader.outputs:out>
-
-            def Shader "Shader"
-            {
-                uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:mdl:sourceAsset = @AperturePBR_Translucent.mdl@
-                uniform token info:mdl:sourceAsset:subIdentifier = "AperturePBR_Translucent"
-                float inputs:ior_constant = 1.33
-                color3f inputs:transmittance_color = (0.55, 0.75, 0.66)
-                float inputs:transmittance_measurement_distance = 1
-                bool inputs:thin_walled = 0
-                bool inputs:use_diffuse_layer = 0
-                asset inputs:normalmap_texture = @./textures/water_natural_n.dds@
                 token outputs:out
             }
         }

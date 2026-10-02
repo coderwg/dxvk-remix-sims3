@@ -86,9 +86,9 @@ static void sims3LogStats(bool withTable) {
     snprintf(msg, sizeof msg, "Sims 3 camera hook:   cut-outs (milestones 67-68): %u pixel shaders read with a cut-out on a sampler's alpha; %u captured draws given it as an alpha test",
              h.cutShaders, h.alphaCutDraws);
     Logger::info(msg);
-    snprintf(msg, sizeof msg, "Sims 3 camera hook:   glass and water (milestones 80-93): %u glass draws (marker 0x%016llX%s), %u frosted (0x%016llX), %u water draws (marker 0x%016llX%s), %u natural water (0x%016llX); %u planar-reflection surface passes left out; %u wave maps written",
+    snprintf(msg, sizeof msg, "Sims 3 camera hook:   glass and water (milestones 80-99): %u glass draws (marker 0x%016llX%s), %u frosted (0x%016llX); water draws: %u pool, %u pond, %u sea, %u object water; %u planar-reflection surface passes left out; %u wave maps looked at",
              h.glassDraws, (unsigned long long) h.glassMarkerHash, h.glassMarker ? "" : ", not created yet", h.frostedDraws, (unsigned long long) h.frostedMarkerHash,
-             h.waterDraws, (unsigned long long) h.waterMarkerHash, h.waterMarker ? "" : ", not created yet", h.naturalWaterDraws, (unsigned long long) h.naturalWaterMarkerHash,
+             h.waterDraws[sims3cam::kWaterPool], h.waterDraws[sims3cam::kWaterPond], h.waterDraws[sims3cam::kWaterSea], h.waterDraws[sims3cam::kWaterObject],
              h.mirrorSurfaceDropped, h.waveDumped);
     Logger::info(msg);
     snprintf(msg, sizeof msg, "Sims 3 camera hook:   albedo sampler states (milestone 68): %u draws moved an albedo to stage 0 with sampler states differing from stage 0's, %u of them its sRGB flag",

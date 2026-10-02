@@ -1900,8 +1900,9 @@ inline constexpr uint64_t kGlassMarkerHash = 0x5E30D0B82C246E6Cull;  // XXH3-64 
 // stage 0, blending off; the hook's Remix mod makes each marker's hash a translucent water VOLUME,
 // IOR 1.33 -- refraction, and an absorption that deepens with the depth to the bed (the runtime
 // tracks whether a ray is inside the medium and turns the surface to face it, so the sheet's own
-// facing does not matter). Two kinds (milestone 93): clear water (a lot pool, an object's bowl) and
-// natural water (ponds, the sea), murkier and greener. The ground or basin under it is the game's
+// facing does not matter). One material per look (milestone 99, kWaterMaterial): a lot pool, a pond,
+// the sea (the town's water), an object's water -- each its own marker, tint and ripple map, in the
+// hook's Sims3Water mod (the glass stays in Sims3Glass). The ground or basin under it is the game's
 // own (a pond's bed, a lot pool's walls and floor: run 197). Ripples (milestone 94): each material's
 // normal map is made from the game's own wave map (sims3/remix-mod/make_textures.py) and sampled with
 // the draw's captured TEXCOORD0 -- the game's scrolling wave coordinate -- with the game's own
@@ -1911,26 +1912,33 @@ inline constexpr uint64_t kGlassMarkerHash = 0x5E30D0B82C246E6Cull;  // XXH3-64 
 // (Not water: PS f45e6c60, VS 33017462 -- a lot pool's FLOOR, a floor tile s4 under caustics s3, its
 // normal map, reflection and Fresnel; taken for the pool's surface in milestone 89, run 198 showed the
 // pool's surface itself is 011ba470 below.)
-struct WaterShader { uint64_t hash; const char* name; uint8_t kind; };   // kind: kClearWater, kNaturalWater
-inline constexpr uint8_t kClearWater = 0, kNaturalWater = 1;
+// The water materials (milestone 99): each look's marker -- a flat 32x32 colour, what shows if the mod is
+// not loaded -- whose XXH3-64 names its material in sims3/remix-mod/Sims3Water/mod.usda, and its ripple map
+// there (made by make_textures.py, the strength baked in). Pool and pond keep the hashes of milestone 93's
+// clear and natural water.
+struct WaterMaterial { const char* name; uint32_t colour; uint64_t hash; const char* ripples; };
+inline constexpr uint8_t kWaterPool = 0, kWaterPond = 1, kWaterSea = 2, kWaterObject = 3, kWaterMaterials = 4;
+inline const WaterMaterial kWaterMaterial[kWaterMaterials] = {
+  { "pool", 0xFF8CC4C8u, 0x2723DD62C28E1456ull, "water_pool_n.dds" },             // pale teal
+  { "pond", 0xFF6E9C8Cu, 0x52B04DF3E566CA55ull, "water_pond_n.dds" },             // muted green-teal
+  { "sea", 0xFF5A86A0u, 0xDDC84353084D6462ull, "water_sea_n.dds" },               // slate blue
+  { "object water", 0xFFA0D0D8u, 0x109A6039DC3F71F1ull, "water_object_n.dds" },   // light aqua
+};
+struct WaterShader { uint64_t hash; const char* name; uint8_t material; };   // material: kWaterPool ... kWaterObject
 inline const WaterShader kWaterPs[] = {
   { 0xf74b4657dbfd60bcull, "the town's water, ponds and sea (VS 2a6edce6: a plane at a set height, waves, refraction and reflection targets, "
-                           "two bump maps; its NORMAL input is no normal here, see chooseNormalTexcoord)", kNaturalWater },
-  { 0x387e1a15c63c120aull, "water, instanced (VS 1a047c76: waves, refraction target, reflection cube, a two-sample bump map)", kClearWater },
+                           "two bump maps; its NORMAL input is no normal here, see chooseNormalTexcoord)", kWaterSea },
+  { 0x387e1a15c63c120aull, "water, instanced (VS 1a047c76: waves, refraction target, reflection cube, a two-sample bump map)", kWaterObject },
   { 0xd40999e5838e8b05ull, "a lot pool's surface (VS 011ba470, a byte-packed grid): two scrolling wave normal maps s0 / s1, the scene behind "
                            "(render target s2) and the reflection (render target s3) read through them; captured, the wave map was its "
-                           "albedo -- the slow-moving lavender 'normal map' of runs 194-198", kClearWater },
-  { 0x85c0a78a614b15d3ull, "a lot pool's surface, cube-reflected (VS 011ba470): wave maps s1 / s2, the scene behind s3, reflection cubes s0 / s4", kClearWater },
+                           "albedo -- the slow-moving lavender 'normal map' of runs 194-198", kWaterPool },
+  { 0x85c0a78a614b15d3ull, "a lot pool's surface, cube-reflected (VS 011ba470): wave maps s1 / s2, the scene behind s3, reflection cubes s0 / s4", kWaterPool },
   { 0x11a6bdfd3e77d03aull, "a pond's surface (VS 24bd4713, a byte-packed mesh of its own, no culling; drawn right after the town's water): "
                            "two scrolling signed wave maps s0 / s1 (Q8W8V8U8), reflection cubes s2 / s3, a sun-glint ramp s4 (DXT1 512x4), "
-                           "the shadow map s5, the scene behind s6; captured, the glint ramp was its albedo -- the flat white pond of runs 194-199", kNaturalWater },
+                           "the shadow map s5, the scene behind s6; captured, the glint ramp was its albedo -- the flat white pond of runs 194-199", kWaterPond },
 };
 inline bool isWaterPs(uint64_t hash) { return findByHash(kWaterPs, hash) != nullptr; }
-inline int waterKind(uint64_t hash) { const WaterShader* w = findByHash(kWaterPs, hash); return w ? (int) w->kind : -1; }
-inline constexpr uint32_t kWaterMarkerColour = 0xFF8CC4C8u;          // ARGB pale teal: what clear water shows if the mod is not loaded
-inline constexpr uint64_t kWaterMarkerHash = 0x2723DD62C28E1456ull;  // XXH3-64 of its level 0; the mod's material name
-inline constexpr uint32_t kNaturalWaterMarkerColour = 0xFF6E9C8Cu;          // ARGB muted green-teal: natural water without the mod
-inline constexpr uint64_t kNaturalWaterMarkerHash = 0x52B04DF3E566CA55ull;  // XXH3-64 of its level 0; the mod's material name
+inline int waterMaterial(uint64_t hash) { const WaterShader* w = findByHash(kWaterPs, hash); return w ? (int) w->material : -1; }
 // The game's wave maps (milestone 93): a water draw's 2D textures in these formats are written to
 // rtx-remix\logs\sims3-textures when missing, level 0 as stored -- the source of the mod's ripple maps.
 inline bool isWaveMapFormat(uint32_t fmt) { return fmt == 21u /* A8R8G8B8 */ || fmt == 22u /* X8R8G8B8 */ || fmt == 63u /* Q8W8V8U8 */; }
