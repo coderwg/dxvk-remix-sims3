@@ -1873,29 +1873,40 @@ inline bool isFrostedGlass(uint64_t hash) { return hash == 0x572773cfbd618a3aull
 inline constexpr uint32_t kFrostedMarkerColour = 0xFFE0E6EAu;          // ARGB frosted pale grey: what it shows if the mod is not loaded
 inline constexpr uint64_t kFrostedMarkerHash = 0x6FBC67AF0CD76F66ull;  // XXH3-64 of its level 0; the mod's material name
 inline bool isGlassPs(const PsAnalysis& a, uint64_t hash) { return isGlassShader(a) || isTexturedGlass(hash); }
-// Test (milestone 87; goes once answered): the water draws carry the GLASS marker. If pools and
-// ponds turn see-through, the water material's settings are at fault; if they show the glass
-// marker's flat pale grey-blue, the runtime applies no replacement to those draws.
-inline constexpr bool kWaterTestWithGlass = true;
 inline constexpr uint32_t kGlassMarkerSize = 32;
 inline constexpr uint32_t kGlassMarkerColour = 0xFFB8C8D0u;          // ARGB pale grey-blue: what the panes show if the mod is not loaded
 inline constexpr uint64_t kGlassMarkerHash = 0x5E30D0B82C246E6Cull;  // XXH3-64 of its level 0, as the runtime hashes it; the mod's material name
 
-// ---- water (milestone 86) ------------------------------------------------------------------
-// The game's water -- pools, ponds, fountains -- is drawn by shaders that read the scene behind it
-// from a render target (refraction), a reflection, bump maps and a foam / caustics texture over
-// waves made in the vertex shader. The runtime took the foam texture as an albedo: an opaque grey
-// plane (run 193). A water draw is presented with the hook's water marker at stage 0, blending off;
-// the hook's Remix mod makes the marker's hash the runtime's translucent water (IOR 1.33). Named,
-// each read from its bytecode.
+// ---- water (milestones 86, 89) ---------------------------------------------------------------
+// The game paints its water's look in the shader -- a reflection, bump maps, caustics, a colour or
+// foam texture, the scene behind from a render target -- over waves made in the vertex shader; the
+// runtime took one of those textures as an albedo (an opaque grey plane, run 193; a pool's rippled
+// light-blue colour, run 196). A water draw is presented with one of the hook's markers at stage 0,
+// blending off, and the hook's Remix mod makes the marker's hash a water material. Named, each read
+// from its bytecode.
+// Contained water -- in a basin of the lot's or an object's own (a lot pool's walls are drawn, run
+// 196) -- is see-through: the mod's translucent water, thin-walled (a single sheet whose facing is
+// not known), IOR 1.33.
 struct WaterShader { uint64_t hash; const char* name; };
 inline const WaterShader kWaterPs[] = {
-  { 0xf74b4657dbfd60bcull, "water (VS 2a6edce6: a plane at a set height, waves, refraction and reflection targets, two bump maps)" },
   { 0x387e1a15c63c120aull, "water, instanced (VS 1a047c76: waves, refraction target, reflection cube, a two-sample bump map)" },
+  { 0xf45e6c607bb94189ull, "a lot pool's surface (VS 33017462, a position-only grid): drawn opaque, its look painted -- a rippled "
+                           "light-blue colour s4, caustics s3, a normal map s7 (.wz), reflection and irradiance cubes, a shadow map (run 196)" },
 };
 inline bool isWaterPs(uint64_t hash) { return findByHash(kWaterPs, hash) != nullptr; }
 inline constexpr uint32_t kWaterMarkerColour = 0xFF8CC4C8u;          // ARGB pale teal: what the water shows if the mod is not loaded
 inline constexpr uint64_t kWaterMarkerHash = 0x2723DD62C28E1456ull;  // XXH3-64 of its level 0; the mod's material name
+// Open water -- the town's ponds and sea -- has nothing under it in the ray-traced scene: through any
+// see-through material it showed the sky, an even white with no shadow, edged sharply at the shore
+// (runs 194-196). It is opaque and glossy: the mod's material sets only the gloss, and the runtime
+// takes an opaque replacement's albedo from the draw's stage-0 texture when the material names none
+// (mergeLegacyMaterial, 1.5.2), so the marker's colour is the water's colour.
+inline const WaterShader kOpenWaterPs[] = {
+  { 0xf74b4657dbfd60bcull, "the town's water (VS 2a6edce6: a plane at a set height, waves, refraction and reflection targets, two bump maps)" },
+};
+inline bool isOpenWaterPs(uint64_t hash) { return findByHash(kOpenWaterPs, hash) != nullptr; }
+inline constexpr uint32_t kOpenWaterMarkerColour = 0xFF1A4448u;          // ARGB dark blue-teal: the open water's albedo
+inline constexpr uint64_t kOpenWaterMarkerHash = 0xF25BBF23B4DFB708ull;  // XXH3-64 of its level 0; the mod's material name
 
 // ---- which texture coordinates the runtime samples with (milestone 3g) -------------------
 // The 1.5.2 runtime takes a draw's texture coordinates from the vertex declaration element

@@ -1054,9 +1054,20 @@ int main() {
       const uint64_t wh = (uint64_t) XXH3_64bits(gm, sizeof gm);
       char wname[32]; snprintf(wname, sizeof wname, "mat_%016llX", (unsigned long long) kWaterMarkerHash);
       const size_t wat = u.find(wname);
-      CHECK(wh == kWaterMarkerHash && wat != std::string::npos && u.find("ior_constant = 1.33", wat) != std::string::npos && kWaterMarkerHash != kGlassMarkerHash
-            && isWaterPs(0xf74b4657dbfd60bcull) && isWaterPs(0x387e1a15c63c120aull) && !isWaterPs(0x3197bfdef2330503ull),
-            "water (M86): the marker's level-0 hash 0x%016llX names the water material %s (IOR 1.33); water PS f74b4657 and 387e1a15, not the glass", (unsigned long long) wh, wname);
+      const size_t wend = wat == std::string::npos ? wat : u.find("token outputs:out", wat);
+      CHECK(wh == kWaterMarkerHash && wat != std::string::npos && wend != std::string::npos && u.find("ior_constant = 1.33", wat) < wend && u.find("thin_walled = 1", wat) < wend && kWaterMarkerHash != kGlassMarkerHash
+            && isWaterPs(0xf45e6c607bb94189ull) && isWaterPs(0x387e1a15c63c120aull) && !isWaterPs(0xf74b4657dbfd60bcull) && !isWaterPs(0x3197bfdef2330503ull),
+            "water (M86, M89): the marker's level-0 hash 0x%016llX names the water material %s (IOR 1.33, thin-walled); the pool's surface f45e6c60 and 387e1a15, not the town's water nor the glass", (unsigned long long) wh, wname);
+      // milestone 89: the open-water marker's hash names an opaque glossy material that names no albedo (the marker's colour is it)
+      for (auto& p : gm) p = kOpenWaterMarkerColour;
+      const uint64_t oh = (uint64_t) XXH3_64bits(gm, sizeof gm);
+      char oname[32]; snprintf(oname, sizeof oname, "mat_%016llX", (unsigned long long) kOpenWaterMarkerHash);
+      const size_t oat = u.find(oname);
+      const size_t oend = oat == std::string::npos ? oat : u.find("token outputs:out", oat);
+      CHECK(oh == kOpenWaterMarkerHash && oat != std::string::npos && oend != std::string::npos && u.find("AperturePBR_Opacity.mdl", oat) < oend && u.find("reflection_roughness_constant", oat) < oend
+            && u.find("diffuse_texture", oat) > oend && u.find("diffuse_color_constant", oat) > oend
+            && isOpenWaterPs(0xf74b4657dbfd60bcull) && !isOpenWaterPs(0xf45e6c607bb94189ull) && !isOpenWaterPs(0x387e1a15c63c120aull),
+            "open water (M89): the marker's level-0 hash 0x%016llX names the opaque glossy material %s (no albedo of its own); the town's water f74b4657", (unsigned long long) oh, oname);
       // milestone 88: the frosted marker's hash names the frosted material (a diffuse layer)
       for (auto& p : gm) p = kFrostedMarkerColour;
       const uint64_t fh = (uint64_t) XXH3_64bits(gm, sizeof gm);
