@@ -96,6 +96,9 @@ static void sims3LogStats(bool withTable) {
     Logger::info(msg);
     snprintf(msg, sizeof msg, "Sims 3 camera hook:   glass survey (milestone 110, one run): %u draws in their survey colour", h.surveyDraws);
     Logger::info(msg);
+    snprintf(msg, sizeof msg, "Sims 3 camera hook:   glass with its object's place (milestone 119): %u draws sent with a WORLD transform following the object, %u not placed (their reasons logged)",
+             h.worldDraws, h.worldFailed);
+    Logger::info(msg);
     snprintf(msg, sizeof msg, "Sims 3 camera hook:   glass sheets (milestone 104): %u draws sent without their back side (%llu triangles left out), %u draws whose mesh is not read (a second position or an unknown type), %u unblended passes of a twice-drawn glass left out",
              h.glassSideDraws, (unsigned long long) h.glassSideTris, h.glassSideSkipped, h.glassPassDropped);
     Logger::info(msg);

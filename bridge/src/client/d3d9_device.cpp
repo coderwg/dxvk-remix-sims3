@@ -34,6 +34,7 @@
 #include "sims3_camera_hook.h"
 #include "sims3_walls.h"
 #include "sims3_lots.h"
+#include "sims3_vsinterp.h"
 #include <atomic>
 #include <thread>
 // The Sims 3 camera hook (milestone 17): the runtime identifies textures by the XXH3 of their

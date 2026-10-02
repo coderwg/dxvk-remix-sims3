@@ -239,7 +239,12 @@ struct Sims3Hook {
   std::unordered_map<uint64_t, GlassSide> glassSides;
   IDirect3DIndexBuffer9* glassIb = nullptr; uint32_t glassPrims = 0;
   uint32_t glassSideDraws = 0, glassSideSkipped = 0, glassSideLogged = 0, glassPassDropped = 0; uint64_t glassSideTris = 0;
-  const D3DVERTEXELEMENT9* declElems = nullptr;   // the bound declaration's elements (its POSITION, for the back side)
+  const D3DVERTEXELEMENT9* declElems = nullptr;   // the bound declaration's elements (its POSITION, for the back side; its inputs, for the place)
+  // glass carries its object's place (milestone 119, sims3GlassWorld): the vertex shaders' bytecode by
+  // hash, whether this draw has the hook's WORLD transform, counts
+  std::unordered_map<uint64_t, std::vector<DWORD>> vsTokens;
+  bool worldOurs = false;
+  uint32_t worldDraws = 0, worldFailed = 0, worldLogged = 0;
   // the lot paint composite's two passes (milestone 17l, sims3cam::lotCompositeStage): the pass
   // being issued (0 = the game's own draw, pass 1; 2 = the hook's second pass, milestone 19), and
   // pass 2's black marker at stages 1 and 2 (what they held, put back in sims3EndDraw)

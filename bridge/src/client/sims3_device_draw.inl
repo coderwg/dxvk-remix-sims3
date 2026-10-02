@@ -35,7 +35,7 @@ inline void sims3OnReset(Sims3Hook& h) {
   if (h.mirrorMarker) { h.mirrorMarker->Release(); h.mirrorMarker = nullptr; }
   h.mirrorMarkerHash = 0; h.mirrorMarkerFailed = false;
   for (size_t i = 0; i < sims3cam::kGlassSurveyMax; ++i) { if (h.surveyMarkers[i]) h.surveyMarkers[i]->Release(); h.surveyMarkers[i] = nullptr; h.surveyHashes[i] = 0; h.surveyFailed[i] = false; }
-  h.blendOurs = false; h.bumpHashes.clear();
+  h.blendOurs = false; h.bumpHashes.clear(); h.worldOurs = false;
   for (auto& g : h.glassSides) if (g.second.ib) g.second.ib->Release();
   h.glassSides.clear(); h.glassIb = nullptr; h.glassPrims = 0;
   h.markerFailed = false; h.markersConfigSent = false; h.terrainFreeStage = -1; h.tblockActive = false; h.tblockStage = -1; h.tblockSet = 0; h.tblockSrgb = 0; h.ourSampler = false; h.psBound = nullptr; h.vsTerrain = nullptr; h.lotFurtherCopy = false; h.swappingPs = false;
@@ -169,6 +169,77 @@ IDirect3DBaseTexture9* sims3GlassBump(Sims3Hook& h, Dev* dev, const sims3cam::Na
 #else
   (void) h; (void) dev; (void) g; return nullptr;
 #endif
+}
+
+// Glass carries its object's place (milestone 119, sims3_vsinterp.h): the runtime keeps no motion for
+// a translucent instance's vertices, so a moving glass object -- a car's windows, the plumbob, glass
+// furniture moved in build mode -- is held still by the denoiser and trails. With
+// rtx.useWorldMatricesForShaders the runtime takes D3DTS_WORLD as the instance's transform (the GTA IV
+// compatibility mod's way): the hook runs the draw's own vertex shader for the draw's first vertex,
+// brings its clip position back through the camera the runtime holds, and sends that place as a
+// translation-only WORLD transform -- a rotation would also turn the captured normals (the runtime
+// multiplies them by WORLD), so the instance follows the object's movement, not its turning. The
+// draw goes out with the identity transform as before when the shader or its data cannot be read.
+template<typename Dev>
+void sims3GlassWorld(Sims3Hook& h, Dev* dev, UINT freq0) {
+  if (!h.drawIndexed || !h.vsBound || !h.declElems || h.held.kind != sims3cam::Kind::Main) return;
+  if ((freq0 & D3DSTREAMSOURCE_INDEXEDDATA) && (freq0 & 0x3FFFFFFFu) > 1u) return;   // instanced: a place per instance, not one
+  auto fail = [&](const char* why) {
+    ++h.worldFailed;
+    if (h.worldLogged < 16u) {
+      ++h.worldLogged;
+      Logger::info(format_string("Sims 3 camera hook: glass not given its place at frame %u -> VS %016llx PS %016llx: %s", h.frames + 1, (unsigned long long) h.vsHash, (unsigned long long) h.psHash, why));
+    }
+  };
+  auto it = h.vsTokens.find(h.vsHash);
+  if (it == h.vsTokens.end()) {
+    std::vector<DWORD> t; UINT size = 0;
+    if (SUCCEEDED(h.vsBound->GetFunction(nullptr, &size)) && size >= 8) { t.resize(size / 4); if (FAILED(h.vsBound->GetFunction(t.data(), &size))) t.clear(); }
+    if (h.vsTokens.size() > 1024u) h.vsTokens.clear();
+    it = h.vsTokens.emplace(h.vsHash, std::move(t)).first;
+  }
+  const std::vector<DWORD>& tok = it->second;
+  if (tok.empty()) { fail("its bytecode is not readable"); return; }
+  // the draw's first vertex
+  IDirect3DIndexBuffer9* ib = nullptr;
+  if (FAILED(dev->GetIndices(&ib)) || !ib) return;
+  ib->Release();
+  auto* lib = bridge_cast<Direct3DIndexBuffer9_LSS*>(ib);
+  const uint8_t* id = lib ? lib->sims3Data() : nullptr;
+  const bool ib32 = lib && lib->getDesc().Format == D3DFMT_INDEX32;
+  if (!id || ((size_t) h.drawStart + 1u) * (ib32 ? 4u : 2u) > lib->sims3Size()) { fail("its index buffer is not readable"); return; }
+  const int64_t vtx = (int64_t) h.drawBase + (int64_t) sims3cam::readIndex(id, (size_t) h.drawStart, ib32);
+  // its inputs, as the declaration lays them out ((0, 0, 0, 1) where nothing is declared)
+  float in[16][4] = {};
+  for (auto& v : in) v[3] = 1.f;
+  sims3cam::VsInputDcl dcls[16];
+  const int nd = sims3cam::vsInputDcls(tok.data(), tok.size(), dcls);
+  for (int i = 0; i < nd; ++i) {
+    const D3DVERTEXELEMENT9* e = nullptr;
+    for (const D3DVERTEXELEMENT9* x = h.declElems; x->Stream != 0xFF; ++x) if (x->Usage == dcls[i].usage && x->UsageIndex == dcls[i].index) { e = x; break; }
+    if (!e) continue;
+    IDirect3DVertexBuffer9* vb = nullptr; UINT off = 0, stride = 0;
+    if (FAILED(dev->GetStreamSource(e->Stream, &vb, &off, &stride)) || !vb) { fail("a stream is not bound"); return; }
+    vb->Release();
+    auto* lvb = bridge_cast<Direct3DVertexBuffer9_LSS*>(vb);
+    const uint8_t* vd = lvb ? lvb->sims3Data() : nullptr;
+    const uint32_t bytes = sims3cam::declTypeBytes((uint8_t) e->Type);
+    const size_t at = (size_t) off + (size_t) vtx * stride + (size_t) e->Offset;
+    if (!vd || vtx < 0 || bytes == 0 || at + bytes > lvb->sims3Size()) { fail("its vertex data is not readable"); return; }
+    if (!sims3cam::vsDecodeElement((uint8_t) e->Type, vd + at, in[dcls[i].reg])) { fail("an element type it cannot read"); return; }
+  }
+  // the shader's constants as the device holds them
+  static float cf[256][4]; int ci[16][4] = {}; BOOL cb[16] = {};
+  dev->GetVertexShaderConstantF(0, &cf[0][0], 256); dev->GetVertexShaderConstantI(0, &ci[0][0], 16); dev->GetVertexShaderConstantB(0, cb, 16);
+  sims3cam::VsConstants k; k.f = &cf[0][0]; k.i = &ci[0][0]; k.b = cb;
+  sims3cam::VsRun run; float clip[4] = {}, world[3] = {};
+  if (!sims3cam::evalVsPosition(tok.data(), tok.size(), in, k, clip, run)) { fail(run.failed ? run.failed : "no finite position"); return; }
+  if (!sims3cam::clipToWorld(h.held.view, h.held.proj, clip, world)) { fail("the camera does not invert"); return; }
+  D3DMATRIX w = {};
+  w.m[0][0] = w.m[1][1] = w.m[2][2] = w.m[3][3] = 1.f;
+  w.m[3][0] = world[0]; w.m[3][1] = world[1]; w.m[3][2] = world[2];
+  h.ourState = true; dev->SetTransform(D3DTS_WORLD, &w); h.ourState = false;
+  h.worldOurs = true; ++h.worldDraws;
 }
 
 // A glass draw's sheets with a back side (milestone 104, sims3cam::glassFrontTriangles): the kept
@@ -333,6 +404,7 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
       h.ourState = true; dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE); h.ourState = false;
       if (water) ++h.waterDraws[waterMat]; else if (mirror) ++h.mirrorDraws; else ++h.glassDraws[gm];
       if (glass) sims3GlassOneSide(h, dev);   // a sheet's back side left out (milestone 104)
+      if (glass) sims3GlassWorld(h, dev, freq0);   // its object's place as the WORLD transform (milestone 119)
       // at the mark (milestone 113, with the survey): every glass shader drawn in the marked frame, once
       if (h.markDump == 2) {
         bool listed = false; for (uint32_t i = 0; i < h.markGlassCount; ++i) if (h.markGlassPs[i] == h.psHash) listed = true;
@@ -477,6 +549,10 @@ void sims3EndDraw(Sims3Hook& h, Dev* dev) {
     h.ourState = false;
   }
   if (h.blendOurs) { h.blendOurs = false; h.ourState = true; dev->SetRenderState(D3DRS_ALPHABLENDENABLE, h.blendSaved); h.ourState = false; }   // a glass draw's blending (milestone 80)
+  if (h.worldOurs) {   // a glass draw's place (milestone 119): every other draw keeps the identity
+    static const D3DMATRIX kWorldIdentity = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
+    h.worldOurs = false; h.ourState = true; dev->SetTransform(D3DTS_WORLD, &kWorldIdentity); h.ourState = false;
+  }
   if (h.terrainFreeStage >= 0) {
     h.inRemap = true; dev->SetTexture((DWORD) h.terrainFreeStage, h.freeStageRestore); h.inRemap = false;
     if (h.freeStageRestore) { h.freeStageRestore->Release(); h.freeStageRestore = nullptr; }

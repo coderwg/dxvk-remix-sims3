@@ -10,6 +10,7 @@
 #include "sims3_camera_hook.h"
 #include "sims3_walls.h"
 #include "sims3_lots.h"
+#include "sims3_vsinterp.h"
 #define XXH_INLINE_ALL
 #include "xxhash.h"   // the runtime's texture hash (milestone 17): the marker hashes the hook sends
 #include <cstdio>
@@ -1218,6 +1219,58 @@ int main() {
       CHECK(ph == kGlassMaterial[kPlumbob].hash && pat != std::string::npos && pend != std::string::npos && u.find("thin_walled = 1", pat) < pend && u.find("thin_wall_thickness = 1\n", pat) < pend && u.find("transmittance_color = (0.5, 0.92, 0.55)", pat) < pend
             && u.find("enable_emission", pat) > pend && kGlassMaterial[0].hash != kGlassMaterial[1].hash && kGlassMaterial[1].hash != kGlassMaterial[2].hash && kGlassMaterial[0].hash != kGlassMaterial[2].hash,
             "plumbob (M114-M116): the marker's level-0 hash 0x%016llX names the thin green glass %s in Sims3Glass/mod.usda (no glow)", (unsigned long long) ph, pname);
+    }
+    // milestone 119: a vertex shader's position evaluated on the client -- a hand-made shader, the shower door's
+    // skinned shader with a known bone, every glass vertex shader in the dumps, and the way back from clip to world
+    {
+      std::vector<DWORD> t = { 0xFFFE0300u,
+        0x0200001Fu, 0x80000000u, 0x900F0000u,                 // dcl_position v0
+        0x0200001Fu, 0x80000000u, 0xE00F0000u };               // dcl_position o0
+      for (DWORD row = 0; row < 4; ++row) { t.push_back(0x03000009u); t.push_back(0xE0000000u | (1u << (16 + row))); t.push_back(0x90E40000u); t.push_back(0xA0E40000u | row); }   // dp4 o0.<row>, v0, c<row>
+      t.push_back(0x0000FFFFu);
+      static float cf[256][4]; memset(cf, 0, sizeof cf);
+      const float M[4][4] = { { 2, 0, 0, 1 }, { 0, 3, 0, 2 }, { 0, 0, 4, 3 }, { 0, 0, 0, 1 } };
+      memcpy(cf, M, sizeof M);
+      float in[16][4] = {}; in[0][0] = 1; in[0][1] = 2; in[0][2] = 3; in[0][3] = 1;
+      VsConstants kc; kc.f = &cf[0][0]; VsRun run; float pos[4] = {};
+      const bool handOk = evalVsPosition(t.data(), t.size(), in, kc, pos, run) && nearf(pos[0], 3.f) && nearf(pos[1], 8.f) && nearf(pos[2], 15.f) && nearf(pos[3], 1.f);
+      // the shower door's VS b51f1577 family -- b3e88e28: bone 0 = identity plus (10, 20, 30); the camera rows c180-c183 the identity
+      std::vector<DWORD> door; bool doorOk = false; float dp[4] = {};
+      if (loadShader("vs_b3e88e28e856fac1", door)) {
+        memset(cf, 0, sizeof cf);
+        const float bone[3][4] = { { 1, 0, 0, 10 }, { 0, 1, 0, 20 }, { 0, 0, 1, 30 } };
+        memcpy(cf, bone, sizeof bone);
+        for (int i = 0; i < 4; ++i) cf[180 + i][i] = 1.f;
+        float vin[16][4] = {};
+        VsInputDcl dcls[16]; const int nd = vsInputDcls(door.data(), door.size(), dcls);
+        for (int i = 0; i < nd; ++i) if (dcls[i].usage == kUsagePosition) { vin[dcls[i].reg][0] = 1; vin[dcls[i].reg][1] = 2; vin[dcls[i].reg][2] = 3; vin[dcls[i].reg][3] = 1; }
+        VsRun dr;
+        doorOk = evalVsPosition(door.data(), door.size(), vin, kc, dp, dr) && nearf(dp[0], 11.f) && nearf(dp[1], 22.f) && nearf(dp[2], 33.f) && nearf(dp[3], 1.f);
+      }
+      // every glass vertex shader: nothing the evaluator does not know
+      int glassVs = 0, glassVsOk = 0; const char* firstFail = "";
+      for (const char* vsName : { "vs_5126ba796dbf5622", "vs_34a201bbfafb6d8d", "vs_b51f157720f062d8", "vs_b3e88e28e856fac1", "vs_d251510d258367de", "vs_e79a4bf1a29d4470",
+                                  "vs_a77613ea8f18457b", "vs_4e9298de4bffcede", "vs_6feaaa2aa6558225", "vs_6d4b6bccd89a560e", "vs_13b4ec4425c0cc7b", "vs_ddc6be9fd81a65f6",
+                                  "vs_c96f14650fa756fa", "vs_6b921b44994c1feb", "vs_d7fede81e7ce2dda", "vs_4b9e80e93d8ace3d" }) {
+        std::vector<DWORD> vt; if (!loadShader(vsName, vt)) continue;
+        ++glassVs;
+        for (int i = 0; i < 256; ++i) for (int j = 0; j < 4; ++j) cf[i][j] = (i % 4 == j) ? 1.f : 0.f;
+        float vin[16][4] = {}; for (auto& v : vin) v[3] = 1.f;
+        VsRun vr; float vp[4];
+        evalVsPosition(vt.data(), vt.size(), vin, kc, vp, vr);
+        if (!vr.failed) ++glassVsOk; else if (!*firstFail) firstFail = vsName;
+      }
+      // clip -> world: a world point through a view and a projection and back
+      D3DMATRIX view = {}, proj = {};
+      const float cy = std::cos(0.6f), sy = std::sin(0.6f);
+      view.m[0][0] = cy; view.m[0][2] = -sy; view.m[1][1] = 1.f; view.m[2][0] = sy; view.m[2][2] = cy; view.m[3][0] = -40.f; view.m[3][1] = -5.f; view.m[3][2] = 120.f; view.m[3][3] = 1.f;
+      proj.m[0][0] = 1.2f; proj.m[1][1] = 1.6f; proj.m[2][2] = 1.0001f; proj.m[2][3] = 1.f; proj.m[3][2] = -0.10001f;
+      const float wp[4] = { 975.f, 42.9f, 906.f, 1.f }; float vv[4], clip[4], back[3] = {};
+      rowTimes(wp, view, vv); rowTimes(vv, proj, clip);
+      const bool backOk = clipToWorld(view, proj, clip, back) && std::fabs(back[0] - 975.f) < 0.05f && std::fabs(back[1] - 42.9f) < 0.05f && std::fabs(back[2] - 906.f) < 0.05f;
+      CHECK(handOk && doorOk && glassVs >= 1 && glassVsOk == glassVs && backOk,
+            "vertex shader position (M119): a hand-made dp4 shader (%.1f %.1f %.1f %.1f), the door family's skinned b3e88e28 at bone 0 + (10, 20, 30) -> (%.1f %.1f %.1f %.1f), %d of %d glass vertex shaders evaluated%s%s, clip back to the world (%.2f %.2f %.2f)",
+            pos[0], pos[1], pos[2], pos[3], dp[0], dp[1], dp[2], dp[3], glassVsOk, glassVs, *firstFail ? " -- first failing: " : "", firstFail, back[0], back[1], back[2]);
     }
     CHECK(kLotCompositePs == 0x99ee53ff6ef1b0b6ull && lotCompositeStage(0) == 0 && lotCompositeStage(1) == 4 && lotCompositeStage(2) == 3, "lot composite: pass 1 reads the mask from s4 (layer 4 out), pass 2 from s3 (layer 3 out)");
     std::vector<DWORD> lit, world, layer, comp, lit2, lit3, lit4;
