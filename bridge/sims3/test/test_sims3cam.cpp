@@ -1034,6 +1034,7 @@ int main() {
       const bool hairOk = !loadShader("ps_57a5a049ffa47770", hair) || (analyzePixelShader(hair.data(), hair.size(), ha) && !isGlassPs(ha, 0x57a5a049ffa47770ull));
       const bool beamOk = !loadShader("ps_7304aaea6a75fb3f", beam) || (analyzePixelShader(beam.data(), beam.size(), ba) && !isGlassPs(ba, 0x7304aaea6a75fb3full));
       CHECK(tgOk && hairOk && beamOk && isGlassPs(PsAnalysis(), 0xac4184cee232ed04ull), "glass (M81): textured glass 29c6b222 / ac4184ce by name; the hair pass 57a5a049 and the light-beam card 7304aaea are not glass");
+      CHECK(isTexturedGlass(0x572773cfbd618a3aull) && !isTexturedGlass(0x3197bfdef2330503ull), "glass (M87): the shower door's frosted glass 572773cf is textured glass (by name, blended or not)");
       // milestone 82: the planar-reflection surface's PS 86dad57d reads only a cube (left out under the stencil test)
       std::vector<DWORD> mp; PsAnalysis ma;
       const bool mirrorCube = !loadShader("ps_86dad57d0dc73989", mp) || (analyzePixelShader(mp.data(), mp.size(), ma) && isGlassShader(ma));

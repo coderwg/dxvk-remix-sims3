@@ -119,12 +119,13 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
     // glass and water (milestones 80, 86): the material's marker at stage 0 and the draw's blending
     // off; its material is the hook's Remix mod's translucent glass or water (sims3cam::isGlassShader,
     // isGlassPs, isWaterPs)
-    const bool water = sims3cam::isWaterPs(h.psHash) && sims3EnsureWaterMarker(h, dev);
-    if (water || (h.psAuto && rs[D3DRS_ALPHABLENDENABLE] && sims3cam::isGlassPs(*h.psAuto, h.psHash) && sims3EnsureGlassMarker(h, dev))) {
+    const bool water = sims3cam::isWaterPs(h.psHash) && (sims3cam::kWaterTestWithGlass ? sims3EnsureGlassMarker(h, dev) : sims3EnsureWaterMarker(h, dev));
+    const bool glass = !water && h.psAuto && (sims3cam::isTexturedGlass(h.psHash) || (rs[D3DRS_ALPHABLENDENABLE] && sims3cam::isGlassShader(*h.psAuto))) && sims3EnsureGlassMarker(h, dev);
+    if (water || glass) {
       h.drawGlass = true;
       h.remapRestore = h.boundTex[0]; if (h.remapRestore) h.remapRestore->AddRef();   // held until sims3EndDraw, as for an albedo remap
       h.remapActive = true;
-      h.inRemap = true; dev->SetTexture(0, water ? h.waterMarker : h.glassMarker); h.inRemap = false;
+      h.inRemap = true; dev->SetTexture(0, (water && !sims3cam::kWaterTestWithGlass) ? h.waterMarker : h.glassMarker); h.inRemap = false;
       h.blendSaved = rs[D3DRS_ALPHABLENDENABLE]; h.blendOurs = true;
       h.ourState = true; dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE); h.ourState = false;
       if (water) ++h.waterDraws; else ++h.glassDraws;

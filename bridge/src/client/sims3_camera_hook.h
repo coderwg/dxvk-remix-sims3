@@ -1853,16 +1853,25 @@ inline bool isGlassShader(const PsAnalysis& a) {
   for (const PsSamplerUse& u : a.samplers) { if (!u.read) continue; if (!u.cube) return false; ++cubes; }
   return cubes > 0;
 }
-// Textured glass (milestone 81): the same reflection, Fresnel term and highlights, with a colour
-// texture over it. Its signature (a cube map and 2D textures, blended) is shared by the Sims' hair
-// and skin passes, so these are named, each read from its bytecode. (Not glass, though alike: the
-// light-beam cards 7304aaea / 8d3a3a22 -- their cube lookup has a constant direction, no normal.)
+// Textured glass (milestones 81, 87): the same reflection, Fresnel term and highlights, with a colour
+// texture over it. Its signature (a cube map and 2D textures) is shared by the Sims' hair and skin
+// passes, so these are named, each read from its bytecode, and go out as glass whether the game
+// blends them or not (the shower door's is opaque, its see-through look faked from a picture of the
+// scene behind). (Not glass, though alike: the light-beam cards 7304aaea / 8d3a3a22 -- their cube
+// lookup has a constant direction, no normal.)
 struct TexturedGlass { uint64_t hash; const char* name; };
 inline const TexturedGlass kTexturedGlass[] = {
-  { 0x29c6b22234617c1aull, "glass: colour texture s1 x c8, mask s2 (VS 5b18d2ce; seen at the shower, run 188)" },
+  { 0x29c6b22234617c1aull, "glass: colour texture s1 x c8, mask s2 (VS 5b18d2ce)" },
   { 0xac4184cee232ed04ull, "glass: colour texture s2 x c10, gloss s3, irradiance cube s1 (VS d7fede81)" },
+  { 0x572773cfbd618a3aull, "frosted glass, a shower door: normal map s2, reflection, Fresnel, the scene behind (render target s1) "
+                           "read through the normal map, colour s3 (VS b51f1577, skinned: the door swings; drawn opaque; runs 192-194)" },
 };
-inline bool isGlassPs(const PsAnalysis& a, uint64_t hash) { return isGlassShader(a) || findByHash(kTexturedGlass, hash) != nullptr; }
+inline bool isTexturedGlass(uint64_t hash) { return findByHash(kTexturedGlass, hash) != nullptr; }
+inline bool isGlassPs(const PsAnalysis& a, uint64_t hash) { return isGlassShader(a) || isTexturedGlass(hash); }
+// Test (milestone 87; goes once answered): the water draws carry the GLASS marker. If pools and
+// ponds turn see-through, the water material's settings are at fault; if they show the glass
+// marker's flat pale grey-blue, the runtime applies no replacement to those draws.
+inline constexpr bool kWaterTestWithGlass = true;
 inline constexpr uint32_t kGlassMarkerSize = 32;
 inline constexpr uint32_t kGlassMarkerColour = 0xFFB8C8D0u;          // ARGB pale grey-blue: what the panes show if the mod is not loaded
 inline constexpr uint64_t kGlassMarkerHash = 0x5E30D0B82C246E6Cull;  // XXH3-64 of its level 0, as the runtime hashes it; the mod's material name
