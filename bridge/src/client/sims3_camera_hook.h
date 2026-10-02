@@ -1876,27 +1876,30 @@ inline bool isGlassShader(const PsAnalysis& a) {
 // glass (its own marker and the mod's translucent glass with a diffuse layer; the door's game colour
 // texture is a frosting). Seen right in game: the door (run 201); a glass dome building on a community
 // lot drawn by one of the first two (run 212's survey, magenta; which one the log did not say), the
-// other its kin by bytecode. A level of detail is named with its object: the game draws the door from
-// a little further with a simpler shader, no frosting and no bump map (run 213: left out until then,
-// the door vanished), frosted here so the door looks the same at every distance. A car's windows are
-// the car's own paint shader drawn a second time, blended, the colour texture's alpha the see-through
-// amount (in step with the opaque body pass, VS 710f9a33 / PS 0c2df3be); a distant car's, a small
-// glass shader with a constant alpha. The parked cars' windows are drawn twice a frame, the same mesh
+// other its kin by bytecode. 85e9c338 is the door's shader without the frosting and the bump map
+// (reflection, Fresnel, the scene behind): drawn with the door in runs 201-214 but not by this door
+// (runs 215-216, the door alone on a lot), so clear glass (left out until milestone 102: no colour
+// texture). Car glass (milestone 105) is tinted, about 75 % through, a slight green-grey: a passing
+// car's windshield and windows, a cube-only shader (66516d5d, VS e79a4bf1, run 215); a parked car's
+// windows, the car's own paint shader drawn a second time, blended, the colour texture's alpha the
+// see-through amount (in step with the opaque body pass, VS 710f9a33 / PS 0c2df3be); a distant car's,
+// a small glass shader with a constant alpha. The parked cars' windows are drawn twice a frame, the same mesh
 // unblended with depth writes, then blended (run 215): only the blended pass goes out as glass, the
 // other is left out (blendedPassOnly; milestone 104), or the windows are two sheets in one place.
 // (Not glass, though alike: the light-beam cards 7304aaea / 8d3a3a22 -- their cube lookup has a
 // constant direction, no normal.)
-inline constexpr uint8_t kClearGlass = 0, kFrostedGlass = 1;
+inline constexpr uint8_t kClearGlass = 0, kFrostedGlass = 1, kCarGlass = 2;
 struct NamedGlass { uint64_t hash; const char* name; uint8_t material; bool blendedPassOnly = false; };
 inline const NamedGlass kNamedGlass[] = {
   { 0x29c6b22234617c1aull, "glass: colour texture s1 x c8, mask s2 (VS 5b18d2ce; drawn near the shower in run 188)", kClearGlass },
   { 0xac4184cee232ed04ull, "glass: colour texture s2 x c10, gloss s3, irradiance cube s1 (VS d7fede81; drawn unblended, run 201)", kClearGlass },
   { 0x572773cfbd618a3aull, "frosted glass, a shower door: normal map s2, reflection, Fresnel, the scene behind (render target s1) "
                            "read through the normal map, colour s3 (VS b51f1577, skinned: the door swings; drawn opaque; runs 192-194)", kFrostedGlass },
-  { 0x85e9c3381d5bf054ull, "frosted glass, the shower door from a little further: reflection, Fresnel, the scene behind (render target s1), "
-                           "no normal map, no colour (VS b3e88e28, skinned; also VS d251510d, in step with it; drawn opaque; run 213)", kFrostedGlass },
-  { 0x45c7a7cd511b5233ull, "glass, a car's windows: the car's paint shader blended, colour atlas s2 with its alpha, normal map s3, reflection cube s6 (VS a77613ea; run 213)", kClearGlass, true },
-  { 0xd03ebab11453bca1ull, "glass, a distant car's windows: ps_2_0 reflection, Fresnel, highlights, the car's atlas s1 at a decoded UV, constant alpha c6.w (VS 4e9298de; runs 159, 205)", kClearGlass },
+  { 0x85e9c3381d5bf054ull, "glass: reflection, Fresnel, the scene behind (render target s1), no normal map, no colour "
+                           "(VS b3e88e28, skinned; also VS d251510d; drawn opaque; runs 201-214)", kClearGlass },
+  { 0x66516d5db94ab307ull, "car glass, a passing car's windshield and windows: cube only (VS e79a4bf1, skinned; run 215)", kCarGlass },
+  { 0x45c7a7cd511b5233ull, "car glass, a parked car's windows: the car's paint shader blended, colour atlas s2 with its alpha, normal map s3, reflection cube s6 (VS a77613ea; run 213)", kCarGlass, true },
+  { 0xd03ebab11453bca1ull, "car glass, a distant car's windows: ps_2_0 reflection, Fresnel, highlights, the car's atlas s1 at a decoded UV, constant alpha c6.w (VS 4e9298de; runs 159, 205)", kCarGlass },
 };
 inline const NamedGlass* namedGlass(uint64_t hash) { return findByHash(kNamedGlass, hash); }
 // ---- a glass sheet's back side (milestone 104) -------------------------------------------------
@@ -1936,6 +1939,8 @@ inline uint32_t glassFrontTriangles(const float* pos, size_t triangles, std::vec
 }
 inline constexpr uint32_t kFrostedMarkerColour = 0xFFE0E6EAu;          // ARGB frosted pale grey: what it shows if the mod is not loaded
 inline constexpr uint64_t kFrostedMarkerHash = 0x6FBC67AF0CD76F66ull;  // XXH3-64 of its level 0; the mod's material name
+inline constexpr uint32_t kCarGlassMarkerColour = 0xFFA0B4ACu;         // ARGB grey-green: what car glass shows if the mod is not loaded
+inline constexpr uint64_t kCarGlassMarkerHash = 0x8A5EDD7D16D8E741ull;  // XXH3-64 of its level 0; the mod's material name
 // ---- mirrors (milestone 101) -----------------------------------------------------------------
 // A reflective sheet -- a cube-only pixel shader under the stencil test, PS 86dad57d (VS d79254da):
 // the view reflected about the normal into an environment cube, fogged, its alpha from material

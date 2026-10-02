@@ -35,6 +35,8 @@ inline void sims3OnReset(Sims3Hook& h) {
   if (h.mirrorMarker) { h.mirrorMarker->Release(); h.mirrorMarker = nullptr; }
   h.mirrorMarkerHash = 0; h.mirrorMarkerFailed = false;
   if (h.frostedMarker) { h.frostedMarker->Release(); h.frostedMarker = nullptr; }
+  if (h.carGlassMarker) { h.carGlassMarker->Release(); h.carGlassMarker = nullptr; }
+  h.carGlassMarkerHash = 0; h.carGlassMarkerFailed = false;
   h.glassMarkerHash = 0; h.glassMarkerFailed = false; h.frostedMarkerHash = 0; h.frostedMarkerFailed = false; h.blendOurs = false;
   for (auto& g : h.glassSides) if (g.second.ib) g.second.ib->Release();
   h.glassSides.clear(); h.glassIb = nullptr; h.glassPrims = 0;
@@ -321,29 +323,30 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
     h.fogOurs = true;
   }
   if (!terrain) {
-    // glass, mirrors and water (milestones 80, 86, 88, 99, 101): the material's marker at stage 0 and
-    // the draw's blending off; its material is the hook's Remix mods' glass, frosted glass, mirror or
-    // the water's own (sims3cam::isGlassShader, namedGlass, isReflectiveSheet, waterMaterial)
+    // glass, mirrors and water (milestones 80, 86, 88, 99, 101, 105): the material's marker at stage 0
+    // and the draw's blending off; its material is the hook's Remix mods' glass, frosted glass, car
+    // glass, mirror or the water's own (sims3cam::isGlassShader, namedGlass, isReflectiveSheet, waterMaterial)
     const int waterMat = sims3cam::waterMaterial(h.psHash);
     const bool water = waterMat >= 0 && sims3EnsureWaterMarker(h, dev, waterMat);
     const sims3cam::NamedGlass* named = water ? nullptr : sims3cam::namedGlass(h.psHash);
     const bool mirror = !water && h.reflectiveSheet && sims3EnsureMirrorMarker(h, dev);
     const bool frosted = !water && !h.reflectiveSheet && named && named->material == sims3cam::kFrostedGlass && sims3EnsureFrostedMarker(h, dev);
-    const bool glass = !water && !h.reflectiveSheet && !frosted && h.psAuto && (named || (rs[D3DRS_ALPHABLENDENABLE] && sims3cam::isGlassShader(*h.psAuto))) && sims3EnsureGlassMarker(h, dev);
-    if (water || mirror || frosted || glass) {
+    const bool carGlass = !water && !h.reflectiveSheet && named && named->material == sims3cam::kCarGlass && sims3EnsureCarGlassMarker(h, dev);
+    const bool glass = !water && !h.reflectiveSheet && !frosted && !carGlass && h.psAuto && (named || (rs[D3DRS_ALPHABLENDENABLE] && sims3cam::isGlassShader(*h.psAuto))) && sims3EnsureGlassMarker(h, dev);
+    if (water || mirror || frosted || carGlass || glass) {
       h.drawGlass = true;
       h.remapRestore = h.boundTex[0]; if (h.remapRestore) h.remapRestore->AddRef();   // held until sims3EndDraw, as for an albedo remap
       h.remapActive = true;
-      h.inRemap = true; dev->SetTexture(0, water ? h.waterMarkers[waterMat] : mirror ? h.mirrorMarker : frosted ? h.frostedMarker : h.glassMarker); h.inRemap = false;
+      h.inRemap = true; dev->SetTexture(0, water ? h.waterMarkers[waterMat] : mirror ? h.mirrorMarker : frosted ? h.frostedMarker : carGlass ? h.carGlassMarker : h.glassMarker); h.inRemap = false;
       // water (milestone 94): the sampler states of the game's first wave map (the one its TEXCOORD0
       // reads) on stage 0, where the runtime takes the material's -- the normal map tiles as the game's
       // waves do; back in sims3EndDraw with the albedo remap's
       if (water) for (int s = 0; s < 16; ++s) if (h.boundKind[s] == 1 && sims3cam::isWaveMapFormat(h.boundFmt[s])) { if (s > 0) h.remapSamplerSet = sims3SamplerStatesTo0(h, dev, (DWORD) s, h.remapSamplerSaved); break; }
       h.blendSaved = rs[D3DRS_ALPHABLENDENABLE]; h.blendOurs = true;
       h.ourState = true; dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE); h.ourState = false;
-      if (water) ++h.waterDraws[waterMat]; else if (mirror) ++h.mirrorDraws; else if (frosted) ++h.frostedDraws; else ++h.glassDraws;
-      if (frosted || glass) sims3GlassOneSide(h, dev);   // a sheet's back side left out (milestone 104)
-      h.glassWhat = water ? sims3cam::kWaterMaterial[waterMat].name : mirror ? "mirror" : frosted ? "frosted glass" : "glass";
+      if (water) ++h.waterDraws[waterMat]; else if (mirror) ++h.mirrorDraws; else if (frosted) ++h.frostedDraws; else if (carGlass) ++h.carGlassDraws; else ++h.glassDraws;
+      if (frosted || carGlass || glass) sims3GlassOneSide(h, dev);   // a sheet's back side left out (milestone 104)
+      h.glassWhat = water ? sims3cam::kWaterMaterial[waterMat].name : mirror ? "mirror" : frosted ? "frosted glass" : carGlass ? "car glass" : "glass";
       bool seen = false; for (uint32_t i = 0; i < h.glassLogged; ++i) if (h.glassLoggedPs[i] == h.psHash) seen = true;
       if (!seen && h.glassLogged < 32) {
         h.glassLoggedPs[h.glassLogged++] = h.psHash; char msg[224];

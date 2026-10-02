@@ -1059,9 +1059,10 @@ int main() {
         std::vector<DWORD> sb; PsAnalysis sa;
         if (loadShader(n, sb) && (!analyzePixelShader(sb.data(), sb.size(), sa) || isGlassShader(sa))) farOk = false;
       }
-      const NamedGlass* doorFar = namedGlass(0x85e9c3381d5bf054ull); const NamedGlass* car = namedGlass(0x45c7a7cd511b5233ull); const NamedGlass* carFar = namedGlass(0xd03ebab11453bca1ull);
-      CHECK(farOk && doorFar && doorFar->material == kFrostedGlass && car && car->material == kClearGlass && carFar && carFar->material == kClearGlass && !namedGlass(0x0c2df3be933b2117ull),
-            "glass (M102): the shower door from further 85e9c338 frosted; the car windows 45c7a7cd and the distant car's d03ebab1 clear; the car body 0c2df3be not named; none of them cube-only");
+      const NamedGlass* doorKin = namedGlass(0x85e9c3381d5bf054ull); const NamedGlass* car = namedGlass(0x45c7a7cd511b5233ull); const NamedGlass* carFar = namedGlass(0xd03ebab11453bca1ull);
+      const NamedGlass* passing = namedGlass(0x66516d5db94ab307ull);
+      CHECK(farOk && doorKin && doorKin->material == kClearGlass && car && car->material == kCarGlass && carFar && carFar->material == kCarGlass && passing && passing->material == kCarGlass && !namedGlass(0x0c2df3be933b2117ull),
+            "glass (M102, M105): 85e9c338 clear glass; car glass: a passing car's 66516d5d, a parked car's 45c7a7cd, a distant car's d03ebab1; the car body 0c2df3be not named; 85e9c338 / 45c7a7cd / d03ebab1 not cube-only");
       // milestone 104: a sheet with a back side keeps one facing per plane; a pane with a thickness keeps both sides
       {
         auto tri = [](std::vector<float>& v, std::initializer_list<float> p) { v.insert(v.end(), p); };
@@ -1144,6 +1145,15 @@ int main() {
             && waterMaterial(0xf74b4657dbfd60bcull) == kWaterSea && waterMaterial(0x387e1a15c63c120aull) == kWaterObject
             && waterMaterial(0xf45e6c607bb94189ull) == -1 && waterMaterial(0x3197bfdef2330503ull) == -1 && isWaterPs(0x11a6bdfd3e77d03aull) && !isWaterPs(0xf45e6c607bb94189ull),
             "water (M86-M99): the pool's surfaces d40999e5 / 85c0a78a, the pond's 11a6bdfd, the town's water f74b4657 (the sea), the instanced 387e1a15 (object water); not the pool floor f45e6c60 nor the glass");
+      // milestone 105: the car glass marker's hash names the tinted thin glass
+      for (auto& p : gm) p = kCarGlassMarkerColour;
+      const uint64_t ch = (uint64_t) XXH3_64bits(gm, sizeof gm);
+      char cname[32]; snprintf(cname, sizeof cname, "mat_%016llX", (unsigned long long) ch);
+      const size_t cat = u.find(cname);
+      const size_t cend = cat == std::string::npos ? cat : u.find("token outputs:out", cat);
+      CHECK(ch == kCarGlassMarkerHash && cat != std::string::npos && cend != std::string::npos && u.find("thin_walled = 1", cat) < cend && u.find("use_diffuse_layer = 0", cat) < cend
+            && u.find("transmittance_color = (0.72, 0.78, 0.75)", cat) < cend,
+            "car glass (M105): the marker's level-0 hash 0x%016llX names the tinted thin glass %s in Sims3Glass/mod.usda", (unsigned long long) ch, cname);
       // milestone 88: the frosted marker's hash names the frosted material (a diffuse layer)
       for (auto& p : gm) p = kFrostedMarkerColour;
       const uint64_t fh = (uint64_t) XXH3_64bits(gm, sizeof gm);
