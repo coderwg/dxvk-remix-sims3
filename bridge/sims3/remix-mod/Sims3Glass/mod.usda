@@ -1,18 +1,18 @@
 #usda 1.0
 (
     defaultPrim = "RootNode"
-    doc = """The Sims 3 camera hook's glass, frosted glass, car glass and mirrors (milestones 80, 88, 101,
-105; the water is the Sims3Water mod's since milestone 99): the materials of the hook's marker
-textures. The hook presents every glass draw of the game (a pixel shader reading only cube maps,
-blended, or one of its named textured glass shaders) with a flat 32x32 glass marker at stage 0, its
-named frosted glass (the shower door) with a frosted marker, its named car glass with a car glass
-marker and every mirror's face (a cube-only reflective sheet under the stencil test) with a mirror
-marker, blending off; this layer makes the markers' hashes the runtime's translucent glass, frosted
-glass (a 40 % diffuse layer from textures/frost.dds), tinted car glass (about 75 % through, a slight
-green-grey) and an opaque, fully metallic, smooth mirror whose tint is the marker's silver. Each hash
-is XXH3-64 of the marker's level 0 (sims3cam::kGlassMarkerHash, kFrostedMarkerHash,
-kCarGlassMarkerHash, kMirrorMarkerHash, checked by sims3/test/test_sims3cam.cpp). A thin-walled
-material's transmittance_color is what one pass through the wall lets through. textures/ is written by ../make_textures.py.
+    doc = """The Sims 3 camera hook's glass, car glass and mirrors (milestones 80, 101, 105, 109; the water
+is the Sims3Water mod's since milestone 99, the bumpy glass the generated Sims3GlassBumps mod's since 109):
+the materials of the hook's marker textures. The hook presents every glass draw of the game (a pixel
+shader reading only cube maps, blended, or one of its named glass shaders) with a flat 32x32 glass marker
+at stage 0, its named car glass with a car glass marker and every mirror's face (a cube-only reflective
+sheet under the stencil test) with a mirror marker, blending off; this layer makes the markers' hashes the
+runtime's translucent glass, tinted car glass (about 75 % through, a slight green-grey) and an opaque,
+fully metallic, smooth mirror whose tint is the marker's silver. Each hash is XXH3-64 of the marker's
+level 0 (sims3cam::kGlassMarkerHash, kCarGlassMarkerHash, kMirrorMarkerHash, checked by
+sims3/test/test_sims3cam.cpp). A thin-walled material's transmittance_color is what one pass through the
+wall lets through. (The frosted glass of milestones 88-108 is retired: bumpy glass is the clear glass
+with the game's own bump map.)
 Deployed to Game/Bin/rtx-remix/mods/Sims3Glass/mod.usda; the runtime reads it while
 rtx.enableReplacementAssets is on."""
     metersPerUnit = 1
@@ -40,28 +40,6 @@ def Xform "RootNode"
                 bool inputs:thin_walled = 1
                 float inputs:thin_wall_thickness = 0.005
                 bool inputs:use_diffuse_layer = 0
-                token outputs:out
-            }
-        }
-
-        def Material "mat_6FBC67AF0CD76F66"
-        {
-            token outputs:mdl:displacement.connect = </RootNode/Looks/mat_6FBC67AF0CD76F66/Shader.outputs:out>
-            token outputs:mdl:surface.connect = </RootNode/Looks/mat_6FBC67AF0CD76F66/Shader.outputs:out>
-            token outputs:mdl:volume.connect = </RootNode/Looks/mat_6FBC67AF0CD76F66/Shader.outputs:out>
-
-            def Shader "Shader"
-            {
-                uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:mdl:sourceAsset = @AperturePBR_Translucent.mdl@
-                uniform token info:mdl:sourceAsset:subIdentifier = "AperturePBR_Translucent"
-                float inputs:ior_constant = 1.5
-                color3f inputs:transmittance_color = (0.94, 0.95, 0.96)
-                float inputs:transmittance_measurement_distance = 1
-                bool inputs:thin_walled = 1
-                float inputs:thin_wall_thickness = 0.005
-                bool inputs:use_diffuse_layer = 1
-                asset inputs:transmittance_texture = @./textures/frost.dds@
                 token outputs:out
             }
         }

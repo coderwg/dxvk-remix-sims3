@@ -1050,8 +1050,8 @@ int main() {
       const bool beamOk = !loadShader("ps_7304aaea6a75fb3f", beam) || (analyzePixelShader(beam.data(), beam.size(), ba) && !isGlassShader(ba) && !namedGlass(0x7304aaea6a75fb3full));
       const NamedGlass* door = namedGlass(0x572773cfbd618a3aull);
       CHECK(tgOk && hairOk && beamOk && namedGlass(0xac4184cee232ed04ull) && namedGlass(0xac4184cee232ed04ull)->material == kClearGlass && !namedGlass(0x3197bfdef2330503ull)
-            && door && door->material == kFrostedGlass,
-            "glass (M81, M87, M88, M100): named glass 29c6b222 / ac4184ce clear, the shower door 572773cf frosted; the hair pass 57a5a049, the light-beam card 7304aaea and the cube-only pane 3197bfde are not named");
+            && door && door->material == kClearGlass && door->bumpStage == 2,
+            "glass (M81, M87, M100, M109): named glass 29c6b222 / ac4184ce clear, the shower door 572773cf bumpy; the hair pass 57a5a049, the light-beam card 7304aaea and the cube-only pane 3197bfde are not named");
       // milestones 102, 105, 107: the named forms 2 and 3 are not cube-only, so the name is what makes them glass
       bool farOk = true;
       for (uint64_t hsh : { 0x85e9c3381d5bf054ull, 0x45c7a7cd511b5233ull, 0xd03ebab11453bca1ull, 0x2b1da1b45f51d3f9ull, 0x8ff495765d26a6fdull,
@@ -1064,12 +1064,34 @@ int main() {
       const NamedGlass* passing = namedGlass(0x66516d5db94ab307ull);
       CHECK(farOk && doorKin && doorKin->material == kClearGlass && car && car->material == kCarGlass && carFar && carFar->material == kCarGlass && passing && passing->material == kCarGlass && !namedGlass(0x0c2df3be933b2117ull),
             "glass (M102, M105): 85e9c338 clear glass; car glass: a passing car's 66516d5d, a parked car's 45c7a7cd, a distant car's d03ebab1; the car body 0c2df3be not named; 85e9c338 / 45c7a7cd / d03ebab1 not cube-only");
-      // milestone 107: the survey's glass -- clear without a normal map, frosted with one; objects fading in are not glass
+      // milestones 107, 109: the survey's glass -- clear; bumpy with a normal map; objects fading in are not glass
       auto glassMat = [](uint64_t hsh) { const NamedGlass* g = namedGlass(hsh); return g ? (int) g->material : -1; };
       CHECK(farOk && glassMat(0x2b1da1b45f51d3f9ull) == kClearGlass && glassMat(0x8ff495765d26a6fdull) == kClearGlass && glassMat(0x7eeb349a23cbefefull) == kClearGlass
-            && glassMat(0x8fe3ce7c5fbc6234ull) == kFrostedGlass && glassMat(0x910a56f24813e248ull) == kFrostedGlass && glassMat(0xa9336d35a25143aeull) == kFrostedGlass
+            && glassMat(0x8fe3ce7c5fbc6234ull) == kClearGlass && glassMat(0x910a56f24813e248ull) == kClearGlass && glassMat(0xa9336d35a25143aeull) == kClearGlass
             && glassMat(0x7b3cb6be7d73e3b4ull) == -1 && glassMat(0xa8c64e11b251a0cbull) == -1 && glassMat(0x834b21919e9f8d8aull) == -1 && glassMat(0x3661ea706449953cull) == -1,
-            "glass (M107): the survey's 2b1da1b4 / 8ff49576 / 7eeb349a clear, 8fe3ce7c / 910a56f2 / a9336d35 frosted, none cube-only; the fading objects 7b3cb6be / a8c64e11 / 834b2191 / 3661ea70 not named");
+            "glass (M107): the survey's 2b1da1b4 / 8ff49576 / 7eeb349a / 8fe3ce7c / 910a56f2 / a9336d35 clear glass, none cube-only; the fading objects 7b3cb6be / a8c64e11 / 834b2191 / 3661ea70 not named");
+      // milestone 109: bumpy glass -- the bump map's sampler and coordinate from the bytecode (the promotion needs a plain read),
+      // the slope scale's register; nothing else has a bump stage; a mod's material names parsed
+      {
+        struct Bumpy { uint64_t hash; const char* dump; int texcoord; int scaleReg; };
+        const Bumpy bumpy[] = { { 0x572773cfbd618a3aull, "ps_572773cfbd618a3a", 5, 14 }, { 0x8fe3ce7c5fbc6234ull, "ps_8fe3ce7c5fbc6234", 5, 14 },
+                                { 0x910a56f24813e248ull, "ps_910a56f24813e248", 5, 14 }, { 0xa9336d35a25143aeull, "ps_a9336d35a25143ae", 4, -1 } };
+        bool bumpOk = true; int bumpRead = 0;
+        for (const Bumpy& b : bumpy) {
+          const NamedGlass* g = namedGlass(b.hash);
+          if (!g || g->bumpStage != 2 || g->bumpScaleReg != b.scaleReg || g->material != kClearGlass) bumpOk = false;
+          std::vector<DWORD> bt; PsAnalysis ba2;
+          if (loadShader(b.dump, bt) && analyzePixelShader(bt.data(), bt.size(), ba2)) {
+            ++bumpRead;
+            const PsSamplerUse& su = ba2.samplers[2];
+            if (!su.read || su.dependent || su.projective || su.cube || su.texcoord != b.texcoord) bumpOk = false;
+          }
+        }
+        int others = 0; for (const NamedGlass& g : kNamedGlass) if (g.bumpStage >= 0) ++others;
+        const std::vector<uint64_t> parsed = modMaterialHashes("def Material \"mat_0123456789ABCDEF\"\n{ }\ndef Material \"mat_FEDCBA9876543210\"\ndef Material \"mat_XYZ\"");
+        CHECK(bumpOk && others == 4 && parsed.size() == 2 && parsed[0] == 0x0123456789ABCDEFull && parsed[1] == 0xFEDCBA9876543210ull,
+              "bumpy glass (M109): 572773cf / 8fe3ce7c / 910a56f2 (c14.x) and a9336d35 read their bump map at s2 plainly at TEXCOORD5 / 4 (%d of 4 dumps read); only they have a bump stage; a mod's material hashes parsed", bumpRead);
+      }
       // milestone 104: a sheet with a back side keeps one facing per plane; a pane with a thickness keeps both sides
       {
         auto tri = [](std::vector<float>& v, std::initializer_list<float> p) { v.insert(v.end(), p); };
@@ -1163,16 +1185,6 @@ int main() {
       CHECK(ch == kCarGlassMarkerHash && cat != std::string::npos && cend != std::string::npos && u.find("thin_walled = 1", cat) < cend && u.find("use_diffuse_layer = 0", cat) < cend
             && u.find("transmittance_color = (0.72, 0.78, 0.75)", cat) < cend,
             "car glass (M105): the marker's level-0 hash 0x%016llX names the tinted thin glass %s in Sims3Glass/mod.usda", (unsigned long long) ch, cname);
-      // milestone 88: the frosted marker's hash names the frosted material (a diffuse layer)
-      for (auto& p : gm) p = kFrostedMarkerColour;
-      const uint64_t fh = (uint64_t) XXH3_64bits(gm, sizeof gm);
-      char fname[32]; snprintf(fname, sizeof fname, "mat_%016llX", (unsigned long long) kFrostedMarkerHash);
-      const size_t fat = u.find(fname);
-      const size_t fend = fat == std::string::npos ? fat : u.find("token outputs:out", fat);
-      std::vector<uint8_t> frost; const bool haveFrost = loadBytes("../remix-mod/Sims3Glass/textures/frost.dds", frost) && frost.size() > 148 && memcmp(frost.data(), "DDS ", 4) == 0;
-      CHECK(fh == kFrostedMarkerHash && fat != std::string::npos && fend != std::string::npos && u.find("use_diffuse_layer = 1", fat) < fend && u.find("@./textures/frost.dds@", fat) < fend && haveFrost
-            && namedGlass(0x572773cfbd618a3aull) && namedGlass(0x572773cfbd618a3aull)->material == kFrostedGlass,
-            "frosted glass (M88): the marker's level-0 hash 0x%016llX names the frosted material %s (diffuse layer); the shower door's 572773cf", (unsigned long long) fh, fname);
     }
     CHECK(kLotCompositePs == 0x99ee53ff6ef1b0b6ull && lotCompositeStage(0) == 0 && lotCompositeStage(1) == 4 && lotCompositeStage(2) == 3, "lot composite: pass 1 reads the mask from s4 (layer 4 out), pass 2 from s3 (layer 3 out)");
     std::vector<DWORD> lit, world, layer, comp, lit2, lit3, lit4;

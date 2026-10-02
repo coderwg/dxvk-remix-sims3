@@ -42,6 +42,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <unordered_map>
 #include <vector>
 #include <d3d9.h>
@@ -1861,14 +1862,16 @@ inline bool chooseAutoAlbedo(const PsAnalysis& a, const bool color2D[16], const 
 //     car's windows (isGlassShader, milestone 80);
 //  2. with the scene behind -- the 1024 render target read at the pixel, shifted by the normal --
 //     drawn opaque: clear, a colour texture over the reflection, or a normal map bending the scene
-//     behind (the game's frosting: the shower door);
+//     behind (bumpy glass: the shower door);
 //  3. glass passes of other shaders: a parked car's paint shader drawn blended for its windows, a
 //     distant car's small glass shader with a constant alpha, two textured glass shaders.
 // The runtime drops a draw whose stage 0 is a cube map (no hash: the panes looked empty) and takes a
 // 2D texture there as an opaque albedo, so every glass draw goes out with one of the hook's markers at
 // stage 0 and blending off; the Sims3Glass mod (sims3/remix-mod/Sims3Glass/mod.usda) makes each
-// marker's hash a glass: clear (thin, IOR 1.5), frosted (a 40 % diffuse layer: the normal-mapped
-// form), car glass (tinted, about 75 % through). Forms 2 and 3 share their samplers' signature with
+// marker's hash a glass: clear (thin, IOR 1.5) or car glass (tinted, about 75 % through). Bumpy glass
+// is the clear glass with the game's own bump map (milestone 109, the user's choice over the frosted
+// glass of milestones 88-108): the bump map itself at stage 0, its hash naming its material in the
+// Sims3GlassBumps mod (sims3GlassBump). Forms 2 and 3 share their samplers' signature with
 // the Sims' hair and skin passes and with objects fading in (an object's own shader lerping the scene
 // behind by a constant: e.g. 7b3cb6be, a8c64e11, the cars' 834b2191 -- not glass), so they are named,
 // each read from its bytecode. The table is the survey of milestone 107: every pixel shader the logs
@@ -1882,24 +1885,26 @@ inline bool isGlassShader(const PsAnalysis& a) {
   for (const PsSamplerUse& u : a.samplers) { if (!u.read) continue; if (!u.cube) return false; ++cubes; }
   return cubes > 0;
 }
-inline constexpr uint8_t kClearGlass = 0, kFrostedGlass = 1, kCarGlass = 2;
+inline constexpr uint8_t kClearGlass = 0, kCarGlass = 1;
 // blendedPassOnly: the game draws the glass twice a frame, the same mesh unblended with depth writes,
 // then blended (a parked car's windows, run 215); only the blended pass goes out (milestone 104),
-// or the windows are two sheets in one place.
-struct NamedGlass { uint64_t hash; const char* name; uint8_t material; bool blendedPassOnly = false; };
+// or the windows are two sheets in one place. bumpStage: the sampler of a bumpy glass's bump map;
+// bumpScaleReg: the pixel shader constant whose x scales its slopes (-1: none).
+struct NamedGlass { uint64_t hash; const char* name; uint8_t material; bool blendedPassOnly = false; int8_t bumpStage = -1; int8_t bumpScaleReg = -1; };
 inline const NamedGlass kNamedGlass[] = {
   // form 2, clear: the scene behind, no normal map
   { 0x2b1da1b45f51d3f9ull, "glass, ps_2_0: reflection, highlights, Fresnel, the scene behind (s1) x c10 (VS ddc6be9f; 966k draws in 155 runs)", kClearGlass },
   { 0x85e9c3381d5bf054ull, "glass: reflection, Fresnel, the scene behind (s1) lerped to c10 (VS b3e88e28, skinned; also VS d251510d; runs 201-214)", kClearGlass },
   { 0x8ff495765d26a6fdull, "glass: as 85e9c338 (VS 2 kinds; 21 runs)", kClearGlass },
   { 0x7eeb349a23cbefefull, "glass: as 85e9c338, a colour texture s2 x c11 over the reflection (4 runs)", kClearGlass },
-  // form 2, frosted: a normal map bends the scene behind
-  { 0x572773cfbd618a3aull, "frosted glass, a shower door: normal map s2, the scene behind (s1) read through it, colour s3 over the reflection "
-                           "(VS b51f1577, skinned: the door swings; runs 192-217)", kFrostedGlass },
-  { 0x8fe3ce7c5fbc6234ull, "frosted glass: as 572773cf, its colour s3 x c10 tinting the scene behind (16 runs)", kFrostedGlass },
-  { 0x910a56f24813e248ull, "frosted glass: as 572773cf, its colour s3 x c10 tinting the scene behind (3 runs)", kFrostedGlass },
-  { 0xa9336d35a25143aeull, "frosted glass, ps_2_0: signed normal map s2, the scene behind (s1) tinted by colour s3 and the vertex colour, "
-                           "a cut-out on s3's alpha (6 runs)", kFrostedGlass },
+  // form 2, bumpy: a normal map bends the scene behind -- its x in alpha, its y in blue, at TEXCOORD5,
+  // the slopes scaled by c14.x, z rebuilt (n = s x T - s y B + z N, B = N x T times the tangent's w)
+  { 0x572773cfbd618a3aull, "bumpy glass, a shower door: bump map s2, the scene behind (s1) read through it, colour s3 over the reflection "
+                           "(VS b51f1577, skinned: the door swings; runs 192-217)", kClearGlass, false, 2, 14 },
+  { 0x8fe3ce7c5fbc6234ull, "bumpy glass: as 572773cf, its colour s3 x c10 tinting the scene behind (16 runs)", kClearGlass, false, 2, 14 },
+  { 0x910a56f24813e248ull, "bumpy glass: as 572773cf, its colour s3 x c10 tinting the scene behind (3 runs)", kClearGlass, false, 2, 14 },
+  { 0xa9336d35a25143aeull, "bumpy glass, ps_2_0: signed bump map s2 at TEXCOORD4 (2 t - 1, no scale), the scene behind (s1) tinted by "
+                           "colour s3 and the vertex colour, a cut-out on s3's alpha (6 runs)", kClearGlass, false, 2, -1 },
   // form 3
   { 0x29c6b22234617c1aull, "glass: colour texture s1 x c8, mask s2 (VS 5b18d2ce; run 188)", kClearGlass },
   { 0xac4184cee232ed04ull, "glass: colour texture s2 x c10, gloss s3, irradiance cube s1 (VS d7fede81; a glass dome building, run 212)", kClearGlass },
@@ -1911,6 +1916,26 @@ inline const NamedGlass kNamedGlass[] = {
   { 0x66516d5db94ab307ull, "car glass, a passing car's windshield and windows: cube only (VS e79a4bf1, skinned; run 215)", kCarGlass },
 };
 inline const NamedGlass* namedGlass(uint64_t hash) { return findByHash(kNamedGlass, hash); }
+// The material hashes a Remix mod names (def Material "mat_<16 hex>"): which of the game's bump maps
+// the Sims3GlassBumps mod has a bumpy glass for (milestone 109).
+inline std::vector<uint64_t> modMaterialHashes(const std::string& usda) {
+  std::vector<uint64_t> out;
+  static const char kTag[] = "Material \"mat_";
+  for (size_t at = usda.find(kTag); at != std::string::npos; at = usda.find(kTag, at + 1)) {
+    const size_t p = at + sizeof kTag - 1;
+    if (p + 16 > usda.size()) break;
+    uint64_t v = 0; bool ok = true;
+    for (size_t i = 0; i < 16 && ok; ++i) {
+      const char ch = usda[p + i]; v <<= 4;
+      if (ch >= '0' && ch <= '9') v |= (uint64_t) (ch - '0');
+      else if (ch >= 'A' && ch <= 'F') v |= (uint64_t) (ch - 'A' + 10);
+      else if (ch >= 'a' && ch <= 'f') v |= (uint64_t) (ch - 'a' + 10);
+      else ok = false;
+    }
+    if (ok) out.push_back(v);
+  }
+  return out;
+}
 // ---- a glass sheet's back side (milestone 104) -------------------------------------------------
 // A glass sheet the game models with both sides -- a passing car's windshield (all 36 triangles, run
 // 215), the shower door's panel (8 of its 20, runs 215-216) -- has its two sides on one plane, facing
@@ -1947,8 +1972,6 @@ inline uint32_t glassFrontTriangles(const float* pos, size_t triangles, std::vec
   for (size_t t = 0; t < triangles; ++t) if (keys[t] && facings[t] != first[keys[t]]) { keep[t] = 0; ++dropped; }
   return dropped;
 }
-inline constexpr uint32_t kFrostedMarkerColour = 0xFFE0E6EAu;          // ARGB frosted pale grey: what it shows if the mod is not loaded
-inline constexpr uint64_t kFrostedMarkerHash = 0x6FBC67AF0CD76F66ull;  // XXH3-64 of its level 0; the mod's material name
 inline constexpr uint32_t kCarGlassMarkerColour = 0xFFA0B4ACu;         // ARGB grey-green: what car glass shows if the mod is not loaded
 inline constexpr uint64_t kCarGlassMarkerHash = 0x8A5EDD7D16D8E741ull;  // XXH3-64 of its level 0; the mod's material name
 // ---- mirrors (milestone 101) -----------------------------------------------------------------

@@ -86,10 +86,13 @@ static void sims3LogStats(bool withTable) {
     snprintf(msg, sizeof msg, "Sims 3 camera hook:   cut-outs (milestones 67-68): %u pixel shaders read with a cut-out on a sampler's alpha; %u captured draws given it as an alpha test",
              h.cutShaders, h.alphaCutDraws);
     Logger::info(msg);
-    snprintf(msg, sizeof msg, "Sims 3 camera hook:   glass, mirrors and water (milestones 80-105): %u glass draws (marker 0x%016llX%s), %u frosted (0x%016llX), %u car glass (0x%016llX), %u mirror (0x%016llX); water draws: %u pool, %u pond, %u sea, %u object water; %u wave maps looked at",
-             h.glassDraws, (unsigned long long) h.glassMarkerHash, h.glassMarker ? "" : ", not created yet", h.frostedDraws, (unsigned long long) h.frostedMarkerHash, h.carGlassDraws, (unsigned long long) h.carGlassMarkerHash, h.mirrorDraws, (unsigned long long) h.mirrorMarkerHash,
+    snprintf(msg, sizeof msg, "Sims 3 camera hook:   glass, mirrors and water (milestones 80-109): %u glass draws (marker 0x%016llX%s), %u car glass (0x%016llX), %u mirror (0x%016llX); water draws: %u pool, %u pond, %u sea, %u object water; %u wave maps looked at",
+             h.glassDraws, (unsigned long long) h.glassMarkerHash, h.glassMarker ? "" : ", not created yet", h.carGlassDraws, (unsigned long long) h.carGlassMarkerHash, h.mirrorDraws, (unsigned long long) h.mirrorMarkerHash,
              h.waterDraws[sims3cam::kWaterPool], h.waterDraws[sims3cam::kWaterPond], h.waterDraws[sims3cam::kWaterSea], h.waterDraws[sims3cam::kWaterObject],
              h.waveDumped);
+    Logger::info(msg);
+    snprintf(msg, sizeof msg, "Sims 3 camera hook:   bumpy glass (milestone 109): %u draws with their own bump map (%u materials in Sims3GlassBumps%s), %u as the clear glass while their bump map has none (%u bump maps seen without one)",
+             h.bumpDraws, (unsigned) h.bumpMaterials.size(), h.bumpModRead ? "" : ", not read yet", h.bumpPending, (unsigned) h.bumpWritten.size());
     Logger::info(msg);
     snprintf(msg, sizeof msg, "Sims 3 camera hook:   glass sheets (milestone 104): %u draws sent without their back side (%llu triangles left out), %u draws whose mesh is not read (a second position or an unknown type), %u unblended passes of a twice-drawn glass left out",
              h.glassSideDraws, (unsigned long long) h.glassSideTris, h.glassSideSkipped, h.glassPassDropped);

@@ -1,3 +1,5 @@
 # made from game data by make_textures.py --waves (milestones 94, 99): not distributed
 Sims3Water/textures/water_*_n.dds
 Sims3Glass/textures/water_*_n.dds
+# generated from game data by make_textures.py --bumps (milestone 109): not distributed
+Sims3GlassBumps/

@@ -211,7 +211,10 @@ struct Sims3Hook {
   // the water materials' markers (milestones 86, 99), per sims3cam::kWaterMaterial
   IDirect3DTexture9* waterMarkers[sims3cam::kWaterMaterials] = {}; uint64_t waterMarkerHashes[sims3cam::kWaterMaterials] = {};
   bool waterMarkerFailed[sims3cam::kWaterMaterials] = {}; uint32_t waterDraws[sims3cam::kWaterMaterials] = {};
-  IDirect3DTexture9* frostedMarker = nullptr; uint64_t frostedMarkerHash = 0; bool frostedMarkerFailed = false; uint32_t frostedDraws = 0;   // frosted glass (milestone 88)
+  // bumpy glass (milestone 109, sims3GlassBump): its bump maps' runtime hashes (by texture id and level-0
+  // version), the hashes the Sims3GlassBumps mod has a material for (read once), the ones seen without
+  std::unordered_map<uint64_t, uint64_t> bumpHashes; std::unordered_set<uint64_t> bumpMaterials, bumpWritten;
+  bool bumpModRead = false; uint32_t bumpDraws = 0, bumpPending = 0;
   IDirect3DTexture9* carGlassMarker = nullptr; uint64_t carGlassMarkerHash = 0; bool carGlassMarkerFailed = false; uint32_t carGlassDraws = 0;   // car glass (milestone 105)
   uint32_t waveDumpedIds[32] = {}; uint32_t waveDumped = 0;   // the game's wave maps looked at (milestone 93): the mod's ripple maps' source
   // a zero-thickness wall's back side (milestone 97): each wall piece's triangle keys (cached by buffers,

@@ -326,8 +326,6 @@ bool sims3EnsureGlassMarker(Sims3Hook& h, Dev* dev) { return sims3EnsureMarker(d
 template<typename Dev>
 bool sims3EnsureMirrorMarker(Sims3Hook& h, Dev* dev) { return sims3EnsureMarker(dev, h.mirrorMarker, h.mirrorMarkerHash, h.mirrorMarkerFailed, sims3cam::kMirrorMarkerColour, sims3cam::kMirrorMarkerHash, "mirror"); }
 template<typename Dev>
-bool sims3EnsureFrostedMarker(Sims3Hook& h, Dev* dev) { return sims3EnsureMarker(dev, h.frostedMarker, h.frostedMarkerHash, h.frostedMarkerFailed, sims3cam::kFrostedMarkerColour, sims3cam::kFrostedMarkerHash, "frosted glass"); }
-template<typename Dev>
 bool sims3EnsureCarGlassMarker(Sims3Hook& h, Dev* dev) { return sims3EnsureMarker(dev, h.carGlassMarker, h.carGlassMarkerHash, h.carGlassMarkerFailed, sims3cam::kCarGlassMarkerColour, sims3cam::kCarGlassMarkerHash, "car glass"); }
 template<typename Dev>
 bool sims3EnsureWaterMarker(Sims3Hook& h, Dev* dev, int m) {
