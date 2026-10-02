@@ -156,7 +156,7 @@ void sims3OnPresent(Sims3Hook& h, Dev* dev) {
   sims3TerrainBlockEnd(h, dev);   // the frame is over: the game's sampler states back (milestone 18g)
   {
     const bool f9 = ((GetAsyncKeyState(VK_F9) | GetAsyncKeyState(sims3cam::markKey()) | GetAsyncKeyState(VK_OEM_3)) & 0x8000) != 0;   // F9, the configured key (sims3hook.txt markKey) or backtick
-    if (f9 && !h.f9Down) h.markDump = 2;   // the lit lamps and the fog, logged once
+    if (f9 && !h.f9Down) { h.markDump = 2; h.glassMarkLines = 0; h.glassMarkPlanes.clear(); }   // the lit lamps and the fog, logged once; the next frame's glass (milestone 103)
     else if (h.markDump) --h.markDump;
     h.f9Down = f9;
   }

@@ -111,6 +111,88 @@ bool sims3WallBackSide(Sims3Hook& h, Dev* dev) {
   return false;
 }
 
+// Diagnostic (milestone 103; goes once answered): at the mark key, one line per glass draw of the next
+// frame -- glass, frosted glass, mirror or water, and any other draw reading a cube map that is blended
+// or has no colour texture -- with its mesh (buffers and range), its vertices' bounds in the mesh's own
+// space, the w of vertex constants c0-c2 (an object's place for the game's skinned shaders), and its
+// triangles' planes: how many have a triangle facing the other way on the same plane in the same draw
+// (a sheet with a back side), and how many lie on a plane of an earlier line (a second sheet in the
+// same place). Planes are compared in the meshes' own space, to 1/32 in direction and 0.01 in offset.
+template<typename Dev>
+void sims3GlassAtMark(Sims3Hook& h, Dev* dev, const DWORD* rs, int k) {
+  if (h.glassMarkLines >= 160u) return;
+  bool cube = false;
+  if (h.psAuto && h.psAuto->valid) for (const auto& u : h.psAuto->samplers) if (u.read && u.cube) cube = true;
+  const bool blended = h.drawGlass ? h.blendSaved != 0 : rs[D3DRS_ALPHABLENDENABLE] != 0;
+  if (!h.drawGlass && !(cube && (blended || k < 0))) return;
+  const uint32_t line = ++h.glassMarkLines;
+  const D3DVERTEXELEMENT9* pe = nullptr;
+  if (h.declElems) for (const D3DVERTEXELEMENT9* e = h.declElems; e->Stream != 0xFF; ++e) if (e->Usage == D3DDECLUSAGE_POSITION && e->UsageIndex == 0) { pe = e; break; }
+  IDirect3DVertexBuffer9* vb = nullptr; UINT off = 0, stride = 0;
+  if (pe && (FAILED(dev->GetStreamSource(pe->Stream, &vb, &off, &stride)) || !vb)) vb = nullptr;
+  if (vb) vb->Release();
+  IDirect3DIndexBuffer9* ib = nullptr;
+  if (h.drawIndexed && (FAILED(dev->GetIndices(&ib)) || !ib)) ib = nullptr;
+  if (ib) ib->Release();
+  auto* lvb = vb ? bridge_cast<Direct3DVertexBuffer9_LSS*>(vb) : nullptr;
+  auto* lib = ib ? bridge_cast<Direct3DIndexBuffer9_LSS*>(ib) : nullptr;
+  float lo[3] = { 1e30f, 1e30f, 1e30f }, hi[3] = { -1e30f, -1e30f, -1e30f };
+  uint32_t tris = 0, backs = 0, sameWay = 0, otherWay = 0, firstLine = 0;
+  const uint32_t bytes = pe ? sims3cam::declTypeBytes((uint8_t) pe->Type) : 0u;
+  const uint8_t* vd = lvb ? lvb->sims3Data() : nullptr; const uint8_t* id = lib ? lib->sims3Data() : nullptr;
+  if (vd && id && bytes && stride && h.drawType == D3DPT_TRIANGLELIST) {
+    const bool ib32 = lib->getDesc().Format == D3DFMT_INDEX32;
+    const size_t isz = ib32 ? 4u : 2u, n = (size_t) (std::min)(h.drawPrims, 20000u) * 3u;
+    std::unordered_map<uint64_t, uint8_t> mine;   // this draw's planes -> the facings seen
+    std::vector<uint64_t> keys; keys.reserve(n / 3);
+    if (((size_t) h.drawStart + n) * isz <= lib->sims3Size()) {
+      for (size_t t = 0; t < n; t += 3) {
+        float p[3][4] = {}; bool ok = true;
+        for (int c = 0; c < 3 && ok; ++c) {
+          const int64_t v = (int64_t) h.drawBase + (int64_t) sims3cam::readIndex(id, (size_t) h.drawStart + t + (size_t) c, ib32);
+          const size_t at = (size_t) off + (size_t) v * stride + (size_t) pe->Offset;
+          if (v < 0 || at + bytes > lvb->sims3Size()) { ok = false; break; }
+          sims3cam::declDecode((uint8_t) pe->Type, vd + at, p[c]);
+          if ((pe->Type == D3DDECLTYPE_SHORT4 || pe->Type == D3DDECLTYPE_SHORT4N) && p[c][3] != 0.f) for (int i = 0; i < 3; ++i) p[c][i] /= p[c][3];   // the game's skinned shaders divide by w
+          for (int i = 0; i < 3; ++i) { lo[i] = (std::min)(lo[i], p[c][i]); hi[i] = (std::max)(hi[i], p[c][i]); }
+        }
+        if (!ok) continue;
+        const float e1[3] = { p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2] }, e2[3] = { p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2] };
+        float nm[3] = { e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0] };
+        const float len = std::sqrt(nm[0] * nm[0] + nm[1] * nm[1] + nm[2] * nm[2]);
+        if (!(len > 1e-12f)) continue;
+        for (float& x : nm) x /= len;
+        int32_t q[4] = { (int32_t) std::lround(nm[0] * 32.f), (int32_t) std::lround(nm[1] * 32.f), (int32_t) std::lround(nm[2] * 32.f),
+                         (int32_t) std::lround((nm[0] * p[0][0] + nm[1] * p[0][1] + nm[2] * p[0][2]) / 0.01f) };
+        uint8_t facing = 1;
+        const int32_t lead = q[0] ? q[0] : q[1] ? q[1] : q[2];
+        if (lead < 0) { for (int32_t& x : q) x = -x; facing = 2; }
+        const uint64_t key = (uint64_t) (uint8_t) (q[0] + 64) | ((uint64_t) (uint8_t) (q[1] + 64) << 8) | ((uint64_t) (uint8_t) (q[2] + 64) << 16) | ((uint64_t) (uint32_t) q[3] << 24);
+        ++tris; mine[key] |= facing; keys.push_back(key | ((uint64_t) facing << 62));
+      }
+    }
+    for (uint64_t kf : keys) {
+      const uint64_t key = kf & ~(3ull << 62); const uint8_t facing = (uint8_t) (kf >> 62);
+      if (mine[key] == 3u) ++backs;
+      auto it = h.glassMarkPlanes.find(key);
+      if (it != h.glassMarkPlanes.end()) {
+        if ((it->second & 3u) & facing) ++sameWay; else ++otherWay;
+        if (!firstLine) firstLine = it->second >> 2;
+      }
+    }
+    for (const auto& m : mine) { auto it = h.glassMarkPlanes.find(m.first); if (it == h.glassMarkPlanes.end()) h.glassMarkPlanes.emplace(m.first, (line << 2) | m.second); else it->second |= m.second; }
+  }
+  float c[12] = {}; dev->GetVertexShaderConstantF(0, c, 3);
+  char what[64];
+  if (h.drawGlass) snprintf(what, sizeof what, "%s", h.glassWhat);
+  else if (k < 0) snprintf(what, sizeof what, "not glass, no colour texture (a cube at stage 0)");
+  else snprintf(what, sizeof what, "not glass, sent with stage %d", k);
+  Logger::info(format_string("Sims 3 camera hook: glass at the mark, frame %u #%u: %s | VS %016llx PS %016llx | game blend %d cull %lu z %lu/%lu | vb %u +%u /%u pos type %d, ib %u base %d start %u prims %u%s | bounds (%.3f %.3f %.3f)-(%.3f %.3f %.3f) | c0-c2 w %.2f %.2f %.2f | planes: %u triangles, %u with one facing the other way in this draw, %u on an earlier line's plane facing the same way, %u the other way (first #%u)",
+                             h.frames + 1, line, what, (unsigned long long) h.vsHash, (unsigned long long) h.psHash, blended ? 1 : 0, rs[D3DRS_CULLMODE], rs[D3DRS_ZENABLE], rs[D3DRS_ZWRITEENABLE],
+                             lvb ? (unsigned) lvb->getId() : 0u, off, stride, pe ? (int) pe->Type : -1, lib ? (unsigned) lib->getId() : 0u, (int) h.drawBase, h.drawStart, h.drawPrims, h.drawIndexed ? "" : " (not indexed)",
+                             lo[0], lo[1], lo[2], hi[0], hi[1], hi[2], c[3], c[7], c[11], tris, backs, sameWay, otherWay, firstLine));
+}
+
 // Before every draw of the game (not the hook's own restore quad). A captured draw -- the main
 // camera held, see sims3ApplyForDraw -- gets: its albedo presented as stage 0 when the game bound
 // a cube map / render target there (Remix would drop the draw), the vertex shader variant for
@@ -191,10 +273,11 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
       h.blendSaved = rs[D3DRS_ALPHABLENDENABLE]; h.blendOurs = true;
       h.ourState = true; dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE); h.ourState = false;
       if (water) ++h.waterDraws[waterMat]; else if (mirror) ++h.mirrorDraws; else if (frosted) ++h.frostedDraws; else ++h.glassDraws;
+      h.glassWhat = water ? sims3cam::kWaterMaterial[waterMat].name : mirror ? "mirror" : frosted ? "frosted glass" : "glass";
       bool seen = false; for (uint32_t i = 0; i < h.glassLogged; ++i) if (h.glassLoggedPs[i] == h.psHash) seen = true;
       if (!seen && h.glassLogged < 32) {
         h.glassLoggedPs[h.glassLogged++] = h.psHash; char msg[224];
-        const char* what = water ? sims3cam::kWaterMaterial[waterMat].name : mirror ? "mirror" : frosted ? "frosted glass" : "glass";
+        const char* what = h.glassWhat;
         snprintf(msg, sizeof msg, "Sims 3 camera hook: %s at frame %u -> VS %016llx PS %016llx presented with the %s marker, blending off", what, h.frames + 1, (unsigned long long) h.vsHash, (unsigned long long) h.psHash, what);
         Logger::info(msg);
       }
@@ -208,6 +291,7 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
       if (h.psAuto && h.psAuto->valid && h.vsBound) k = sims3AutoAlbedo(h);
       if (k < 0) { bool bound[16]; for (int i = 0; i < 16; ++i) bound[i] = h.boundTex[i] != nullptr; k = sims3cam::pickAlbedoStage(bound, h.boundColor2D); }
     }
+    if (h.markDump == 2) sims3GlassAtMark(h, dev, rs, k);   // diagnostic (milestone 103)
     // a cut-out the runtime must see (milestones 67-68): the shader's texkill on its albedo's alpha,
     // a * alpha + b with the bound constants, as the D3D alpha test the runtime applies to the albedo
     if (k >= 0 && h.psAuto && h.psAuto->valid && h.psAuto->cutSampler == k && !rs[D3DRS_ALPHATESTENABLE] && !h.atOurs) {

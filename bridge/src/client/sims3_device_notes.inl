@@ -49,6 +49,7 @@ void sims3NoteDecl(Sims3Hook& h, IDirect3DVertexDeclaration9* pDecl) {
   auto* const pLssVtxDecl = bridge_cast<Direct3DVertexDeclaration9_LSS*>(pDecl);
   const UID id = (pLssVtxDecl) ? (UID) pLssVtxDecl->getId() : 0;
   h.declIs3D = pLssVtxDecl ? sims3cam::positionIs3D(pLssVtxDecl->sims3Elements()) : false;
+  h.declElems = pLssVtxDecl ? pLssVtxDecl->sims3Elements() : nullptr;
   h.wallLayout = sims3cam::WallLayout(); h.wallDeclId = (uint32_t) id;
   if (pLssVtxDecl) sims3cam::wallLayoutFromDecl(pLssVtxDecl->sims3Elements(), h.wallLayout);
 }
