@@ -151,6 +151,7 @@ void sims3OnPresent(Sims3Hook& h, Dev* dev) {
   }
   h.frameCamSet = false;
   h.lotCopies.clear();   // the lot meshes drawn this frame (milestone 16)
+  h.wallFrameTris.clear();   // the wall triangles kept this frame (milestone 97)
   sims3SquaresFrameEnd(h, dev);   // the squares' shapes for the next frame (milestone 60)
   sims3TerrainBlockEnd(h, dev);   // the frame is over: the game's sampler states back (milestone 18g)
   {

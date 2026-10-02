@@ -212,6 +212,11 @@ struct Sims3Hook {
   IDirect3DTexture9* frostedMarker = nullptr; uint64_t frostedMarkerHash = 0; bool frostedMarkerFailed = false; uint32_t frostedDraws = 0;   // frosted glass (milestone 88)
   IDirect3DTexture9* naturalWaterMarker = nullptr; uint64_t naturalWaterMarkerHash = 0; bool naturalWaterMarkerFailed = false; uint32_t naturalWaterDraws = 0;   // natural water (milestone 93)
   uint32_t waveDumpedIds[32] = {}; uint32_t waveDumped = 0;   // the game's wave maps written (milestone 93, a diagnostic)
+  // a zero-thickness wall's back side (milestone 97): each wall piece's triangle keys (cached by buffers,
+  // versions and range), and this frame's kept wall triangles per vertex buffer
+  std::unordered_map<uint64_t, std::vector<uint64_t>> wallPieceTris;
+  std::unordered_map<uint32_t, std::unordered_set<uint64_t>> wallFrameTris;
+  uint32_t wallBackDropped = 0, wallBackLogged = 0;
   DWORD blendSaved = 0; bool blendOurs = false;
   uint32_t glassDraws = 0, glassLogged = 0; uint64_t glassLoggedPs[8] = {};
   uint32_t mirrorSurfaceDropped = 0;   // the planar-reflection surface passes left out (milestone 82)

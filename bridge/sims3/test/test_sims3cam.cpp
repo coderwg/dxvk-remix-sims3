@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstring>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 using namespace sims3cam;
@@ -1056,6 +1057,20 @@ int main() {
       // milestone 84: the Sims' soft shadow blob is never captured
       const NeverCapture* blob = findNeverCapture(0xb7d550c6421e14f4ull);
       CHECK(blob && !blob->blendedOnly, "never-capture (M84): the Sims' soft shadow blob VS b7d550c6");
+      // milestone 97: a zero-thickness wall's back side
+      {
+        const uint64_t a = 0x0001000200030004ull, b = 0x0005000600070008ull, c = 0x0009000a000b000cull, d = 0x000d000e000f0010ull;
+        const std::vector<uint64_t> front = { wallTriKey(a, b, c), wallTriKey(a, c, d) };
+        const std::vector<uint64_t> back = { wallTriKey(c, b, a), wallTriKey(d, c, a) };           // the same faces, reversed
+        const std::vector<uint64_t> same = { wallTriKey(b, c, a), wallTriKey(c, d, a) };           // rotations: the same winding
+        std::unordered_set<uint64_t> kept(front.begin(), front.end());
+        uint32_t m1 = 0, m2 = 0, m3 = 0;
+        const bool backIs = isWallBackSide(back, kept, m1), sameIs = isWallBackSide(same, kept, m2);
+        const std::vector<uint64_t> half = { wallTriKey(c, b, a), wallTriKey(a, b, d) };
+        const bool halfIs = isWallBackSide(half, kept, m3);
+        CHECK(backIs && m1 == 2 && !sameIs && m2 == 0 && !halfIs && m3 == 1 && wallTriKey(a, a, b) == 0 && wallTriKey(a, b, c) == wallTriKey(b, c, a) && (wallTriKey(a, b, c) ^ 1u) == wallTriKey(c, b, a),
+              "wall back side (M97): the reversed faces are a back side; the same winding, or only some reversed, is not");
+      }
       const NeverCapture* cards = findNeverCapture(0x6cb3b47f30712201ull);
       CHECK(cards && cards->blendedOnly && neverCaptureDraw(neverCaptureMode(cards), TRUE) && !neverCaptureDraw(neverCaptureMode(cards), FALSE),
             "never-capture (M91): the effect cards VS 6cb3b47f, blended draws only (the pond's white surface effect, the light beams)");

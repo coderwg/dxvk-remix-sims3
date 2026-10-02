@@ -60,6 +60,57 @@ inline void sims3OnReset(Sims3Hook& h) {
   Logger::info("Sims 3 camera hook: device reset -> the hook's objects released, held state cleared");
 }
 
+// A wall piece's triangles against the frame's kept wall triangles of its vertex buffer (milestone 97):
+// true when it is the back side of a zero-thickness wall; otherwise its triangles join them.
+template<typename Dev>
+bool sims3WallBackSide(Sims3Hook& h, Dev* dev) {
+  IDirect3DVertexBuffer9* vb = nullptr; UINT off = 0, stride = 0;
+  if (FAILED(dev->GetStreamSource(0, &vb, &off, &stride)) || !vb) return false;
+  vb->Release();
+  IDirect3DIndexBuffer9* ib = nullptr;
+  if (FAILED(dev->GetIndices(&ib)) || !ib) return false;
+  ib->Release();
+  auto* lvb = bridge_cast<Direct3DVertexBuffer9_LSS*>(vb); auto* lib = bridge_cast<Direct3DIndexBuffer9_LSS*>(ib);
+  if (!lvb || !lib || stride == 0 || h.wallLayout.posOff < 0) return false;
+  const uint32_t vbId = (uint32_t) lvb->getId();
+  struct { uint32_t vbId, vbVer, ibId, ibVer, off, stride; int32_t base; uint32_t start, prims, posOff; } pk = {
+    vbId, lvb->sims3Version, (uint32_t) lib->getId(), lib->sims3Version, off, stride, h.drawBase, h.drawStart, h.drawPrims, (uint32_t) h.wallLayout.posOff };
+  const uint64_t pieceKey = sims3cam::fnv1a64(&pk, sizeof pk);
+  auto it = h.wallPieceTris.find(pieceKey);
+  if (it == h.wallPieceTris.end()) {
+    if (h.wallPieceTris.size() > 8192u) h.wallPieceTris.clear();
+    std::vector<uint64_t> tris;
+    const uint8_t* vd = lvb->sims3Data(); const uint8_t* id = lib->sims3Data();
+    const bool ib32 = lib->getDesc().Format == D3DFMT_INDEX32;
+    const size_t isz = ib32 ? 4u : 2u, n = (size_t) h.drawPrims * 3u;
+    if (vd && id && ((size_t) h.drawStart + n) * isz <= lib->sims3Size()) {
+      tris.reserve(h.drawPrims);
+      for (size_t t = 0; t < n; t += 3) {
+        uint64_t p[3]; bool ok = true;
+        for (int c = 0; c < 3 && ok; ++c) {
+          const int64_t v = (int64_t) h.drawBase + (int64_t) sims3cam::readIndex(id, (size_t) h.drawStart + t + (size_t) c, ib32);
+          const size_t at = (size_t) off + (size_t) v * stride + (size_t) h.wallLayout.posOff;
+          if (v < 0 || at + 8u > lvb->sims3Size()) ok = false; else memcpy(&p[c], vd + at, 8);   // SHORT4: the corner's position as stored
+        }
+        tris.push_back(ok ? sims3cam::wallTriKey(p[0], p[1], p[2]) : 0u);
+      }
+    }
+    it = h.wallPieceTris.emplace(pieceKey, std::move(tris)).first;
+  }
+  auto& kept = h.wallFrameTris[vbId];
+  uint32_t matched = 0;
+  if (sims3cam::isWallBackSide(it->second, kept, matched)) {
+    if (h.wallBackLogged < 12u) {
+      ++h.wallBackLogged;
+      Logger::info(format_string("Sims 3 camera hook: wall back side left out at frame %u -> VS %016llx PS %016llx, vertex buffer %u base %d: %u triangles, all the reverse of an earlier piece's",
+                                 h.frames + 1, (unsigned long long) h.vsHash, (unsigned long long) h.psHash, vbId, (int) h.drawBase, (unsigned) h.drawPrims));
+    }
+    return true;
+  }
+  for (uint64_t k : it->second) if (k) kept.insert(k);
+  return false;
+}
+
 // Before every draw of the game (not the hook's own restore quad). A captured draw -- the main
 // camera held, see sims3ApplyForDraw -- gets: its albedo presented as stage 0 when the game bound
 // a cube map / render target there (Remix would drop the draw), the vertex shader variant for
@@ -90,6 +141,10 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
   // by itself, and the object's own glass pane stays. Sent, it went out as glass when blended, as an
   // untextured sheet when nothing was bound, and dropped by the runtime with the cube bound.
   if (h.psAuto && h.psAuto->valid && rs[D3DRS_STENCILENABLE] && sims3cam::isGlassShader(*h.psAuto)) { h.drawDropped = true; h.drawCaptured = false; h.dropWhy = "planar-reflection surface"; ++h.mirrorSurfaceDropped; return false; }
+  // a zero-thickness wall's back side (milestone 97, sims3cam::isWallBackSide): left out
+  if (h.drawIndexed && h.drawType == D3DPT_TRIANGLELIST && h.wallLayout.valid && h.vsWall && h.vsWall->valid && sims3WallBackSide(h, dev)) {
+    h.drawDropped = true; h.drawCaptured = false; h.dropWhy = "wall back side"; ++h.wallBackDropped; return false;
+  }
   int k = -1;
   ++h.capturedDraws;
   if (rs[D3DRS_FOGENABLE] && (rs[D3DRS_FOGTABLEMODE] != D3DFOG_NONE || rs[D3DRS_FOGVERTEXMODE] != D3DFOG_NONE)) ++h.gameFogDraws;   // a fog state of the game's own (milestone 56: none expected)

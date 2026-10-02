@@ -35,6 +35,7 @@
 #include <cstdint>
 #include <cstring>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace sims3cam {
@@ -528,6 +529,36 @@ inline bool cutWallOpenings(const WallCutInput& in, WallCutOutput& out) {
   for (size_t i = 0; i < tris.size(); ++i) out.ib[i] = (uint16_t) tris[i];
   out.triangleCount = (uint32_t) (tris.size() / 3);
   return true;
+}
+
+// ---- a zero-thickness wall's back side (milestone 97) ---------------------------------------
+// A pool's walls have no thickness: the wall object (one vertex buffer) carries the pool side and,
+// on the very same faces in the opposite winding, the outer side (run 207: 344 triangles, then 104 +
+// 240 reversed; the runtime texture hashes 73C9E3A9 / 254EA684 / 12B386FA). The game culls the side
+// facing away. The runtime does not cull rays that have passed through a translucent surface
+// (rtx.enableCullingInSecondaryRays changed nothing, run 207), so behind the water both sides came
+// back at one distance and fought pixel by pixel -- the speckle on the pool walls. A wall piece whose
+// triangles all repeat, reversed, triangles of an earlier piece of the same vertex buffer in the frame
+// is such a back side and is left out; walls with a thickness have no coinciding faces.
+// A triangle's key: its corners' position bytes sorted, hashed, and the winding of that order in the
+// low bit -- the reversed triangle's key is the key ^ 1. Degenerate triangles have none (0).
+inline uint64_t wallTriKey(uint64_t p0, uint64_t p1, uint64_t p2) {
+  if (p0 == p1 || p1 == p2 || p0 == p2) return 0;
+  bool odd = false;
+  if (p0 > p1) { std::swap(p0, p1); odd = !odd; }
+  if (p1 > p2) { std::swap(p1, p2); odd = !odd; }
+  if (p0 > p1) { std::swap(p0, p1); odd = !odd; }
+  const uint64_t c[3] = { p0, p1, p2 };
+  uint64_t k = fnv1a64(c, sizeof c) << 1 | (odd ? 1u : 0u);
+  return k ? k : 2u;
+}
+// Whether a piece (its triangles' keys) is the back side of the triangles kept so far: every one of
+// its triangles reversed among them. Counts the reversed ones in matched.
+template<typename Set>
+inline bool isWallBackSide(const std::vector<uint64_t>& piece, const Set& kept, uint32_t& matched) {
+  matched = 0; uint32_t n = 0;
+  for (uint64_t k : piece) { if (!k) continue; ++n; if (kept.count(k ^ 1u)) ++matched; }
+  return n > 0 && matched == n;
 }
 
 }  // namespace sims3cam
