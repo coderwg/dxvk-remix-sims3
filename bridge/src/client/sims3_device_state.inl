@@ -207,7 +207,8 @@ struct Sims3Hook {
   uint64_t markerHash[sims3cam::kTerrainMarkers] = {};         // their level-0 hashes as the runtime computes them (0 = not computed)
   bool markerFailed = false, markersConfigSent = false;
   // glass (milestone 80): the glass marker, and the draw's blending the hook switched off
-  IDirect3DTexture9* glassMarker = nullptr; uint64_t glassMarkerHash = 0; bool glassMarkerFailed = false;
+  IDirect3DTexture9* glassMarkers[sims3cam::kGlassMaterials] = {}; uint64_t glassMarkerHashes[sims3cam::kGlassMaterials] = {};   // per sims3cam::kGlassMaterial
+  bool glassMarkerFailed[sims3cam::kGlassMaterials] = {}; uint32_t glassDraws[sims3cam::kGlassMaterials] = {};
   // the water materials' markers (milestones 86, 99), per sims3cam::kWaterMaterial
   IDirect3DTexture9* waterMarkers[sims3cam::kWaterMaterials] = {}; uint64_t waterMarkerHashes[sims3cam::kWaterMaterials] = {};
   bool waterMarkerFailed[sims3cam::kWaterMaterials] = {}; uint32_t waterDraws[sims3cam::kWaterMaterials] = {};
@@ -219,7 +220,6 @@ struct Sims3Hook {
   IDirect3DTexture9* surveyMarkers[sims3cam::kGlassSurveyMax] = {}; uint64_t surveyHashes[sims3cam::kGlassSurveyMax] = {};
   bool surveyFailed[sims3cam::kGlassSurveyMax] = {}; uint32_t surveyDraws = 0;
   uint64_t markGlassPs[32] = {}; uint32_t markGlassCount = 0;   // the glass shaders named at the mark (milestone 113, with the survey)
-  IDirect3DTexture9* carGlassMarker = nullptr; uint64_t carGlassMarkerHash = 0; bool carGlassMarkerFailed = false; uint32_t carGlassDraws = 0;   // car glass (milestone 105)
   uint32_t waveDumpedIds[32] = {}; uint32_t waveDumped = 0;   // the game's wave maps looked at (milestone 93): the mod's ripple maps' source
   // a zero-thickness wall's back side (milestone 97): each wall piece's triangle keys (cached by buffers,
   // versions and range), and this frame's kept wall triangles per vertex buffer
@@ -227,7 +227,7 @@ struct Sims3Hook {
   std::unordered_map<uint32_t, std::unordered_set<uint64_t>> wallFrameTris;
   uint32_t wallBackDropped = 0, wallBackLogged = 0;
   DWORD blendSaved = 0; bool blendOurs = false;
-  uint32_t glassDraws = 0, glassLogged = 0; uint64_t glassLoggedPs[32] = {};
+  uint32_t glassLogged = 0; uint64_t glassLoggedPs[32] = {};
   IDirect3DTexture9* mirrorMarker = nullptr; uint64_t mirrorMarkerHash = 0; bool mirrorMarkerFailed = false; uint32_t mirrorDraws = 0;   // mirrors (milestone 101)
   bool drawGlass = false;               // this draw went out as glass
   bool reflectiveSheet = false;         // this draw is a reflective sheet: a mirror's face (milestone 101)
@@ -277,6 +277,7 @@ struct Sims3Hook {
     uint32_t kept = 0, skirts = 0, flat = 0;
   };
   uint32_t lotPictureDropped = 0;   // the neighbourhood view's lot picture draws left out (milestone 63)
+  uint32_t effectsLeftOut = 0;      // effect draws left out of the ray tracing (milestone 114, sims3cam::leftOutPs)
   uint32_t alphaCutDraws = 0;       // captured draws given their shader's cut-out as an alpha test (milestones 67-68)
   // The low-detail lots' ground plates as terrain (milestone 69): per model draw (by the buffers'
   // content and the draw range) the house's and the plate's own index buffers.

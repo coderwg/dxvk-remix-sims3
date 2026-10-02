@@ -44,7 +44,7 @@ WAVES = {
 # the bumpy glass shaders (sims3cam::kNamedGlass entries with a bump stage): an older dump of another shader
 # is not made into a material (910a56f2, an unplayable lot's windows: the clear glass without its bumps since
 # milestone 111, the user's choice)
-BUMPY_PS = {'572773cfbd618a3a', '8fe3ce7c5fbc6234', 'a9336d35a25143ae'}
+BUMPY_PS = {'572773cfbd618a3a', '8fe3ce7c5fbc6234'}   # (a9336d35, the speakers' sound waves, is an effect: milestone 114)
 BUMP_NAME = re.compile(r'^bump_([0-9A-F]{16})_([0-9a-f]{16})_s(\d+)_(\d+)x(\d+)_([A-Z0-9]+)_k(-?\d+)\.raw$')
 
 

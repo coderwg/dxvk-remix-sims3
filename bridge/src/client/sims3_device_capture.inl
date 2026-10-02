@@ -322,7 +322,10 @@ bool sims3EnsureMarker(Dev* dev, IDirect3DTexture9*& marker, uint64_t& hash, boo
   return true;
 }
 template<typename Dev>
-bool sims3EnsureGlassMarker(Sims3Hook& h, Dev* dev) { return sims3EnsureMarker(dev, h.glassMarker, h.glassMarkerHash, h.glassMarkerFailed, sims3cam::kGlassMarkerColour, sims3cam::kGlassMarkerHash, "glass"); }
+bool sims3EnsureGlassMarker(Sims3Hook& h, Dev* dev, int m) {
+  const sims3cam::GlassMaterial& g = sims3cam::kGlassMaterial[m];
+  return sims3EnsureMarker(dev, h.glassMarkers[m], h.glassMarkerHashes[m], h.glassMarkerFailed[m], g.colour, g.hash, g.name);
+}
 template<typename Dev>
 bool sims3EnsureMirrorMarker(Sims3Hook& h, Dev* dev) { return sims3EnsureMarker(dev, h.mirrorMarker, h.mirrorMarkerHash, h.mirrorMarkerFailed, sims3cam::kMirrorMarkerColour, sims3cam::kMirrorMarkerHash, "mirror"); }
 // The glass survey's marker for the bound pixel shader (milestone 110; one run), or nullptr when it is
@@ -340,8 +343,6 @@ IDirect3DTexture9* sims3SurveyMarker(Sims3Hook& h, Dev* dev) {
   if (h.surveyMarkers[i]) ++h.surveyDraws;
   return h.surveyMarkers[i];
 }
-template<typename Dev>
-bool sims3EnsureCarGlassMarker(Sims3Hook& h, Dev* dev) { return sims3EnsureMarker(dev, h.carGlassMarker, h.carGlassMarkerHash, h.carGlassMarkerFailed, sims3cam::kCarGlassMarkerColour, sims3cam::kCarGlassMarkerHash, "car glass"); }
 template<typename Dev>
 bool sims3EnsureWaterMarker(Sims3Hook& h, Dev* dev, int m) {
   const sims3cam::WaterMaterial& w = sims3cam::kWaterMaterial[m];

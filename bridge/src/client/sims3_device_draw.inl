@@ -30,14 +30,12 @@ inline void sims3OnReset(Sims3Hook& h) {
   if (h.psRestore) { h.psRestore->Release(); h.psRestore = nullptr; }
   if (h.freeStageRestore) { h.freeStageRestore->Release(); h.freeStageRestore = nullptr; }
   for (int i = 0; i < sims3cam::kTerrainMarkers; ++i) { if (h.marker[i]) h.marker[i]->Release(); h.marker[i] = nullptr; h.markerHash[i] = 0; }
-  if (h.glassMarker) { h.glassMarker->Release(); h.glassMarker = nullptr; }
+  for (int m = 0; m < sims3cam::kGlassMaterials; ++m) { if (h.glassMarkers[m]) h.glassMarkers[m]->Release(); h.glassMarkers[m] = nullptr; h.glassMarkerHashes[m] = 0; h.glassMarkerFailed[m] = false; }
   for (int m = 0; m < sims3cam::kWaterMaterials; ++m) { if (h.waterMarkers[m]) h.waterMarkers[m]->Release(); h.waterMarkers[m] = nullptr; h.waterMarkerHashes[m] = 0; h.waterMarkerFailed[m] = false; }
   if (h.mirrorMarker) { h.mirrorMarker->Release(); h.mirrorMarker = nullptr; }
   h.mirrorMarkerHash = 0; h.mirrorMarkerFailed = false;
-  if (h.carGlassMarker) { h.carGlassMarker->Release(); h.carGlassMarker = nullptr; }
   for (size_t i = 0; i < sims3cam::kGlassSurveyMax; ++i) { if (h.surveyMarkers[i]) h.surveyMarkers[i]->Release(); h.surveyMarkers[i] = nullptr; h.surveyHashes[i] = 0; h.surveyFailed[i] = false; }
-  h.carGlassMarkerHash = 0; h.carGlassMarkerFailed = false;
-  h.glassMarkerHash = 0; h.glassMarkerFailed = false; h.blendOurs = false; h.bumpHashes.clear();
+  h.blendOurs = false; h.bumpHashes.clear();
   for (auto& g : h.glassSides) if (g.second.ib) g.second.ib->Release();
   h.glassSides.clear(); h.glassIb = nullptr; h.glassPrims = 0;
   h.markerFailed = false; h.markersConfigSent = false; h.terrainFreeStage = -1; h.tblockActive = false; h.tblockStage = -1; h.tblockSet = 0; h.tblockSrgb = 0; h.ourSampler = false; h.psBound = nullptr; h.vsTerrain = nullptr; h.lotFurtherCopy = false; h.swappingPs = false;
@@ -260,6 +258,8 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
   }
   // the neighbourhood view's lot picture (milestone 63): a second surface over the lot's ground, left out
   if (h.vsHash == sims3cam::kLotPictureVs) { h.drawDropped = true; h.drawCaptured = false; h.dropWhy = "lot picture"; ++h.lotPictureDropped; return false; }
+  // an effect the ray tracer cannot draw (milestone 114, sims3cam::leftOutPs): the speakers' sound waves, left out
+  if (sims3cam::leftOutPs(h.psHash)) { h.drawDropped = true; h.drawCaptured = false; h.dropWhy = "effect left out"; ++h.effectsLeftOut; return false; }
   // a mirror's face (milestone 101, sims3cam::isReflectiveSheet): the mirror material below
   h.reflectiveSheet = h.psAuto && h.psAuto->valid && sims3cam::isReflectiveSheet(*h.psAuto, rs[D3DRS_STENCILENABLE]);
   // a glass the game draws twice, unblended then blended (milestone 104, NamedGlass::blendedPassOnly): the unblended pass left out
@@ -299,23 +299,26 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
     h.fogOurs = true;
   }
   if (!terrain) {
-    // glass, mirrors and water (milestones 80, 86, 99, 101, 105, 109): the material's marker at stage 0
-    // and the draw's blending off; its material is the hook's Remix mods' glass, car glass, mirror or
-    // the water's own (sims3cam::isGlassShader, namedGlass, isReflectiveSheet, waterMaterial); a bumpy
+    // glass, mirrors and water (milestones 80, 86, 99, 101, 105, 109, 114): the material's marker at stage 0
+    // and the draw's blending off; its material is the hook's Remix mods' glass (kGlassMaterial: clear,
+    // car glass, the plumbob's), mirror or the water's own (sims3cam::isGlassShader, namedGlass,
+    // isReflectiveSheet, waterMaterial); a bumpy
     // glass's own bump map in the marker's place once the Sims3GlassBumps mod names it (sims3GlassBump)
     const int waterMat = sims3cam::waterMaterial(h.psHash);
     const bool water = waterMat >= 0 && sims3EnsureWaterMarker(h, dev, waterMat);
     const sims3cam::NamedGlass* named = water ? nullptr : sims3cam::namedGlass(h.psHash);
     const bool mirror = !water && h.reflectiveSheet && sims3EnsureMirrorMarker(h, dev);
-    const bool carGlass = !water && !h.reflectiveSheet && named && named->material == sims3cam::kCarGlass && sims3EnsureCarGlassMarker(h, dev);
-    IDirect3DBaseTexture9* const bump = (!water && !h.reflectiveSheet && !carGlass && named && named->bumpStage >= 0 && h.psAuto && h.psAuto->valid) ? sims3GlassBump(h, dev, *named) : nullptr;
-    const bool glass = !water && !h.reflectiveSheet && !carGlass && h.psAuto && (named || (rs[D3DRS_ALPHABLENDENABLE] && sims3cam::isGlassShader(*h.psAuto))) && (bump || sims3EnsureGlassMarker(h, dev));
-    IDirect3DTexture9* const survey = (carGlass || glass) ? sims3SurveyMarker(h, dev) : nullptr;   // the glass survey (milestone 110; one run)
-    if (water || mirror || carGlass || glass) {
+    // the glass material: a named glass's own, the clear glass for a blended cube-only shader
+    const int gm = (water || h.reflectiveSheet || !h.psAuto) ? -1 : named ? (int) named->material
+                 : (rs[D3DRS_ALPHABLENDENABLE] && sims3cam::isGlassShader(*h.psAuto)) ? (int) sims3cam::kClearGlass : -1;
+    IDirect3DBaseTexture9* const bump = (gm >= 0 && named && named->bumpStage >= 0 && h.psAuto->valid) ? sims3GlassBump(h, dev, *named) : nullptr;
+    const bool glass = gm >= 0 && (bump || sims3EnsureGlassMarker(h, dev, gm));
+    IDirect3DTexture9* const survey = glass ? sims3SurveyMarker(h, dev) : nullptr;   // the glass survey (milestone 110; one run)
+    if (water || mirror || glass) {
       h.drawGlass = true;
       h.remapRestore = h.boundTex[0]; if (h.remapRestore) h.remapRestore->AddRef();   // held until sims3EndDraw, as for an albedo remap
       h.remapActive = true;
-      h.inRemap = true; dev->SetTexture(0, survey ? survey : water ? h.waterMarkers[waterMat] : mirror ? h.mirrorMarker : carGlass ? h.carGlassMarker : bump ? bump : (IDirect3DBaseTexture9*) h.glassMarker); h.inRemap = false;
+      h.inRemap = true; dev->SetTexture(0, survey ? survey : water ? h.waterMarkers[waterMat] : mirror ? h.mirrorMarker : bump ? bump : (IDirect3DBaseTexture9*) h.glassMarkers[gm]); h.inRemap = false;
       // water (milestone 94): the sampler states of the game's first wave map (the one its TEXCOORD0
       // reads) on stage 0, where the runtime takes the material's -- the normal map tiles as the game's
       // waves do; back in sims3EndDraw with the albedo remap's
@@ -328,15 +331,15 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
       }
       h.blendSaved = rs[D3DRS_ALPHABLENDENABLE]; h.blendOurs = true;
       h.ourState = true; dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE); h.ourState = false;
-      if (water) ++h.waterDraws[waterMat]; else if (mirror) ++h.mirrorDraws; else if (carGlass) ++h.carGlassDraws; else ++h.glassDraws;
-      if (carGlass || glass) sims3GlassOneSide(h, dev);   // a sheet's back side left out (milestone 104)
+      if (water) ++h.waterDraws[waterMat]; else if (mirror) ++h.mirrorDraws; else ++h.glassDraws[gm];
+      if (glass) sims3GlassOneSide(h, dev);   // a sheet's back side left out (milestone 104)
       // at the mark (milestone 113, with the survey): every glass shader drawn in the marked frame, once
       if (h.markDump == 2) {
         bool listed = false; for (uint32_t i = 0; i < h.markGlassCount; ++i) if (h.markGlassPs[i] == h.psHash) listed = true;
         if (!listed && h.markGlassCount < 32u) {
           h.markGlassPs[h.markGlassCount++] = h.psHash;
           const sims3cam::GlassSurvey* sv = survey ? sims3cam::glassSurvey(h.psHash) : nullptr;
-          const char* kind = sv ? sv->colourName : water ? sims3cam::kWaterMaterial[waterMat].name : mirror ? "mirror" : carGlass ? "car glass" : bump ? "bumpy glass" : "glass";
+          const char* kind = sv ? sv->colourName : water ? sims3cam::kWaterMaterial[waterMat].name : mirror ? "mirror" : bump ? "bumpy glass" : sims3cam::kGlassMaterial[gm].name;
           Logger::info(format_string("Sims 3 camera hook: glass at the mark, frame %u: PS %016llx (VS %016llx) -- %s%s", h.frames + 1, (unsigned long long) h.psHash, (unsigned long long) h.vsHash,
                                      sv ? "survey " : "", kind));
         }
@@ -344,7 +347,7 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
       bool seen = false; for (uint32_t i = 0; i < h.glassLogged; ++i) if (h.glassLoggedPs[i] == h.psHash) seen = true;
       if (!seen && h.glassLogged < 32) {
         h.glassLoggedPs[h.glassLogged++] = h.psHash; char msg[224];
-        const char* what = water ? sims3cam::kWaterMaterial[waterMat].name : mirror ? "mirror" : carGlass ? "car glass" : bump ? "bumpy glass" : "glass";
+        const char* what = water ? sims3cam::kWaterMaterial[waterMat].name : mirror ? "mirror" : bump ? "bumpy glass" : sims3cam::kGlassMaterial[gm].name;
         snprintf(msg, sizeof msg, "Sims 3 camera hook: %s at frame %u -> VS %016llx PS %016llx presented with %s%s%s, blending off", what, h.frames + 1, (unsigned long long) h.vsHash, (unsigned long long) h.psHash,
                  bump ? "its own bump map" : "the ", bump ? "" : what, bump ? "" : " marker");
         Logger::info(msg);

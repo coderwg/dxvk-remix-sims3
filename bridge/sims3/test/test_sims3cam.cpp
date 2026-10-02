@@ -1055,7 +1055,7 @@ int main() {
       // milestones 102, 105, 107: the named forms 2 and 3 are not cube-only, so the name is what makes them glass
       bool farOk = true;
       for (uint64_t hsh : { 0x85e9c3381d5bf054ull, 0x45c7a7cd511b5233ull, 0xd03ebab11453bca1ull, 0x2b1da1b45f51d3f9ull, 0x8ff495765d26a6fdull,
-                            0x7eeb349a23cbefefull, 0x8fe3ce7c5fbc6234ull, 0x910a56f24813e248ull, 0xa9336d35a25143aeull }) {
+                            0x7eeb349a23cbefefull, 0x8fe3ce7c5fbc6234ull, 0x910a56f24813e248ull }) {
         char n[32]; snprintf(n, sizeof n, "ps_%016llx", (unsigned long long) hsh);
         std::vector<DWORD> sb; PsAnalysis sa;
         if (loadShader(n, sb) && (!analyzePixelShader(sb.data(), sb.size(), sa) || isGlassShader(sa))) farOk = false;
@@ -1066,16 +1066,15 @@ int main() {
             "glass (M102, M105): 85e9c338 clear glass; car glass: a passing car's 66516d5d, a parked car's 45c7a7cd, a distant car's d03ebab1; the car body 0c2df3be not named; 85e9c338 / 45c7a7cd / d03ebab1 not cube-only");
       // milestones 107, 109: the survey's glass -- clear; bumpy with a normal map; objects fading in are not glass
       auto glassMat = [](uint64_t hsh) { const NamedGlass* g = namedGlass(hsh); return g ? (int) g->material : -1; };
-      CHECK(farOk && glassMat(0x2b1da1b45f51d3f9ull) == kClearGlass && glassMat(0x8ff495765d26a6fdull) == kClearGlass && glassMat(0x7eeb349a23cbefefull) == kClearGlass
-            && glassMat(0x8fe3ce7c5fbc6234ull) == kClearGlass && glassMat(0x910a56f24813e248ull) == kClearGlass && glassMat(0xa9336d35a25143aeull) == kClearGlass
+      CHECK(farOk && glassMat(0x2b1da1b45f51d3f9ull) == kPlumbob && glassMat(0x8ff495765d26a6fdull) == kClearGlass && glassMat(0x7eeb349a23cbefefull) == kClearGlass
+            && glassMat(0x8fe3ce7c5fbc6234ull) == kClearGlass && glassMat(0x910a56f24813e248ull) == kClearGlass && glassMat(0xa9336d35a25143aeull) == -1 && leftOutPs(0xa9336d35a25143aeull)
             && glassMat(0x7b3cb6be7d73e3b4ull) == -1 && glassMat(0xa8c64e11b251a0cbull) == -1 && glassMat(0x834b21919e9f8d8aull) == -1 && glassMat(0x3661ea706449953cull) == -1,
-            "glass (M107): the survey's 2b1da1b4 / 8ff49576 / 7eeb349a / 8fe3ce7c / 910a56f2 / a9336d35 clear glass, none cube-only; the fading objects 7b3cb6be / a8c64e11 / 834b2191 / 3661ea70 not named");
+            "glass (M107, M114): the survey's 8ff49576 / 7eeb349a / 8fe3ce7c / 910a56f2 clear glass, the plumbob 2b1da1b4 its own, none cube-only; the speakers' sound waves a9336d35 left out, not glass; the fading objects 7b3cb6be / a8c64e11 / 834b2191 / 3661ea70 not named");
       // milestone 109: bumpy glass -- the bump map's sampler and coordinate from the bytecode (the promotion needs a plain read),
       // the slope scale's register; nothing else has a bump stage; a mod's material names parsed
       {
         struct Bumpy { uint64_t hash; const char* dump; int texcoord; int scaleReg; };
-        const Bumpy bumpy[] = { { 0x572773cfbd618a3aull, "ps_572773cfbd618a3a", 5, 14 }, { 0x8fe3ce7c5fbc6234ull, "ps_8fe3ce7c5fbc6234", 5, 14 },
-                                { 0xa9336d35a25143aeull, "ps_a9336d35a25143ae", 4, -1 } };
+        const Bumpy bumpy[] = { { 0x572773cfbd618a3aull, "ps_572773cfbd618a3a", 5, 14 }, { 0x8fe3ce7c5fbc6234ull, "ps_8fe3ce7c5fbc6234", 5, 14 } };
         bool bumpOk = true; int bumpRead = 0;
         for (const Bumpy& b : bumpy) {
           const NamedGlass* g = namedGlass(b.hash);
@@ -1089,8 +1088,8 @@ int main() {
         }
         int others = 0; for (const NamedGlass& g : kNamedGlass) if (g.bumpStage >= 0) ++others;
         const std::vector<uint64_t> parsed = modMaterialHashes("def Material \"mat_0123456789ABCDEF\"\n{ }\ndef Material \"mat_FEDCBA9876543210\"\ndef Material \"mat_XYZ\"");
-        CHECK(bumpOk && others == 3 && namedGlass(0x910a56f24813e248ull) && namedGlass(0x910a56f24813e248ull)->bumpStage < 0 && parsed.size() == 2 && parsed[0] == 0x0123456789ABCDEFull && parsed[1] == 0xFEDCBA9876543210ull,
-              "bumpy glass (M109, M111): 572773cf / 8fe3ce7c (c14.x) and a9336d35 read their bump map at s2 plainly at TEXCOORD5 / 4 (%d of 3 dumps read); only they have a bump stage -- the unplayable lot's windows 910a56f2 are plain clear glass; a mod's material hashes parsed", bumpRead);
+        CHECK(bumpOk && others == 2 && namedGlass(0x910a56f24813e248ull) && namedGlass(0x910a56f24813e248ull)->bumpStage < 0 && parsed.size() == 2 && parsed[0] == 0x0123456789ABCDEFull && parsed[1] == 0xFEDCBA9876543210ull,
+              "bumpy glass (M109, M111, M114): 572773cf / 8fe3ce7c read their bump map at s2 plainly at TEXCOORD5, slopes x c14.x (%d of 2 dumps read); only they have a bump stage -- the unplayable lot's windows 910a56f2 are plain clear glass; a mod's material hashes parsed", bumpRead);
       }
       // milestone 104: a sheet with a back side keeps one facing per plane; a pane with a thickness keeps both sides
       {
@@ -1122,7 +1121,8 @@ int main() {
         for (size_t i = 0; i < n; ++i) {
           const GlassSurvey& e = kGlassSurvey[i];
           for (size_t j = 0; j < i; ++j) if (kGlassSurvey[j].colour == e.colour || kGlassSurvey[j].hash == e.hash) surveyOk = false;
-          if (e.colour == kGlassMarkerColour || e.colour == kCarGlassMarkerColour || e.colour == kMirrorMarkerColour) surveyOk = false;
+          if (e.colour == kMirrorMarkerColour) surveyOk = false;
+          for (int m = 0; m < kGlassMaterials; ++m) if (e.colour == kGlassMaterial[m].colour) surveyOk = false;
           for (int m = 0; m < kWaterMaterials; ++m) if (e.colour == kWaterMaterial[m].colour) surveyOk = false;
           if (!namedGlass(e.hash)) {
             char nm[32]; snprintf(nm, sizeof nm, "ps_%016llx", (unsigned long long) e.hash);
@@ -1162,12 +1162,12 @@ int main() {
       const NeverCapture* cards = findNeverCapture(0x6cb3b47f30712201ull);
       CHECK(cards && cards->blendedOnly && neverCaptureDraw(neverCaptureMode(cards), TRUE) && !neverCaptureDraw(neverCaptureMode(cards), FALSE),
             "never-capture (M91): the effect cards VS 6cb3b47f, blended draws only (the pond's white surface effect, the light beams)");
-      static uint32_t gm[kGlassMarkerSize * kGlassMarkerSize]; for (auto& p : gm) p = kGlassMarkerColour;
+      static uint32_t gm[kGlassMarkerSize * kGlassMarkerSize]; for (auto& p : gm) p = kGlassMaterial[kClearGlass].colour;
       const uint64_t gh = (uint64_t) XXH3_64bits(gm, sizeof gm);
-      std::vector<uint8_t> usd; char name[32]; snprintf(name, sizeof name, "mat_%016llX", (unsigned long long) kGlassMarkerHash);
+      std::vector<uint8_t> usd; char name[32]; snprintf(name, sizeof name, "mat_%016llX", (unsigned long long) kGlassMaterial[kClearGlass].hash);
       const bool haveUsd = loadBytes("../remix-mod/Sims3Glass/mod.usda", usd);
       const std::string u(usd.begin(), usd.end());
-      CHECK(gh == kGlassMarkerHash && haveUsd && u.find(name) != std::string::npos && u.find("AperturePBR_Translucent.mdl") != std::string::npos && u.find("/RootNode/Looks/") != std::string::npos,
+      CHECK(gh == kGlassMaterial[kClearGlass].hash && haveUsd && u.find(name) != std::string::npos && u.find("AperturePBR_Translucent.mdl") != std::string::npos && u.find("/RootNode/Looks/") != std::string::npos,
             "glass (M80): the marker's level-0 hash 0x%016llX names the translucent material %s in sims3/remix-mod/Sims3Glass/mod.usda", (unsigned long long) gh, name);
       // milestone 101: the mirror marker's hash names an opaque, fully metallic, smooth material naming no albedo
       for (auto& p : gm) p = kMirrorMarkerColour;
@@ -1190,7 +1190,7 @@ int main() {
         const size_t at = uw.find(mname), end = at == std::string::npos ? at : uw.find("token outputs:out", at);
         bool distinct = true; for (int o = 0; o < m; ++o) if (kWaterMaterial[o].hash == w.hash) distinct = false;
         CHECK(haveWater && hm == w.hash && at != std::string::npos && end != std::string::npos && uw.find("ior_constant = 1.33", at) < end && uw.find("thin_walled = 0", at) < end
-              && uw.find(ripples, at) < end && u.find(mname) == std::string::npos && distinct && w.hash != kGlassMarkerHash,
+              && uw.find(ripples, at) < end && u.find(mname) == std::string::npos && distinct && w.hash != kGlassMaterial[kClearGlass].hash,
               "water (M99): the %s marker's level-0 hash 0x%016llX names %s in Sims3Water/mod.usda (IOR 1.33, a volume, %s), not in the glass mod", w.name, (unsigned long long) hm, mname, w.ripples);
       }
       CHECK(waterMaterial(0xd40999e5838e8b05ull) == kWaterPool && waterMaterial(0x85c0a78a614b15d3ull) == kWaterPool && waterMaterial(0x11a6bdfd3e77d03aull) == kWaterPond
@@ -1200,14 +1200,23 @@ int main() {
             && waterMaterial(0xf45e6c607bb94189ull) == -1 && waterMaterial(0x3197bfdef2330503ull) == -1 && isWaterPs(0x11a6bdfd3e77d03aull) && !isWaterPs(0xf45e6c607bb94189ull),
             "water (M86-M108): the pool's surfaces d40999e5 / 85c0a78a, the pond's 11a6bdfd, the town's water f74b4657 and the open water db58e590 (the sea), the instanced 387e1a15 and d92d3913 / af6cd85b (object water); not the pool floor f45e6c60 nor the glass");
       // milestone 105: the car glass marker's hash names the tinted thin glass
-      for (auto& p : gm) p = kCarGlassMarkerColour;
+      for (auto& p : gm) p = kGlassMaterial[kCarGlass].colour;
       const uint64_t ch = (uint64_t) XXH3_64bits(gm, sizeof gm);
       char cname[32]; snprintf(cname, sizeof cname, "mat_%016llX", (unsigned long long) ch);
       const size_t cat = u.find(cname);
       const size_t cend = cat == std::string::npos ? cat : u.find("token outputs:out", cat);
-      CHECK(ch == kCarGlassMarkerHash && cat != std::string::npos && cend != std::string::npos && u.find("thin_walled = 1", cat) < cend && u.find("use_diffuse_layer = 0", cat) < cend
+      CHECK(ch == kGlassMaterial[kCarGlass].hash && cat != std::string::npos && cend != std::string::npos && u.find("thin_walled = 1", cat) < cend && u.find("use_diffuse_layer = 0", cat) < cend
             && u.find("transmittance_color = (0.72, 0.78, 0.75)", cat) < cend,
             "car glass (M105): the marker's level-0 hash 0x%016llX names the tinted thin glass %s in Sims3Glass/mod.usda", (unsigned long long) ch, cname);
+      // milestone 114: the plumbob's marker names a solid, glowing green gem; the three glass markers differ
+      for (auto& p : gm) p = kGlassMaterial[kPlumbob].colour;
+      const uint64_t ph = (uint64_t) XXH3_64bits(gm, sizeof gm);
+      char pname[32]; snprintf(pname, sizeof pname, "mat_%016llX", (unsigned long long) ph);
+      const size_t pat = u.find(pname);
+      const size_t pend = pat == std::string::npos ? pat : u.find("token outputs:out", pat);
+      CHECK(ph == kGlassMaterial[kPlumbob].hash && pat != std::string::npos && pend != std::string::npos && u.find("thin_walled = 0", pat) < pend && u.find("enable_emission = 1", pat) < pend
+            && u.find("emissive_color_constant", pat) < pend && kGlassMaterial[0].hash != kGlassMaterial[1].hash && kGlassMaterial[1].hash != kGlassMaterial[2].hash && kGlassMaterial[0].hash != kGlassMaterial[2].hash,
+            "plumbob (M114): the marker's level-0 hash 0x%016llX names the glowing green gem %s in Sims3Glass/mod.usda (solid, emissive)", (unsigned long long) ph, pname);
     }
     CHECK(kLotCompositePs == 0x99ee53ff6ef1b0b6ull && lotCompositeStage(0) == 0 && lotCompositeStage(1) == 4 && lotCompositeStage(2) == 3, "lot composite: pass 1 reads the mask from s4 (layer 4 out), pass 2 from s3 (layer 3 out)");
     std::vector<DWORD> lit, world, layer, comp, lit2, lit3, lit4;
