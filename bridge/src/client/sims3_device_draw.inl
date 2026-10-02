@@ -279,19 +279,19 @@ void sims3TrimPoolWater(Sims3Hook& h, Dev* dev, INT base, UINT& minIndex, UINT& 
     h.poolTrims.emplace_back(); e = &h.poolTrims.back();
     e->vbId = vbId; e->vbVer = lvb->sims3Version; e->ibId = ibId; e->ibVer = lib->sims3Version; e->base = base; e->start = startIndex; e->prims = primCount;
     ++h.poolTrimMeshes;
-    int posOffset = -1, posType = -1;   // the position: UBYTE4 (milestone 95)
+    int posOffset = -1, posType = -1;   // the position: D3DCOLOR or UBYTE4 (milestone 95)
     IDirect3DVertexDeclaration9* decl = nullptr;
     if (SUCCEEDED(dev->GetVertexDeclaration(&decl)) && decl) {
       auto* ld = bridge_cast<Direct3DVertexDeclaration9_LSS*>(decl);
       const D3DVERTEXELEMENT9* el = ld ? ld->sims3Elements() : nullptr;
       for (int i = 0; el && i < 32 && el[i].Stream != 0xFF; ++i)
-        if (el[i].Stream == 0 && el[i].Usage == D3DDECLUSAGE_POSITION && el[i].UsageIndex == 0) { posType = el[i].Type; if (el[i].Type == D3DDECLTYPE_UBYTE4) posOffset = el[i].Offset; }
+        if (el[i].Stream == 0 && el[i].Usage == D3DDECLUSAGE_POSITION && el[i].UsageIndex == 0) { posType = el[i].Type; if (el[i].Type == D3DDECLTYPE_UBYTE4 || el[i].Type == D3DDECLTYPE_D3DCOLOR) posOffset = el[i].Offset; }
       decl->Release();
     }
     const uint8_t* vd = lvb->sims3Data(); const uint8_t* id = lib->sims3Data();
     const bool ib32 = lib->getDesc().Format == D3DFMT_INDEX32;
     const size_t isz = ib32 ? 4u : 2u, nIdx = (size_t) primCount * 3u;
-    const char* why = posOffset < 0 ? "the position is not UBYTE4" : (UINT) posOffset + 4u > stride ? "the position is past the stride"
+    const char* why = posOffset < 0 ? "the position is not UBYTE4 or D3DCOLOR" : (UINT) posOffset + 4u > stride ? "the position is past the stride"
                     : !vd ? "no vertex data kept" : !id ? "no index data kept" : ((size_t) startIndex + nIdx) * isz > lib->sims3Size() ? "the range is past the index buffer" : nullptr;
     std::vector<uint32_t> idx(why ? 0 : nIdx); std::vector<uint16_t> height(why ? 0 : nIdx);
     for (size_t k = 0; !why && k < nIdx; ++k) {
@@ -299,7 +299,7 @@ void sims3TrimPoolWater(Sims3Hook& h, Dev* dev, INT base, UINT& minIndex, UINT& 
       const int64_t v = (int64_t) base + (int64_t) idx[k];
       const size_t at = (size_t) off + (size_t) v * stride + (size_t) posOffset;
       if (v < 0 || at + 4u > lvb->sims3Size()) { why = "a vertex is past the vertex buffer"; break; }
-      height[k] = sims3cam::poolWaterHeight(vd + at);
+      height[k] = sims3cam::poolWaterHeight(vd + at, posType == D3DDECLTYPE_D3DCOLOR);
     }
     if (why) {
       if (h.poolTrimLogged < 12u) { ++h.poolTrimLogged; Logger::info(format_string("Sims 3 camera hook: pool water mesh at frame %u -> vertex buffer %u not trimmed: %s (position type %d, stride %u)", h.frames + 1, vbId, why, posType, stride)); }

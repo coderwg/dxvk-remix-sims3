@@ -1933,13 +1933,14 @@ inline constexpr uint32_t kNaturalWaterMarkerColour = 0xFF6E9C8Cu;          // A
 inline constexpr uint64_t kNaturalWaterMarkerHash = 0x52B04DF3E566CA55ull;  // XXH3-64 of its level 0; the mod's material name
 // ---- the lot pool's water mesh (milestone 95) ------------------------------------------------
 // VS 011ba470 packs a vertex into four bytes: x and z on a grid and a 16-bit height (z + 256 w, then
-// x 7.97 - 200: heights below the surface exist). The mesh reads as a box -- the surface on top and
+// x 7.97 - 200: heights below the surface exist). The game declares them D3DCOLOR (run 203), whose
+// memory order B, G, R, A reaches the shader as x = R, y = G, z = B, w = A; UBYTE4 is read as is. The mesh reads as a box -- the surface on top and
 // sides and a floor down the pool's own, for the walls-down view -- and as a see-through volume its
 // sides lie on the pool's walls: two surfaces in one place, the "overlapping triangles" at the pool
 // walls of run 202 (not seen while the surface was opaque). Only the triangles whose three corners
 // are at the mesh's highest height go to the runtime; the game's index buffer comes back after.
 inline bool isPoolWaterVs(uint64_t vsHash) { return vsHash == 0x011ba470c488f4feull; }
-inline uint16_t poolWaterHeight(const uint8_t* v) { return (uint16_t) (v[2] | (v[3] << 8)); }   // UBYTE4 z + 256 w
+inline uint16_t poolWaterHeight(const uint8_t* v, bool d3dcolor) { return (uint16_t) ((d3dcolor ? v[0] : v[2]) | (v[3] << 8)); }   // the shader's z + 256 w
 struct TopStats { uint32_t in = 0, kept = 0; uint16_t lo = 0xFFFFu, hi = 0; };
 // idx: triangle-list indices; height: each index entry's vertex height; out: the kept triangles.
 inline void keepTopTriangles(const std::vector<uint32_t>& idx, const std::vector<uint16_t>& height, std::vector<uint32_t>& out, TopStats& st) {
