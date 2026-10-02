@@ -1881,11 +1881,13 @@ inline bool isGlassShader(const PsAnalysis& a) {
 // the door vanished), frosted here so the door looks the same at every distance. A car's windows are
 // the car's own paint shader drawn a second time, blended, the colour texture's alpha the see-through
 // amount (in step with the opaque body pass, VS 710f9a33 / PS 0c2df3be); a distant car's, a small
-// glass shader with a constant alpha.
+// glass shader with a constant alpha. The parked cars' windows are drawn twice a frame, the same mesh
+// unblended with depth writes, then blended (run 215): only the blended pass goes out as glass, the
+// other is left out (blendedPassOnly; milestone 104), or the windows are two sheets in one place.
 // (Not glass, though alike: the light-beam cards 7304aaea / 8d3a3a22 -- their cube lookup has a
 // constant direction, no normal.)
 inline constexpr uint8_t kClearGlass = 0, kFrostedGlass = 1;
-struct NamedGlass { uint64_t hash; const char* name; uint8_t material; };
+struct NamedGlass { uint64_t hash; const char* name; uint8_t material; bool blendedPassOnly = false; };
 inline const NamedGlass kNamedGlass[] = {
   { 0x29c6b22234617c1aull, "glass: colour texture s1 x c8, mask s2 (VS 5b18d2ce; drawn near the shower in run 188)", kClearGlass },
   { 0xac4184cee232ed04ull, "glass: colour texture s2 x c10, gloss s3, irradiance cube s1 (VS d7fede81; drawn unblended, run 201)", kClearGlass },
@@ -1893,10 +1895,45 @@ inline const NamedGlass kNamedGlass[] = {
                            "read through the normal map, colour s3 (VS b51f1577, skinned: the door swings; drawn opaque; runs 192-194)", kFrostedGlass },
   { 0x85e9c3381d5bf054ull, "frosted glass, the shower door from a little further: reflection, Fresnel, the scene behind (render target s1), "
                            "no normal map, no colour (VS b3e88e28, skinned; also VS d251510d, in step with it; drawn opaque; run 213)", kFrostedGlass },
-  { 0x45c7a7cd511b5233ull, "glass, a car's windows: the car's paint shader blended, colour atlas s2 with its alpha, normal map s3, reflection cube s6 (VS a77613ea; run 213)", kClearGlass },
+  { 0x45c7a7cd511b5233ull, "glass, a car's windows: the car's paint shader blended, colour atlas s2 with its alpha, normal map s3, reflection cube s6 (VS a77613ea; run 213)", kClearGlass, true },
   { 0xd03ebab11453bca1ull, "glass, a distant car's windows: ps_2_0 reflection, Fresnel, highlights, the car's atlas s1 at a decoded UV, constant alpha c6.w (VS 4e9298de; runs 159, 205)", kClearGlass },
 };
 inline const NamedGlass* namedGlass(uint64_t hash) { return findByHash(kNamedGlass, hash); }
+// ---- a glass sheet's back side (milestone 104) -------------------------------------------------
+// A glass sheet the game models with both sides -- a passing car's windshield (all 36 triangles, run
+// 215), the shower door's panel (8 of its 20, runs 215-216) -- has its two sides on one plane, facing
+// opposite ways. The game culls the side turned away; the ray tracer meets both in the same place:
+// the windshield clipped and grainy at angles, the door's frost lost with distance (which side a ray
+// meets first flips). On a plane that carries both facings within one draw, the triangles of the
+// facing met second are left out. Planes are compared to 1/32 in direction and 0.01 in offset (the
+// mesh's own units); a pane with a thickness has its sides on two planes and keeps both.
+inline uint64_t glassPlaneKey(const float* a, const float* b, const float* c, uint8_t& facing) {
+  const float e1[3] = { b[0] - a[0], b[1] - a[1], b[2] - a[2] }, e2[3] = { c[0] - a[0], c[1] - a[1], c[2] - a[2] };
+  float n[3] = { e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0] };
+  const float len = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+  facing = 0;
+  if (!(len > 1e-12f)) return 0;   // degenerate: no plane
+  for (float& x : n) x /= len;
+  int32_t q[4] = { (int32_t) std::lround(n[0] * 32.f), (int32_t) std::lround(n[1] * 32.f), (int32_t) std::lround(n[2] * 32.f),
+                   (int32_t) std::lround((n[0] * a[0] + n[1] * a[1] + n[2] * a[2]) / 0.01f) };
+  facing = 1;
+  const int32_t lead = q[0] ? q[0] : q[1] ? q[1] : q[2];
+  if (lead < 0) { for (int32_t& x : q) x = -x; facing = 2; }
+  return 1ull << 63 | (uint64_t) (uint8_t) (q[0] + 64) | ((uint64_t) (uint8_t) (q[1] + 64) << 8) | ((uint64_t) (uint8_t) (q[2] + 64) << 16) | ((uint64_t) (uint32_t) q[3] << 24);
+}
+// pos: nine floats per triangle (its corners); keep: one flag per triangle. Returns how many are left out.
+inline uint32_t glassFrontTriangles(const float* pos, size_t triangles, std::vector<uint8_t>& keep) {
+  keep.assign(triangles, 1);
+  std::vector<uint64_t> keys(triangles); std::vector<uint8_t> facings(triangles);
+  std::unordered_map<uint64_t, uint8_t> first;   // a plane -> the facing met first
+  for (size_t t = 0; t < triangles; ++t) {
+    keys[t] = glassPlaneKey(pos + t * 9, pos + t * 9 + 3, pos + t * 9 + 6, facings[t]);
+    if (keys[t]) first.emplace(keys[t], facings[t]);
+  }
+  uint32_t dropped = 0;
+  for (size_t t = 0; t < triangles; ++t) if (keys[t] && facings[t] != first[keys[t]]) { keep[t] = 0; ++dropped; }
+  return dropped;
+}
 inline constexpr uint32_t kFrostedMarkerColour = 0xFFE0E6EAu;          // ARGB frosted pale grey: what it shows if the mod is not loaded
 inline constexpr uint64_t kFrostedMarkerHash = 0x6FBC67AF0CD76F66ull;  // XXH3-64 of its level 0; the mod's material name
 // ---- mirrors (milestone 101) -----------------------------------------------------------------

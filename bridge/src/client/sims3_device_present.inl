@@ -91,6 +91,9 @@ static void sims3LogStats(bool withTable) {
              h.waterDraws[sims3cam::kWaterPool], h.waterDraws[sims3cam::kWaterPond], h.waterDraws[sims3cam::kWaterSea], h.waterDraws[sims3cam::kWaterObject],
              h.waveDumped);
     Logger::info(msg);
+    snprintf(msg, sizeof msg, "Sims 3 camera hook:   glass sheets (milestone 104): %u draws sent without their back side (%llu triangles left out), %u meshes not read (a second position or an unknown type), %u unblended passes of a twice-drawn glass left out",
+             h.glassSideDraws, (unsigned long long) h.glassSideTris, h.glassSideSkipped, h.glassPassDropped);
+    Logger::info(msg);
     snprintf(msg, sizeof msg, "Sims 3 camera hook:   albedo sampler states (milestone 68): %u draws moved an albedo to stage 0 with sampler states differing from stage 0's, %u of them its sRGB flag",
              h.remapSamplerDraws, h.remapSrgbDraws);
     Logger::info(msg);

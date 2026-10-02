@@ -2644,6 +2644,22 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
       if (!wallDone_ && sims3cam::enabled() && !g_sims3.ourDraw && (sims3cam::terrainLotPlate() || sims3cam::lotGlow()) && g_sims3.drawCaptured
           && g_sims3.vsHash == sims3cam::kLotImpostorVs && Type == D3DPT_TRIANGLELIST)
         wallDone_ = sims3LotModelDraw(g_sims3, this, m_state, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount, currentUID);
+      if (!wallDone_ && sims3cam::enabled() && !g_sims3.ourDraw && g_sims3.glassIb && Type == D3DPT_TRIANGLELIST) {
+        // The Sims 3 camera hook: a glass sheet's back side left out (milestone 104): the kept triangles
+        // from the hook's own index buffer; the game's index buffer back afterwards
+        IDirect3DIndexBuffer9* gib_ = (IDirect3DIndexBuffer9*) bridge_cast<Direct3DIndexBuffer9_LSS*>(*m_state.indices);
+        if (gib_) gib_->AddRef();
+        SetIndices(g_sims3.glassIb);
+        {
+          ClientMessage c(Commands::IDirect3DDevice9Ex_DrawIndexedPrimitive, getId());
+          currentUID = c.get_uid();
+          const UINT start0_ = 0, prims_ = g_sims3.glassPrims;
+          c.send_many(Type, BaseVertexIndex, MinVertexIndex, NumVertices, start0_, prims_);
+        }
+        SetIndices(gib_); if (gib_) gib_->Release();
+        g_sims3.glassIb = nullptr;
+        wallDone_ = true;
+      }
       if (!wallDone_ && sims3cam::enabled() && g_sims3.splitDraw && Type == D3DPT_TRIANGLELIST && primCount >= 2) {
         // The Sims 3 camera hook: a lot's re-submission as two half draws (milestone 17r), each its
         // own geometry to the runtime's draw tracker; together they bake the same triangles.

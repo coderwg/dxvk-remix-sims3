@@ -1062,6 +1062,28 @@ int main() {
       const NamedGlass* doorFar = namedGlass(0x85e9c3381d5bf054ull); const NamedGlass* car = namedGlass(0x45c7a7cd511b5233ull); const NamedGlass* carFar = namedGlass(0xd03ebab11453bca1ull);
       CHECK(farOk && doorFar && doorFar->material == kFrostedGlass && car && car->material == kClearGlass && carFar && carFar->material == kClearGlass && !namedGlass(0x0c2df3be933b2117ull),
             "glass (M102): the shower door from further 85e9c338 frosted; the car windows 45c7a7cd and the distant car's d03ebab1 clear; the car body 0c2df3be not named; none of them cube-only");
+      // milestone 104: a sheet with a back side keeps one facing per plane; a pane with a thickness keeps both sides
+      {
+        auto tri = [](std::vector<float>& v, std::initializer_list<float> p) { v.insert(v.end(), p); };
+        std::vector<float> sheet;   // a 1 x 1 square in z = 0: front (+z) as two triangles, its back (-z) on the other diagonal
+        tri(sheet, { 0,0,0, 1,0,0, 1,1,0 }); tri(sheet, { 0,0,0, 1,1,0, 0,1,0 });
+        tri(sheet, { 0,0,0, 0,1,0, 1,0,0 }); tri(sheet, { 1,0,0, 0,1,0, 1,1,0 });
+        std::vector<uint8_t> keep;
+        const uint32_t d1 = glassFrontTriangles(sheet.data(), 4, keep);
+        const bool sheetOk = d1 == 2 && keep[0] && keep[1] && !keep[2] && !keep[3];
+        std::vector<float> pane = sheet;   // the back moved 2 cm behind: two planes, both kept
+        for (size_t i = 18; i < pane.size(); i += 3) pane[i + 2] = -0.02f;
+        const uint32_t d2 = glassFrontTriangles(pane.data(), 4, keep);
+        std::vector<float> two;   // two separate squares on one plane, facing the same way: both kept
+        tri(two, { 0,0,0, 1,0,0, 1,1,0 }); tri(two, { 5,0,0, 6,0,0, 6,1,0 });
+        const uint32_t d3 = glassFrontTriangles(two.data(), 2, keep);
+        std::vector<float> flat;   // a degenerate triangle has no plane and is kept
+        tri(flat, { 0,0,0, 1,0,0, 2,0,0 });
+        const uint32_t d4 = glassFrontTriangles(flat.data(), 1, keep);
+        const NamedGlass* carPass = namedGlass(0x45c7a7cd511b5233ull);
+        CHECK(sheetOk && d2 == 0 && d3 == 0 && d4 == 0 && keep.size() == 1 && keep[0] && carPass && carPass->blendedPassOnly && !namedGlass(0x572773cfbd618a3aull)->blendedPassOnly,
+              "glass (M104): a sheet's back side on the other diagonal is left out (%u of 4), a pane 2 cm thick keeps both sides (%u), coplanar sheets facing one way are kept (%u), a degenerate triangle is kept (%u); the parked cars' 45c7a7cd is glass on its blended pass only", d1, d2, d3, d4);
+      }
       // milestones 82, 101: the reflective sheet's PS 86dad57d reads only a cube; under the stencil test it is a mirror's face
       std::vector<DWORD> mp; PsAnalysis ma;
       const bool mirrorCube = !loadShader("ps_86dad57d0dc73989", mp) || (analyzePixelShader(mp.data(), mp.size(), ma) && isGlassShader(ma));

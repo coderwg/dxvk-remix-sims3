@@ -36,6 +36,8 @@ inline void sims3OnReset(Sims3Hook& h) {
   h.mirrorMarkerHash = 0; h.mirrorMarkerFailed = false;
   if (h.frostedMarker) { h.frostedMarker->Release(); h.frostedMarker = nullptr; }
   h.glassMarkerHash = 0; h.glassMarkerFailed = false; h.frostedMarkerHash = 0; h.frostedMarkerFailed = false; h.blendOurs = false;
+  for (auto& g : h.glassSides) if (g.second.ib) g.second.ib->Release();
+  h.glassSides.clear(); h.glassIb = nullptr; h.glassPrims = 0;
   h.markerFailed = false; h.markersConfigSent = false; h.terrainFreeStage = -1; h.tblockActive = false; h.tblockStage = -1; h.tblockSet = 0; h.tblockSrgb = 0; h.ourSampler = false; h.psBound = nullptr; h.vsTerrain = nullptr; h.lotFurtherCopy = false; h.swappingPs = false;
   h.cwOurs = false; h.atOurs = false; h.fogOurs = false;
   h.compositePass = 0; h.extraActive = false; h.splitDraw = false; h.ourConsts = false; h.reissue = false; h.reissueKind = 0; h.compositeSecond = false;
@@ -109,6 +111,68 @@ bool sims3WallBackSide(Sims3Hook& h, Dev* dev) {
   }
   for (uint64_t k : it->second) if (k) kept.insert(k);
   return false;
+}
+
+// A glass draw's sheets with a back side (milestone 104, sims3cam::glassFrontTriangles): the kept
+// triangles, as an index buffer of the hook's own made once per mesh (buffers, their versions, range)
+// and sent in the game's place; none when nothing is left out or the mesh is not read -- indexed
+// triangle lists with one POSITION only (the parked cars' VS a77613ea adds a second one to the first:
+// POSITION alone is not their place).
+template<typename Dev>
+void sims3GlassOneSide(Sims3Hook& h, Dev* dev) {
+  h.glassIb = nullptr; h.glassPrims = 0;
+  if (!h.drawIndexed || h.drawType != D3DPT_TRIANGLELIST || !h.declElems || h.drawPrims == 0) return;
+  const D3DVERTEXELEMENT9* pe = nullptr; bool second = false;
+  for (const D3DVERTEXELEMENT9* e = h.declElems; e->Stream != 0xFF; ++e) if (e->Usage == D3DDECLUSAGE_POSITION) { if (e->UsageIndex == 0) pe = e; else second = true; }
+  const uint32_t bytes = pe ? sims3cam::declTypeBytes((uint8_t) pe->Type) : 0u;
+  if (!pe || second || bytes == 0) { ++h.glassSideSkipped; return; }
+  IDirect3DVertexBuffer9* vb = nullptr; UINT off = 0, stride = 0;
+  if (FAILED(dev->GetStreamSource(pe->Stream, &vb, &off, &stride)) || !vb) return;
+  vb->Release();
+  IDirect3DIndexBuffer9* ib = nullptr;
+  if (FAILED(dev->GetIndices(&ib)) || !ib) return;
+  ib->Release();
+  auto* lvb = bridge_cast<Direct3DVertexBuffer9_LSS*>(vb); auto* lib = bridge_cast<Direct3DIndexBuffer9_LSS*>(ib);
+  if (!lvb || !lib || stride == 0) return;
+  struct { uint32_t vbId, vbVer, ibId, ibVer, off, stride; int32_t base; uint32_t start, prims, posOff, posType; } pk = {
+    (uint32_t) lvb->getId(), lvb->sims3Version, (uint32_t) lib->getId(), lib->sims3Version, off, stride, h.drawBase, h.drawStart, h.drawPrims, (uint32_t) pe->Offset, (uint32_t) pe->Type };
+  const uint64_t key = sims3cam::fnv1a64(&pk, sizeof pk);
+  auto it = h.glassSides.find(key);
+  if (it == h.glassSides.end()) {
+    if (h.glassSides.size() >= 1024u) { for (auto& g : h.glassSides) if (g.second.ib) g.second.ib->Release(); h.glassSides.clear(); }
+    Sims3Hook::GlassSide side; side.prims = h.drawPrims;
+    const uint8_t* vd = lvb->sims3Data(); const uint8_t* id = lib->sims3Data();
+    const bool ib32 = lib->getDesc().Format == D3DFMT_INDEX32;
+    const size_t isz = ib32 ? 4u : 2u, n = (size_t) h.drawPrims * 3u;
+    bool ok = vd && id && ((size_t) h.drawStart + n) * isz <= lib->sims3Size();
+    std::vector<uint32_t> idx(ok ? n : 0); std::vector<float> pos(ok ? n * 3 : 0);
+    for (size_t i = 0; ok && i < n; ++i) {
+      idx[i] = sims3cam::readIndex(id, (size_t) h.drawStart + i, ib32);
+      const int64_t v = (int64_t) h.drawBase + (int64_t) idx[i];
+      const size_t at = (size_t) off + (size_t) v * stride + (size_t) pe->Offset;
+      if (v < 0 || at + bytes > lvb->sims3Size()) { ok = false; break; }
+      float f[4] = {}; sims3cam::declDecode((uint8_t) pe->Type, vd + at, f);
+      if ((pe->Type == D3DDECLTYPE_SHORT4 || pe->Type == D3DDECLTYPE_SHORT4N) && f[3] != 0.f) for (int c = 0; c < 3; ++c) f[c] /= f[3];   // the game's shaders divide a packed position by its w
+      memcpy(&pos[i * 3], f, 12);
+    }
+    if (ok) {
+      std::vector<uint8_t> keep;
+      side.dropped = sims3cam::glassFrontTriangles(pos.data(), h.drawPrims, keep);
+      if (side.dropped && side.dropped < h.drawPrims) {
+        std::vector<uint32_t> kept; kept.reserve((size_t) (h.drawPrims - side.dropped) * 3u);
+        for (size_t t = 0; t < keep.size(); ++t) if (keep[t]) { kept.push_back(idx[t * 3]); kept.push_back(idx[t * 3 + 1]); kept.push_back(idx[t * 3 + 2]); }
+        side.ib = sims3MakeIndexBuffer(dev, kept);
+        side.prims = h.drawPrims - side.dropped;
+      }
+      if (side.dropped && h.glassSideLogged < 12u) {
+        ++h.glassSideLogged;
+        Logger::info(format_string("Sims 3 camera hook: glass with a back side at frame %u -> VS %016llx PS %016llx: %u of %u triangles face away on a plane the sheet already covers, left out%s",
+                                   h.frames + 1, (unsigned long long) h.vsHash, (unsigned long long) h.psHash, side.dropped, h.drawPrims, side.ib ? "" : " -- not sent (no index buffer)"));
+      }
+    }
+    it = h.glassSides.emplace(key, side).first;
+  }
+  if (it->second.ib) { h.glassIb = it->second.ib; h.glassPrims = it->second.prims; ++h.glassSideDraws; h.glassSideTris += it->second.dropped; }
 }
 
 // Diagnostic (milestone 103; goes once answered): at the mark key, one line per glass draw of the next
@@ -187,10 +251,10 @@ void sims3GlassAtMark(Sims3Hook& h, Dev* dev, const DWORD* rs, int k) {
   if (h.drawGlass) snprintf(what, sizeof what, "%s", h.glassWhat);
   else if (k < 0) snprintf(what, sizeof what, "not glass, no colour texture (a cube at stage 0)");
   else snprintf(what, sizeof what, "not glass, sent with stage %d", k);
-  Logger::info(format_string("Sims 3 camera hook: glass at the mark, frame %u #%u: %s | VS %016llx PS %016llx | game blend %d cull %lu z %lu/%lu | vb %u +%u /%u pos type %d, ib %u base %d start %u prims %u%s | bounds (%.3f %.3f %.3f)-(%.3f %.3f %.3f) | c0-c2 w %.2f %.2f %.2f | planes: %u triangles, %u with one facing the other way in this draw, %u on an earlier line's plane facing the same way, %u the other way (first #%u)",
+  Logger::info(format_string("Sims 3 camera hook: glass at the mark, frame %u #%u: %s | VS %016llx PS %016llx | game blend %d cull %lu z %lu/%lu | vb %u +%u /%u pos type %d, ib %u base %d start %u prims %u%s | bounds (%.3f %.3f %.3f)-(%.3f %.3f %.3f) | c0-c2 w %.2f %.2f %.2f | planes: %u triangles, %u with one facing the other way in this draw, %u on an earlier line's plane facing the same way, %u the other way (first #%u); sent %u",
                              h.frames + 1, line, what, (unsigned long long) h.vsHash, (unsigned long long) h.psHash, blended ? 1 : 0, rs[D3DRS_CULLMODE], rs[D3DRS_ZENABLE], rs[D3DRS_ZWRITEENABLE],
                              lvb ? (unsigned) lvb->getId() : 0u, off, stride, pe ? (int) pe->Type : -1, lib ? (unsigned) lib->getId() : 0u, (int) h.drawBase, h.drawStart, h.drawPrims, h.drawIndexed ? "" : " (not indexed)",
-                             lo[0], lo[1], lo[2], hi[0], hi[1], hi[2], c[3], c[7], c[11], tris, backs, sameWay, otherWay, firstLine));
+                             lo[0], lo[1], lo[2], hi[0], hi[1], hi[2], c[3], c[7], c[11], tris, backs, sameWay, otherWay, firstLine, h.glassIb ? h.glassPrims : h.drawPrims));
 }
 
 // Before every draw of the game (not the hook's own restore quad). A captured draw -- the main
@@ -202,6 +266,7 @@ void sims3GlassAtMark(Sims3Hook& h, Dev* dev, const DWORD* rs, int k) {
 // into an offscreen target its emulation. Returns whether the draw is captured.
 template<typename Dev>
 bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
+  h.glassIb = nullptr; h.glassPrims = 0;
   if (h.mergePending >= 0 && !h.reissue) {   // a square's shape that was not sent after its piece (the piece took another way out): next piece then
     if ((size_t) h.mergePending < h.squares.size()) h.squares[(size_t) h.mergePending].mergedFrame = 0xFFFFFFFFu;
     h.mergePending = -1; ++h.mergeSkipped;
@@ -219,6 +284,10 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
   if (h.vsHash == sims3cam::kLotPictureVs) { h.drawDropped = true; h.drawCaptured = false; h.dropWhy = "lot picture"; ++h.lotPictureDropped; return false; }
   // a mirror's face (milestone 101, sims3cam::isReflectiveSheet): the mirror material below
   h.reflectiveSheet = h.psAuto && h.psAuto->valid && sims3cam::isReflectiveSheet(*h.psAuto, rs[D3DRS_STENCILENABLE]);
+  // a glass the game draws twice, unblended then blended (milestone 104, NamedGlass::blendedPassOnly): the unblended pass left out
+  if (const sims3cam::NamedGlass* g = sims3cam::namedGlass(h.psHash)) if (g->blendedPassOnly && !rs[D3DRS_ALPHABLENDENABLE]) {
+    h.drawDropped = true; h.drawCaptured = false; h.dropWhy = "glass's unblended pass"; ++h.glassPassDropped; return false;
+  }
   // a zero-thickness wall's back side (milestone 97, sims3cam::isWallBackSide): left out
   if (h.drawIndexed && h.drawType == D3DPT_TRIANGLELIST && h.wallLayout.valid && h.vsWall && h.vsWall->valid && sims3WallBackSide(h, dev)) {
     h.drawDropped = true; h.drawCaptured = false; h.dropWhy = "wall back side"; ++h.wallBackDropped; return false;
@@ -273,6 +342,7 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
       h.blendSaved = rs[D3DRS_ALPHABLENDENABLE]; h.blendOurs = true;
       h.ourState = true; dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE); h.ourState = false;
       if (water) ++h.waterDraws[waterMat]; else if (mirror) ++h.mirrorDraws; else if (frosted) ++h.frostedDraws; else ++h.glassDraws;
+      if (frosted || glass) sims3GlassOneSide(h, dev);   // a sheet's back side left out (milestone 104)
       h.glassWhat = water ? sims3cam::kWaterMaterial[waterMat].name : mirror ? "mirror" : frosted ? "frosted glass" : "glass";
       bool seen = false; for (uint32_t i = 0; i < h.glassLogged; ++i) if (h.glassLoggedPs[i] == h.psHash) seen = true;
       if (!seen && h.glassLogged < 32) {
