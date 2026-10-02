@@ -232,11 +232,7 @@ struct Sims3Hook {
   std::unordered_map<uint64_t, GlassSide> glassSides;
   IDirect3DIndexBuffer9* glassIb = nullptr; uint32_t glassPrims = 0;
   uint32_t glassSideDraws = 0, glassSideSkipped = 0, glassSideLogged = 0, glassPassDropped = 0; uint64_t glassSideTris = 0;
-  // diagnostic (milestone 103; goes once answered): the mark's glass draws (sims3GlassAtMark)
-  const char* glassWhat = "";           // this draw's glass material
-  const D3DVERTEXELEMENT9* declElems = nullptr;   // the bound declaration's elements
-  uint32_t glassMarkLines = 0;
-  std::unordered_map<uint64_t, uint32_t> glassMarkPlanes;   // a plane (either facing) -> the first line on it << 2 | the facings seen
+  const D3DVERTEXELEMENT9* declElems = nullptr;   // the bound declaration's elements (its POSITION, for the back side)
   // the lot paint composite's two passes (milestone 17l, sims3cam::lotCompositeStage): the pass
   // being issued (0 = the game's own draw, pass 1; 2 = the hook's second pass, milestone 19), and
   // pass 2's black marker at stages 1 and 2 (what they held, put back in sims3EndDraw)

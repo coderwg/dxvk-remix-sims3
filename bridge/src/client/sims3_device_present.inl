@@ -91,7 +91,7 @@ static void sims3LogStats(bool withTable) {
              h.waterDraws[sims3cam::kWaterPool], h.waterDraws[sims3cam::kWaterPond], h.waterDraws[sims3cam::kWaterSea], h.waterDraws[sims3cam::kWaterObject],
              h.waveDumped);
     Logger::info(msg);
-    snprintf(msg, sizeof msg, "Sims 3 camera hook:   glass sheets (milestone 104): %u draws sent without their back side (%llu triangles left out), %u meshes not read (a second position or an unknown type), %u unblended passes of a twice-drawn glass left out",
+    snprintf(msg, sizeof msg, "Sims 3 camera hook:   glass sheets (milestone 104): %u draws sent without their back side (%llu triangles left out), %u draws whose mesh is not read (a second position or an unknown type), %u unblended passes of a twice-drawn glass left out",
              h.glassSideDraws, (unsigned long long) h.glassSideTris, h.glassSideSkipped, h.glassPassDropped);
     Logger::info(msg);
     snprintf(msg, sizeof msg, "Sims 3 camera hook:   albedo sampler states (milestone 68): %u draws moved an albedo to stage 0 with sampler states differing from stage 0's, %u of them its sRGB flag",
@@ -159,7 +159,7 @@ void sims3OnPresent(Sims3Hook& h, Dev* dev) {
   sims3TerrainBlockEnd(h, dev);   // the frame is over: the game's sampler states back (milestone 18g)
   {
     const bool f9 = ((GetAsyncKeyState(VK_F9) | GetAsyncKeyState(sims3cam::markKey()) | GetAsyncKeyState(VK_OEM_3)) & 0x8000) != 0;   // F9, the configured key (sims3hook.txt markKey) or backtick
-    if (f9 && !h.f9Down) { h.markDump = 2; h.glassMarkLines = 0; h.glassMarkPlanes.clear(); }   // the lit lamps and the fog, logged once; the next frame's glass (milestone 103)
+    if (f9 && !h.f9Down) h.markDump = 2;   // the lit lamps and the fog, logged once
     else if (h.markDump) --h.markDump;
     h.f9Down = f9;
   }

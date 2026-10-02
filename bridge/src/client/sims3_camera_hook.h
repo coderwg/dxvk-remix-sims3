@@ -1905,11 +1905,12 @@ inline const NamedGlass* namedGlass(uint64_t hash) { return findByHash(kNamedGla
 // ---- a glass sheet's back side (milestone 104) -------------------------------------------------
 // A glass sheet the game models with both sides -- a passing car's windshield (all 36 triangles, run
 // 215), the shower door's panel (8 of its 20, runs 215-216) -- has its two sides on one plane, facing
-// opposite ways. The game culls the side turned away; the ray tracer meets both in the same place:
-// the windshield clipped and grainy at angles, the door's frost lost with distance (which side a ray
-// meets first flips). On a plane that carries both facings within one draw, the triangles of the
-// facing met second are left out. Planes are compared to 1/32 in direction and 0.01 in offset (the
-// mesh's own units); a pane with a thickness has its sides on two planes and keeps both.
+// opposite ways. The game culls the side turned away; the ray tracer meets both in the same place: the
+// windshield clipped and grainy at angles (run 217 with one side: "a little noisy when moving the
+// camera"; the door's frost still goes with distance, so not this). On a plane that carries both
+// facings within one draw, the triangles of the facing met second are left out. Planes are compared
+// to 1/32 in direction and 0.01 in offset (the mesh's own units); a pane with a thickness has its
+// sides on two planes and keeps both.
 inline uint64_t glassPlaneKey(const float* a, const float* b, const float* c, uint8_t& facing) {
   const float e1[3] = { b[0] - a[0], b[1] - a[1], b[2] - a[2] }, e2[3] = { c[0] - a[0], c[1] - a[1], c[2] - a[2] };
   float n[3] = { e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0] };
