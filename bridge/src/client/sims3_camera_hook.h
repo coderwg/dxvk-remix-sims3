@@ -1869,7 +1869,7 @@ inline bool chooseAutoAlbedo(const PsAnalysis& a, const bool color2D[16], const 
 // 2D texture there as an opaque albedo, so every glass draw goes out with one of the hook's markers at
 // stage 0 and blending off; the Sims3Glass mod (sims3/remix-mod/Sims3Glass/mod.usda) makes each
 // marker's hash a glass (kGlassMaterial): clear (thin, IOR 1.5), car glass (tinted, about 75 % through)
-// or the plumbob's (a glowing green gem, milestone 114). Bumpy glass
+// or the plumbob's (a green gem, milestone 114; its glow off in 115). Bumpy glass
 // is the clear glass with the game's own bump map (milestone 109, the user's choice over the frosted
 // glass of milestones 88-108): the bump map itself at stage 0, its hash naming its material in the
 // Sims3GlassBumps mod (sims3GlassBump). Forms 2 and 3 share their samplers' signature with
@@ -1893,7 +1893,7 @@ inline constexpr uint8_t kClearGlass = 0, kCarGlass = 1, kPlumbob = 2, kGlassMat
 inline const GlassMaterial kGlassMaterial[kGlassMaterials] = {
   { "glass", 0xFFB8C8D0u, 0x5E30D0B82C246E6Cull },       // pale grey-blue: thin, clear
   { "car glass", 0xFFA0B4ACu, 0x8A5EDD7D16D8E741ull },   // grey-green: thin, tinted (0.72, 0.78, 0.75)
-  { "plumbob", 0xFF40E060u, 0x55B2C95B88DA3E67ull },     // green: a solid green gem that glows (milestone 114)
+  { "plumbob", 0xFF40E060u, 0x55B2C95B88DA3E67ull },     // green: a solid green gem (milestone 114; no glow since 115)
 };
 // blendedPassOnly: the game draws the glass twice a frame, the same mesh unblended with depth writes,
 // then blended (a parked car's windows, run 215); only the blended pass goes out (milestone 104),
@@ -1903,7 +1903,7 @@ struct NamedGlass { uint64_t hash; const char* name; uint8_t material; bool blen
 inline const NamedGlass kNamedGlass[] = {
   // form 2, clear: the scene behind, no normal map
   { 0x2b1da1b45f51d3f9ull, "the plumbob over the active Sim (run 219), ps_2_0: reflection, highlights, Fresnel, the scene behind (s1) x c10 "
-                           "-- its green (VS ddc6be9f; 966k draws in 155 runs) -> a glowing green gem (the user, milestone 114)", kPlumbob },
+                           "-- its green (VS ddc6be9f; 966k draws in 155 runs) -> green glass (the user: milestone 114; no glow 'for now', 115)", kPlumbob },
   { 0x85e9c3381d5bf054ull, "glass, a decorative glass object on a table (run 218): reflection, Fresnel, the scene behind (s1) lerped to c10 "
                            "(VS b3e88e28, skinned; also VS d251510d; runs 201-218)", kClearGlass },
   { 0x8ff495765d26a6fdull, "glass: as 85e9c338 (VS 2 kinds; 21 runs)", kClearGlass },

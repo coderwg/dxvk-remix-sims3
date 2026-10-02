@@ -1208,15 +1208,15 @@ int main() {
       CHECK(ch == kGlassMaterial[kCarGlass].hash && cat != std::string::npos && cend != std::string::npos && u.find("thin_walled = 1", cat) < cend && u.find("use_diffuse_layer = 0", cat) < cend
             && u.find("transmittance_color = (0.72, 0.78, 0.75)", cat) < cend,
             "car glass (M105): the marker's level-0 hash 0x%016llX names the tinted thin glass %s in Sims3Glass/mod.usda", (unsigned long long) ch, cname);
-      // milestone 114: the plumbob's marker names a solid, glowing green gem; the three glass markers differ
+      // milestones 114-115: the plumbob's marker names a solid green gem, no glow; the three glass markers differ
       for (auto& p : gm) p = kGlassMaterial[kPlumbob].colour;
       const uint64_t ph = (uint64_t) XXH3_64bits(gm, sizeof gm);
       char pname[32]; snprintf(pname, sizeof pname, "mat_%016llX", (unsigned long long) ph);
       const size_t pat = u.find(pname);
       const size_t pend = pat == std::string::npos ? pat : u.find("token outputs:out", pat);
-      CHECK(ph == kGlassMaterial[kPlumbob].hash && pat != std::string::npos && pend != std::string::npos && u.find("thin_walled = 0", pat) < pend && u.find("enable_emission = 1", pat) < pend
-            && u.find("emissive_color_constant", pat) < pend && kGlassMaterial[0].hash != kGlassMaterial[1].hash && kGlassMaterial[1].hash != kGlassMaterial[2].hash && kGlassMaterial[0].hash != kGlassMaterial[2].hash,
-            "plumbob (M114): the marker's level-0 hash 0x%016llX names the glowing green gem %s in Sims3Glass/mod.usda (solid, emissive)", (unsigned long long) ph, pname);
+      CHECK(ph == kGlassMaterial[kPlumbob].hash && pat != std::string::npos && pend != std::string::npos && u.find("thin_walled = 0", pat) < pend && u.find("transmittance_color = (0.25, 0.85, 0.3)", pat) < pend
+            && u.find("enable_emission", pat) > pend && kGlassMaterial[0].hash != kGlassMaterial[1].hash && kGlassMaterial[1].hash != kGlassMaterial[2].hash && kGlassMaterial[0].hash != kGlassMaterial[2].hash,
+            "plumbob (M114, M115): the marker's level-0 hash 0x%016llX names the green gem %s in Sims3Glass/mod.usda (solid, no glow)", (unsigned long long) ph, pname);
     }
     CHECK(kLotCompositePs == 0x99ee53ff6ef1b0b6ull && lotCompositeStage(0) == 0 && lotCompositeStage(1) == 4 && lotCompositeStage(2) == 3, "lot composite: pass 1 reads the mask from s4 (layer 4 out), pass 2 from s3 (layer 3 out)");
     std::vector<DWORD> lit, world, layer, comp, lit2, lit3, lit4;
