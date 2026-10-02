@@ -1931,9 +1931,8 @@ inline constexpr uint32_t kWaterMarkerColour = 0xFF8CC4C8u;          // ARGB pal
 inline constexpr uint64_t kWaterMarkerHash = 0x2723DD62C28E1456ull;  // XXH3-64 of its level 0; the mod's material name
 inline constexpr uint32_t kNaturalWaterMarkerColour = 0xFF6E9C8Cu;          // ARGB muted green-teal: natural water without the mod
 inline constexpr uint64_t kNaturalWaterMarkerHash = 0x52B04DF3E566CA55ull;  // XXH3-64 of its level 0; the mod's material name
-// The game's wave maps (milestone 93, a diagnostic; goes once the mod's normal maps are made from
-// them): a water draw's 2D textures in these formats are written once each to
-// rtx-remix\logs\sims3-textures, level 0 as stored.
+// The game's wave maps (milestone 93): a water draw's 2D textures in these formats are written to
+// rtx-remix\logs\sims3-textures when missing, level 0 as stored -- the source of the mod's ripple maps.
 inline bool isWaveMapFormat(uint32_t fmt) { return fmt == 21u /* A8R8G8B8 */ || fmt == 22u /* X8R8G8B8 */ || fmt == 63u /* Q8W8V8U8 */; }
 
 // ---- which texture coordinates the runtime samples with (milestone 3g) -------------------

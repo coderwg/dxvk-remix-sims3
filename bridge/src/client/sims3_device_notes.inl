@@ -53,9 +53,11 @@ void sims3NoteDecl(Sims3Hook& h, IDirect3DVertexDeclaration9* pDecl) {
   if (pLssVtxDecl) sims3cam::wallLayoutFromDecl(pLssVtxDecl->sims3Elements(), h.wallLayout);
 }
 
-// Diagnostic (milestone 93; goes once the mod's normal maps are made): a water draw's wave maps -- its
-// bound 2D textures in a wave-map format (sims3cam::isWaveMapFormat) -- written once each, level 0 as the
-// client keeps it, to rtx-remix\logs\sims3-textures\water_<pixel shader>_s<stage>_<w>x<h>_<format>.raw.
+// The game's wave maps (milestone 93): a water draw's bound 2D textures in a wave-map format
+// (sims3cam::isWaveMapFormat), level 0 as the client keeps it, to
+// rtx-remix\logs\sims3-textures\water_<pixel shader>_s<stage>_<w>x<h>_<format>.raw -- the source of the
+// Remix mod's ripple normal maps (sims3/remix-mod/make_textures.py --waves), which are game data and not in
+// the repository. A file is written only when it is missing (milestone 98).
 inline void sims3DumpWaveMaps(Sims3Hook& h) {
   for (DWORD s = 0; s < 16 && h.waveDumped < 32u; ++s) {
     if (h.boundKind[s] != 1 || !sims3cam::isWaveMapFormat(h.boundFmt[s]) || !h.boundTex[s]) continue;   // 2D, not a render target
@@ -77,6 +79,7 @@ inline void sims3DumpWaveMaps(Sims3Hook& h) {
     }
     char fb[16], path[MAX_PATH + 96];
     snprintf(path, sizeof path, "%s\\water_%016llx_s%u_%ux%u_%s.raw", dir, (unsigned long long) h.psHash, (unsigned) s, (unsigned) d.Width, (unsigned) d.Height, sims3FormatName(d.Format, fb, sizeof fb));
+    if (GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES) continue;   // already there
     FILE* f = nullptr;
     if (fopen_s(&f, path, "wb") == 0 && f) {
       fwrite(data, 1, bridge_util::calcTotalSizeOfRect(d.Width, d.Height, d.Format), f);
@@ -86,40 +89,3 @@ inline void sims3DumpWaveMaps(Sims3Hook& h) {
   }
 }
 
-// Diagnostic (milestone 84; goes once answered): at the mark key, one line per draw of the next frame
-// -- what the runtime is handed: sent, sent as glass, not captured, or left out (why); the stage-0
-// texture it sees; the states and the geometry. Two marks of one view (the shower door transparent,
-// then grey) differ by the draws that make the difference.
-template<typename St>
-void sims3DumpDraw(Sims3Hook& h, const St& st) {
-  if (h.markDump != 2 || h.diagLines >= 6000) return;
-  ++h.diagLines;
-  char tex[128] = "none";
-  if (*st.textures[0] != nullptr) {
-    if (st.textureTypes[0] == D3DRTYPE_CUBETEXTURE) snprintf(tex, sizeof tex, "CUBE");
-    else if (st.textureTypes[0] == D3DRTYPE_TEXTURE) {
-      auto* t = bridge_cast<Direct3DTexture9_LSS*>(*st.textures[0]);
-      const D3DSURFACE_DESC d = t->getLevelDesc(0); char fb[16];
-      // the runtime's texture hash (milestone 95c): XXH3 of level 0's bytes as the client keeps them
-      uint64_t th = 0;
-#if SIMS3_HAVE_XXHASH
-      if (const uint8_t* data = t->sims3Level0Data()) th = (uint64_t) XXH3_64bits(data, bridge_util::calcTotalSizeOfRect(d.Width, d.Height, d.Format));
-#endif
-      snprintf(tex, sizeof tex, "%s %ux%u%s id %u hash %016llX", sims3FormatName((uint32_t) d.Format, fb, sizeof fb), d.Width, d.Height, (d.Usage & D3DUSAGE_RENDERTARGET) ? " RT" : "", (unsigned) t->getId(), (unsigned long long) th);
-    } else snprintf(tex, sizeof tex, "VOLUME");
-  }
-  auto* vb = *st.streams[0] ? bridge_cast<Direct3DVertexBuffer9_LSS*>(*st.streams[0]) : nullptr;
-  auto* ib = *st.indices ? bridge_cast<Direct3DIndexBuffer9_LSS*>(*st.indices) : nullptr;
-  const DWORD* rs = st.renderStates.data();
-  const char* what = h.drawDropped ? h.dropWhy : !h.drawCaptured ? "not captured" : h.drawGlass ? "GLASS" : "sent";
-  char range[64];
-  if (h.drawIndexed) snprintf(range, sizeof range, "base %d start %u prims %u", h.drawBase, h.drawStart, h.drawPrims);
-  else snprintf(range, sizeof range, "DP");
-  char m[480];
-  snprintf(m, sizeof m, "Sims 3 camera hook: dump frame %u #%u -> %s | VS %016llx PS %016llx | stage 0: %s | vb %u +%u /%u ib %u | %s | cull %lu stencil %lu z %lu %lu/%lu blend %lu %lu/%lu atest %lu cw %lx",
-           h.frames + 1, h.diagLines, what, (unsigned long long) h.vsHash, (unsigned long long) h.psHash, tex,
-           vb ? (unsigned) vb->getId() : 0u, (unsigned) st.streamOffsets[0], (unsigned) st.streamStrides[0], ib ? (unsigned) ib->getId() : 0u, range,
-           (unsigned long) rs[D3DRS_CULLMODE], (unsigned long) rs[D3DRS_STENCILENABLE], (unsigned long) rs[D3DRS_ZENABLE], (unsigned long) rs[D3DRS_ZWRITEENABLE], (unsigned long) rs[D3DRS_ZFUNC],
-           (unsigned long) rs[D3DRS_ALPHABLENDENABLE], (unsigned long) rs[D3DRS_SRCBLEND], (unsigned long) rs[D3DRS_DESTBLEND], (unsigned long) rs[D3DRS_ALPHATESTENABLE], (unsigned long) rs[D3DRS_COLORWRITEENABLE]);
-  Logger::info(m);
-}

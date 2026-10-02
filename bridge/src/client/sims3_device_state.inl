@@ -211,18 +211,17 @@ struct Sims3Hook {
   IDirect3DTexture9* waterMarker = nullptr; uint64_t waterMarkerHash = 0; bool waterMarkerFailed = false; uint32_t waterDraws = 0;   // water (milestone 86)
   IDirect3DTexture9* frostedMarker = nullptr; uint64_t frostedMarkerHash = 0; bool frostedMarkerFailed = false; uint32_t frostedDraws = 0;   // frosted glass (milestone 88)
   IDirect3DTexture9* naturalWaterMarker = nullptr; uint64_t naturalWaterMarkerHash = 0; bool naturalWaterMarkerFailed = false; uint32_t naturalWaterDraws = 0;   // natural water (milestone 93)
-  uint32_t waveDumpedIds[32] = {}; uint32_t waveDumped = 0;   // the game's wave maps written (milestone 93, a diagnostic)
+  uint32_t waveDumpedIds[32] = {}; uint32_t waveDumped = 0;   // the game's wave maps looked at (milestone 93): the mod's ripple maps' source
   // a zero-thickness wall's back side (milestone 97): each wall piece's triangle keys (cached by buffers,
   // versions and range), and this frame's kept wall triangles per vertex buffer
   std::unordered_map<uint64_t, std::vector<uint64_t>> wallPieceTris;
   std::unordered_map<uint32_t, std::unordered_set<uint64_t>> wallFrameTris;
-  uint32_t wallBackDropped = 0, wallBackLogged = 0, wallDumpFiles = 0;   // ... and the mark's wall-piece files (milestone 97b, a diagnostic)
+  uint32_t wallBackDropped = 0, wallBackLogged = 0;
   DWORD blendSaved = 0; bool blendOurs = false;
   uint32_t glassDraws = 0, glassLogged = 0; uint64_t glassLoggedPs[8] = {};
   uint32_t mirrorSurfaceDropped = 0;   // the planar-reflection surface passes left out (milestone 82)
   bool drawGlass = false;               // this draw went out as glass
   const char* dropWhy = "";             // why this draw was left out (the mark key's dump)
-  uint32_t diagLines = 0;               // the mark key's dump lines (diagnostic, milestone 84)
   // the lot paint composite's two passes (milestone 17l, sims3cam::lotCompositeStage): the pass
   // being issued (0 = the game's own draw, pass 1; 2 = the hook's second pass, milestone 19), and
   // pass 2's black marker at stages 1 and 2 (what they held, put back in sims3EndDraw)
