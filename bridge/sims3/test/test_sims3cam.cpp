@@ -1075,7 +1075,7 @@ int main() {
       {
         struct Bumpy { uint64_t hash; const char* dump; int texcoord; int scaleReg; };
         const Bumpy bumpy[] = { { 0x572773cfbd618a3aull, "ps_572773cfbd618a3a", 5, 14 }, { 0x8fe3ce7c5fbc6234ull, "ps_8fe3ce7c5fbc6234", 5, 14 },
-                                { 0x910a56f24813e248ull, "ps_910a56f24813e248", 5, 14 }, { 0xa9336d35a25143aeull, "ps_a9336d35a25143ae", 4, -1 } };
+                                { 0xa9336d35a25143aeull, "ps_a9336d35a25143ae", 4, -1 } };
         bool bumpOk = true; int bumpRead = 0;
         for (const Bumpy& b : bumpy) {
           const NamedGlass* g = namedGlass(b.hash);
@@ -1089,8 +1089,8 @@ int main() {
         }
         int others = 0; for (const NamedGlass& g : kNamedGlass) if (g.bumpStage >= 0) ++others;
         const std::vector<uint64_t> parsed = modMaterialHashes("def Material \"mat_0123456789ABCDEF\"\n{ }\ndef Material \"mat_FEDCBA9876543210\"\ndef Material \"mat_XYZ\"");
-        CHECK(bumpOk && others == 4 && parsed.size() == 2 && parsed[0] == 0x0123456789ABCDEFull && parsed[1] == 0xFEDCBA9876543210ull,
-              "bumpy glass (M109): 572773cf / 8fe3ce7c / 910a56f2 (c14.x) and a9336d35 read their bump map at s2 plainly at TEXCOORD5 / 4 (%d of 4 dumps read); only they have a bump stage; a mod's material hashes parsed", bumpRead);
+        CHECK(bumpOk && others == 3 && namedGlass(0x910a56f24813e248ull) && namedGlass(0x910a56f24813e248ull)->bumpStage < 0 && parsed.size() == 2 && parsed[0] == 0x0123456789ABCDEFull && parsed[1] == 0xFEDCBA9876543210ull,
+              "bumpy glass (M109, M111): 572773cf / 8fe3ce7c (c14.x) and a9336d35 read their bump map at s2 plainly at TEXCOORD5 / 4 (%d of 3 dumps read); only they have a bump stage -- the unplayable lot's windows 910a56f2 are plain clear glass; a mod's material hashes parsed", bumpRead);
       }
       // milestone 104: a sheet with a back side keeps one facing per plane; a pane with a thickness keeps both sides
       {

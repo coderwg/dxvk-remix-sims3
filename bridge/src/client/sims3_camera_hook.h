@@ -1894,20 +1894,22 @@ struct NamedGlass { uint64_t hash; const char* name; uint8_t material; bool blen
 inline const NamedGlass kNamedGlass[] = {
   // form 2, clear: the scene behind, no normal map
   { 0x2b1da1b45f51d3f9ull, "glass, ps_2_0: reflection, highlights, Fresnel, the scene behind (s1) x c10 (VS ddc6be9f; 966k draws in 155 runs)", kClearGlass },
-  { 0x85e9c3381d5bf054ull, "glass: reflection, Fresnel, the scene behind (s1) lerped to c10 (VS b3e88e28, skinned; also VS d251510d; runs 201-214)", kClearGlass },
+  { 0x85e9c3381d5bf054ull, "glass, a decorative glass object on a table (run 218): reflection, Fresnel, the scene behind (s1) lerped to c10 "
+                           "(VS b3e88e28, skinned; also VS d251510d; runs 201-218)", kClearGlass },
   { 0x8ff495765d26a6fdull, "glass: as 85e9c338 (VS 2 kinds; 21 runs)", kClearGlass },
   { 0x7eeb349a23cbefefull, "glass: as 85e9c338, a colour texture s2 x c11 over the reflection (4 runs)", kClearGlass },
+  { 0x910a56f24813e248ull, "glass, an unplayable lot's windows, outside (run 218; VS c96f1465): as 572773cf, its colour s3 x c10 tinting the "
+                           "scene behind -- the clear glass as the household windows, its bump map (slopes x 5) left out: the user's choice", kClearGlass },
   // form 2, bumpy: a normal map bends the scene behind -- its x in alpha, its y in blue, at TEXCOORD5,
   // the slopes scaled by c14.x, z rebuilt (n = s x T - s y B + z N, B = N x T times the tangent's w)
   { 0x572773cfbd618a3aull, "bumpy glass, a shower door: bump map s2, the scene behind (s1) read through it, colour s3 over the reflection "
                            "(VS b51f1577, skinned: the door swings; runs 192-217)", kClearGlass, false, 2, 14 },
   { 0x8fe3ce7c5fbc6234ull, "bumpy glass: as 572773cf, its colour s3 x c10 tinting the scene behind (16 runs)", kClearGlass, false, 2, 14 },
-  { 0x910a56f24813e248ull, "bumpy glass: as 572773cf, its colour s3 x c10 tinting the scene behind (3 runs)", kClearGlass, false, 2, 14 },
   { 0xa9336d35a25143aeull, "bumpy glass, ps_2_0: signed bump map s2 at TEXCOORD4 (2 t - 1, no scale), the scene behind (s1) tinted by "
                            "colour s3 and the vertex colour, a cut-out on s3's alpha (6 runs)", kClearGlass, false, 2, -1 },
   // form 3
   { 0x29c6b22234617c1aull, "glass: colour texture s1 x c8, mask s2 (VS 5b18d2ce; run 188)", kClearGlass },
-  { 0xac4184cee232ed04ull, "glass: colour texture s2 x c10, gloss s3, irradiance cube s1 (VS d7fede81; a glass dome building, run 212)", kClearGlass },
+  { 0xac4184cee232ed04ull, "glass: colour texture s2 x c10, gloss s3, irradiance cube s1 (VS d7fede81; an unplayable lot's dome, runs 212, 218)", kClearGlass },
   { 0x45c7a7cd511b5233ull, "car glass, a parked car's windows: the car's paint shader blended, colour atlas s2 with its alpha, normal map s3, "
                            "reflection cube s6 (VS a77613ea; run 213)", kCarGlass, true },
   { 0xd03ebab11453bca1ull, "car glass, a distant car's windows: ps_2_0 reflection, Fresnel, highlights, the car's atlas s1 at a decoded UV, "
@@ -1920,23 +1922,26 @@ inline const NamedGlass* namedGlass(uint64_t hash) { return findByHash(kNamedGla
 // The user: "can you also color code all the unknown glass so i could identify where they all are?"
 // Every glass shader whose objects are not known yet -- all but the shower door, the cars' windows
 // and the mirrors -- goes out in a flat colour of its own, no material (the runtime shows the marker
-// as an opaque albedo); the hook's log names each colour's shader as it first appears.
+// as an opaque albedo); the hook's log names each colour's shader as it first appears. Run 218 found six
+// (below); kept for a second run, the user's call. A window's two sides are two draws: the side facing
+// a room is 3197bfde, the side facing outdoors 98e23f47 -- a window on an indoor wall is 3197bfde on
+// both sides, one on a free-standing outdoor wall 98e23f47 on both (the user, run 218).
 struct GlassSurvey { uint64_t hash; uint32_t colour; const char* colourName; };
 inline constexpr size_t kGlassSurveyMax = 16;
 inline const GlassSurvey kGlassSurvey[] = {
-  { 0x3197bfdef2330503ull, 0xFFFF0000u, "RED" },          // cube only, 7.7M draws
-  { 0x98e23f47d947eb22ull, 0xFF00FF00u, "GREEN" },        // cube only, 6.4M
-  { 0x85e9c3381d5bf054ull, 0xFF0000FFu, "BLUE" },         // the scene behind, 1.1M
+  { 0x3197bfdef2330503ull, 0xFFFF0000u, "RED" },          // cube only, 7.7M draws: a window's side facing a room (run 218)
+  { 0x98e23f47d947eb22ull, 0xFF00FF00u, "GREEN" },        // cube only, 6.4M: a window's side facing outdoors (run 218)
+  { 0x85e9c3381d5bf054ull, 0xFF0000FFu, "BLUE" },         // the scene behind, 1.1M: a decorative object on a table (run 218)
   { 0x2b1da1b45f51d3f9ull, 0xFFFFFF00u, "YELLOW" },       // the scene behind, ps_2_0, 966k
   { 0xdb28eb0c60fdb2fbull, 0xFFFF00FFu, "MAGENTA" },      // cube only, 55k
-  { 0xefdac7f048e21b1full, 0xFF00FFFFu, "CYAN" },         // cube only, 54k
+  { 0xefdac7f048e21b1full, 0xFF00FFFFu, "CYAN" },         // cube only, 54k: glass furniture (run 218)
   { 0x8ff495765d26a6fdull, 0xFFFF8000u, "ORANGE" },       // the scene behind, 12k
   { 0x8fe3ce7c5fbc6234ull, 0xFF8000FFu, "PURPLE" },       // bumpy, 4.8k
-  { 0x910a56f24813e248ull, 0xFFFF80C0u, "PINK" },         // bumpy, 4.2k
+  { 0x910a56f24813e248ull, 0xFFFF80C0u, "PINK" },         // 4.2k: an unplayable lot's windows, outside (run 218)
   { 0xa9336d35a25143aeull, 0xFFFFFFFFu, "WHITE" },        // bumpy, ps_2_0, 560
   { 0x7eeb349a23cbefefull, 0xFF804000u, "BROWN" },        // the scene behind + a colour texture, 310
   { 0x29c6b22234617c1aull, 0xFF808080u, "GREY" },         // textured glass
-  { 0xac4184cee232ed04ull, 0xFF80C0FFu, "LIGHT BLUE" },   // textured glass (the dome?)
+  { 0xac4184cee232ed04ull, 0xFF80C0FFu, "LIGHT BLUE" },   // textured glass: an unplayable lot's dome (run 218)
   { 0xd03ebab11453bca1ull, 0xFF006000u, "DARK GREEN" },   // a small glass on a car's atlas (a distant car?)
 };
 static_assert(sizeof kGlassSurvey / sizeof kGlassSurvey[0] <= kGlassSurveyMax, "the hook keeps 16 survey markers");

@@ -41,6 +41,10 @@ WAVES = {
     'water_sea_n.dds': (TOWN_WAVES, 0.5),
     'water_object_n.dds': (TOWN_WAVES, 0.5),
 }
+# the bumpy glass shaders (sims3cam::kNamedGlass entries with a bump stage): an older dump of another shader
+# is not made into a material (910a56f2, an unplayable lot's windows: the clear glass without its bumps since
+# milestone 111, the user's choice)
+BUMPY_PS = {'572773cfbd618a3a', '8fe3ce7c5fbc6234', 'a9336d35a25143ae'}
 BUMP_NAME = re.compile(r'^bump_([0-9A-F]{16})_([0-9a-f]{16})_s(\d+)_(\d+)x(\d+)_([A-Z0-9]+)_k(-?\d+)\.raw$')
 
 
@@ -200,7 +204,7 @@ def make_bumps(folder):
         if not m:
             continue
         h, ps, stage, w, hh, fmt, k = m.groups()
-        if h in made:
+        if h in made or ps not in BUMPY_PS:
             continue
         w, hh, scale = int(w), int(hh), int(k) / 1000.0
         normals = read_bump_map(os.path.join(folder, name), fmt, w, hh, scale)
