@@ -8,7 +8,8 @@ shader reading only cube maps, blended, or one of its named glass shaders) with 
 at stage 0, its named car glass with a car glass marker and every mirror's face (a cube-only reflective
 sheet under the stencil test) with a mirror marker, blending off; this layer makes the markers' hashes the
 runtime's translucent glass, tinted car glass (about 75 % through, a slight green-grey), the plumbob's
-solid green gem (milestone 114: green through 0.25 units; its glow off since 115, the user's choice) and an opaque,
+thin green glass (milestone 116: each pass through lets 0.5 / 0.92 / 0.55 through -- two sides, the gem's green
+of milestone 114; no glow since 115; thin because the solid gem's strong refraction trailed the moving Sim, run 220) and an opaque,
 fully metallic, smooth mirror whose tint is the marker's silver. Each hash is XXH3-64 of the marker's
 level 0 (sims3cam::kGlassMaterial, kMirrorMarkerHash, checked by
 sims3/test/test_sims3cam.cpp). A thin-walled material's transmittance_color is what one pass through the
@@ -78,9 +79,10 @@ def Xform "RootNode"
                 uniform asset info:mdl:sourceAsset = @AperturePBR_Translucent.mdl@
                 uniform token info:mdl:sourceAsset:subIdentifier = "AperturePBR_Translucent"
                 float inputs:ior_constant = 1.5
-                color3f inputs:transmittance_color = (0.25, 0.85, 0.3)
-                float inputs:transmittance_measurement_distance = 0.25
-                bool inputs:thin_walled = 0
+                color3f inputs:transmittance_color = (0.5, 0.92, 0.55)
+                float inputs:transmittance_measurement_distance = 1
+                bool inputs:thin_walled = 1
+                float inputs:thin_wall_thickness = 0.005
                 bool inputs:use_diffuse_layer = 0
                 token outputs:out
             }

@@ -1133,9 +1133,9 @@ int main() {
         bool knownOut = true;
         for (uint64_t known : { 0x572773cfbd618a3aull, 0x45c7a7cd511b5233ull, 0x66516d5db94ab307ull, 0x86dad57d0dc73989ull, 0x3197bfdef2330503ull,
                                 0x98e23f47d947eb22ull, 0x85e9c3381d5bf054ull, 0xefdac7f048e21b1full, 0x910a56f24813e248ull, 0xac4184cee232ed04ull,
-                                0x2b1da1b45f51d3f9ull, 0xa9336d35a25143aeull, 0xdb28eb0c60fdb2fbull }) if (glassSurvey(known)) knownOut = false;
-        CHECK(surveyOk && n == 5 && knownOut && kGlassSurvey[0].colour == 0xFFFF0000u,
-              "glass survey (M110, M112, M113): 5 unidentified glass shaders in distinct plain colours, no material marker's; the unnamed ones cube-only glass (%d dumps read); the door, the cars' windows, the mirrors and runs 218-219's nine finds not surveyed", surveyRead);
+                                0x2b1da1b45f51d3f9ull, 0xa9336d35a25143aeull, 0xdb28eb0c60fdb2fbull, 0x29c6b22234617c1aull }) if (glassSurvey(known)) knownOut = false;
+        CHECK(surveyOk && n == 4 && knownOut && kGlassSurvey[0].colour == 0xFFFF0000u,
+              "glass survey (M110, M112, M113, M116): 4 unidentified glass shaders in distinct plain colours, no material marker's; the unnamed ones cube-only glass (%d dumps read); the door, the cars' windows, the mirrors and runs 218-221's ten finds not surveyed", surveyRead);
       }
       // milestones 82, 101: the reflective sheet's PS 86dad57d reads only a cube; under the stencil test it is a mirror's face
       std::vector<DWORD> mp; PsAnalysis ma;
@@ -1208,15 +1208,15 @@ int main() {
       CHECK(ch == kGlassMaterial[kCarGlass].hash && cat != std::string::npos && cend != std::string::npos && u.find("thin_walled = 1", cat) < cend && u.find("use_diffuse_layer = 0", cat) < cend
             && u.find("transmittance_color = (0.72, 0.78, 0.75)", cat) < cend,
             "car glass (M105): the marker's level-0 hash 0x%016llX names the tinted thin glass %s in Sims3Glass/mod.usda", (unsigned long long) ch, cname);
-      // milestones 114-115: the plumbob's marker names a solid green gem, no glow; the three glass markers differ
+      // milestones 114-116: the plumbob's marker names thin green glass, no glow; the three glass markers differ
       for (auto& p : gm) p = kGlassMaterial[kPlumbob].colour;
       const uint64_t ph = (uint64_t) XXH3_64bits(gm, sizeof gm);
       char pname[32]; snprintf(pname, sizeof pname, "mat_%016llX", (unsigned long long) ph);
       const size_t pat = u.find(pname);
       const size_t pend = pat == std::string::npos ? pat : u.find("token outputs:out", pat);
-      CHECK(ph == kGlassMaterial[kPlumbob].hash && pat != std::string::npos && pend != std::string::npos && u.find("thin_walled = 0", pat) < pend && u.find("transmittance_color = (0.25, 0.85, 0.3)", pat) < pend
+      CHECK(ph == kGlassMaterial[kPlumbob].hash && pat != std::string::npos && pend != std::string::npos && u.find("thin_walled = 1", pat) < pend && u.find("transmittance_color = (0.5, 0.92, 0.55)", pat) < pend
             && u.find("enable_emission", pat) > pend && kGlassMaterial[0].hash != kGlassMaterial[1].hash && kGlassMaterial[1].hash != kGlassMaterial[2].hash && kGlassMaterial[0].hash != kGlassMaterial[2].hash,
-            "plumbob (M114, M115): the marker's level-0 hash 0x%016llX names the green gem %s in Sims3Glass/mod.usda (solid, no glow)", (unsigned long long) ph, pname);
+            "plumbob (M114-M116): the marker's level-0 hash 0x%016llX names the thin green glass %s in Sims3Glass/mod.usda (no glow)", (unsigned long long) ph, pname);
     }
     CHECK(kLotCompositePs == 0x99ee53ff6ef1b0b6ull && lotCompositeStage(0) == 0 && lotCompositeStage(1) == 4 && lotCompositeStage(2) == 3, "lot composite: pass 1 reads the mask from s4 (layer 4 out), pass 2 from s3 (layer 3 out)");
     std::vector<DWORD> lit, world, layer, comp, lit2, lit3, lit4;

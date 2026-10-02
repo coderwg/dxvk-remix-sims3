@@ -1869,7 +1869,7 @@ inline bool chooseAutoAlbedo(const PsAnalysis& a, const bool color2D[16], const 
 // 2D texture there as an opaque albedo, so every glass draw goes out with one of the hook's markers at
 // stage 0 and blending off; the Sims3Glass mod (sims3/remix-mod/Sims3Glass/mod.usda) makes each
 // marker's hash a glass (kGlassMaterial): clear (thin, IOR 1.5), car glass (tinted, about 75 % through)
-// or the plumbob's (a green gem, milestone 114; its glow off in 115). Bumpy glass
+// or the plumbob's (green, milestone 114; no glow since 115; thin since 116). Bumpy glass
 // is the clear glass with the game's own bump map (milestone 109, the user's choice over the frosted
 // glass of milestones 88-108): the bump map itself at stage 0, its hash naming its material in the
 // Sims3GlassBumps mod (sims3GlassBump). Forms 2 and 3 share their samplers' signature with
@@ -1893,7 +1893,7 @@ inline constexpr uint8_t kClearGlass = 0, kCarGlass = 1, kPlumbob = 2, kGlassMat
 inline const GlassMaterial kGlassMaterial[kGlassMaterials] = {
   { "glass", 0xFFB8C8D0u, 0x5E30D0B82C246E6Cull },       // pale grey-blue: thin, clear
   { "car glass", 0xFFA0B4ACu, 0x8A5EDD7D16D8E741ull },   // grey-green: thin, tinted (0.72, 0.78, 0.75)
-  { "plumbob", 0xFF40E060u, 0x55B2C95B88DA3E67ull },     // green: a solid green gem (milestone 114; no glow since 115)
+  { "plumbob", 0xFF40E060u, 0x55B2C95B88DA3E67ull },     // green: thin green glass (milestone 116; a solid gem trailed the Sim)
 };
 // blendedPassOnly: the game draws the glass twice a frame, the same mesh unblended with depth writes,
 // then blended (a parked car's windows, run 215); only the blended pass goes out (milestone 104),
@@ -1916,7 +1916,7 @@ inline const NamedGlass kNamedGlass[] = {
                            "(VS b51f1577, skinned: the door swings; runs 192-217)", kClearGlass, false, 2, 14 },
   { 0x8fe3ce7c5fbc6234ull, "bumpy glass: as 572773cf, its colour s3 x c10 tinting the scene behind (16 runs)", kClearGlass, false, 2, 14 },
   // form 3
-  { 0x29c6b22234617c1aull, "glass: colour texture s1 x c8, mask s2 (VS 5b18d2ce; run 188)", kClearGlass },
+  { 0x29c6b22234617c1aull, "glass, the skill progress pill over a Sim's head (run 221): colour texture s1 x c8, mask s2 (VS 5b18d2ce)", kClearGlass },
   { 0xac4184cee232ed04ull, "glass: colour texture s2 x c10, gloss s3, irradiance cube s1 (VS d7fede81; an unplayable lot's dome, runs 212, 218)", kClearGlass },
   { 0x45c7a7cd511b5233ull, "car glass, a parked car's windows: the car's paint shader blended, colour atlas s2 with its alpha, normal map s3, "
                            "reflection cube s6 (VS a77613ea; run 213)", kCarGlass, true },
@@ -1945,7 +1945,9 @@ inline const LeftOutPs* leftOutPs(uint64_t hash) { return findByHash(kLeftOutPs,
 // obvious colors on the unknown ones"): 3197bfde a window's side facing a room, 98e23f47 its side facing
 // outdoors, 85e9c338 a decorative object on a table, efdac7f0 glass furniture, 910a56f2 an unplayable
 // lot's windows, ac4184ce its dome; run 219 three more: 2b1da1b4 the plumbob over the active Sim,
-// a9336d35 the sound waves from speakers (an effect, not glass), db28eb0c an unplayable lot's windows.
+// a9336d35 the sound waves from speakers (an effect, not glass), db28eb0c an unplayable lot's windows;
+// run 221 one more: 29c6b222 the skill progress pill over a Sim's head (cooking). The oil bottle the user
+// suspected is no glass at all (run 220's marks: an ordinary object).
 // At the mark the log names every glass shader drawn in that frame (milestone 113, goes with the
 // survey). A window's two sides are two draws: the side facing
 // a room is 3197bfde, the side facing outdoors 98e23f47 -- a window on an indoor wall is 3197bfde on
@@ -1954,7 +1956,6 @@ struct GlassSurvey { uint64_t hash; uint32_t colour; const char* colourName; };
 inline constexpr size_t kGlassSurveyMax = 16;
 inline const GlassSurvey kGlassSurvey[] = {
   { 0x8fe3ce7c5fbc6234ull, 0xFFFF0000u, "RED" },       // bumpy (run 219, cyan: an oil bottle? -- recoloured to be sure)
-  { 0x29c6b22234617c1aull, 0xFF00FF00u, "GREEN" },     // textured glass (run 219, white: the liquid in that bottle? -- recoloured)
   { 0x8ff495765d26a6fdull, 0xFF0000FFu, "BLUE" },      // the scene behind (run 218: at home; VS d251510d; run 219: not spotted)
   { 0xd03ebab11453bca1ull, 0xFFFFFF00u, "YELLOW" },    // a small glass on a car's atlas (run 218: at home; run 219: not spotted)
   { 0x7eeb349a23cbefefull, 0xFFFF00FFu, "MAGENTA" },   // the scene behind + a colour texture (runs 218-219: not spotted)
