@@ -1,13 +1,15 @@
 #usda 1.0
 (
     defaultPrim = "RootNode"
-    doc = """The Sims 3 camera hook's glass and frosted glass (milestones 80, 88; the water is the
-Sims3Water mod's since milestone 99): the materials of the hook's marker textures. The hook presents
-every glass draw of the game (a pixel shader reading only cube maps, blended, or one of its named
-textured glass shaders) with a flat 32x32 glass marker at stage 0 and its named frosted glass (the
-shower door) with a frosted marker, blending off; this layer makes the markers' hashes the runtime's
-translucent glass and frosted glass (a 40 % diffuse layer from textures/frost.dds). Each hash is
-XXH3-64 of the marker's level 0 (sims3cam::kGlassMarkerHash, kFrostedMarkerHash, checked by
+    doc = """The Sims 3 camera hook's glass, frosted glass and mirrors (milestones 80, 88, 101; the
+water is the Sims3Water mod's since milestone 99): the materials of the hook's marker textures. The
+hook presents every glass draw of the game (a pixel shader reading only cube maps, blended, or one of
+its named textured glass shaders) with a flat 32x32 glass marker at stage 0, its named frosted glass
+(the shower door) with a frosted marker and every mirror's face (a cube-only reflective sheet under the
+stencil test) with a mirror marker, blending off; this layer makes the markers' hashes the runtime's
+translucent glass, frosted glass (a 40 % diffuse layer from textures/frost.dds) and an opaque, fully
+metallic, smooth mirror whose tint is the marker's silver. Each hash is XXH3-64 of the marker's level 0
+(sims3cam::kGlassMarkerHash, kFrostedMarkerHash, kMirrorMarkerHash, checked by
 sims3/test/test_sims3cam.cpp). textures/ is written by ../make_textures.py.
 Deployed to Game/Bin/rtx-remix/mods/Sims3Glass/mod.usda; the runtime reads it while
 rtx.enableReplacementAssets is on."""
@@ -58,6 +60,23 @@ def Xform "RootNode"
                 float inputs:thin_wall_thickness = 0.005
                 bool inputs:use_diffuse_layer = 1
                 asset inputs:transmittance_texture = @./textures/frost.dds@
+                token outputs:out
+            }
+        }
+
+        def Material "mat_27198C264F1C40A5"
+        {
+            token outputs:mdl:displacement.connect = </RootNode/Looks/mat_27198C264F1C40A5/Shader.outputs:out>
+            token outputs:mdl:surface.connect = </RootNode/Looks/mat_27198C264F1C40A5/Shader.outputs:out>
+            token outputs:mdl:volume.connect = </RootNode/Looks/mat_27198C264F1C40A5/Shader.outputs:out>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:mdl:sourceAsset = @AperturePBR_Opacity.mdl@
+                uniform token info:mdl:sourceAsset:subIdentifier = "AperturePBR_Opacity"
+                float inputs:metallic_constant = 1
+                float inputs:reflection_roughness_constant = 0.02
                 token outputs:out
             }
         }

@@ -219,11 +219,10 @@ struct Sims3Hook {
   std::unordered_map<uint32_t, std::unordered_set<uint64_t>> wallFrameTris;
   uint32_t wallBackDropped = 0, wallBackLogged = 0;
   DWORD blendSaved = 0; bool blendOurs = false;
-  uint32_t glassDraws = 0, glassLogged = 0; uint64_t glassLoggedPs[8] = {};
-  uint32_t mirrorSurfaceDropped = 0;   // the planar-reflection surface passes left out (milestone 82)
+  uint32_t glassDraws = 0, glassLogged = 0; uint64_t glassLoggedPs[32] = {};
+  IDirect3DTexture9* mirrorMarker = nullptr; uint64_t mirrorMarkerHash = 0; bool mirrorMarkerFailed = false; uint32_t mirrorDraws = 0;   // mirrors (milestone 101)
   bool drawGlass = false;               // this draw went out as glass
-  bool reflectiveSheet = false;         // this draw is a reflective sheet (cube-only under the stencil test)
-  IDirect3DTexture9* surveyMarkers[2] = {}; uint64_t surveyHashes[2] = {}; bool surveyFailed[2] = {}; uint32_t surveyDraws[2] = {};   // the survey (milestone 100): sheet, unconfirmed glass
+  bool reflectiveSheet = false;         // this draw is a reflective sheet: a mirror's face (milestone 101)
   const char* dropWhy = "";             // why this draw was left out (the mark key's dump)
   // the lot paint composite's two passes (milestone 17l, sims3cam::lotCompositeStage): the pass
   // being issued (0 = the game's own draw, pass 1; 2 = the hook's second pass, milestone 19), and

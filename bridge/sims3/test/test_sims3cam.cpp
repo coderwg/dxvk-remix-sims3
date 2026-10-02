@@ -1050,12 +1050,12 @@ int main() {
       const bool beamOk = !loadShader("ps_7304aaea6a75fb3f", beam) || (analyzePixelShader(beam.data(), beam.size(), ba) && !isGlassShader(ba) && !namedGlass(0x7304aaea6a75fb3full));
       const NamedGlass* door = namedGlass(0x572773cfbd618a3aull);
       CHECK(tgOk && hairOk && beamOk && namedGlass(0xac4184cee232ed04ull) && namedGlass(0xac4184cee232ed04ull)->material == kClearGlass && !namedGlass(0x3197bfdef2330503ull)
-            && door && door->material == kFrostedGlass && door->confirmed,
+            && door && door->material == kFrostedGlass,
             "glass (M81, M87, M88, M100): named glass 29c6b222 / ac4184ce clear, the shower door 572773cf frosted; the hair pass 57a5a049, the light-beam card 7304aaea and the cube-only pane 3197bfde are not named");
-      // milestone 82: the planar-reflection surface's PS 86dad57d reads only a cube (left out under the stencil test)
+      // milestones 82, 101: the reflective sheet's PS 86dad57d reads only a cube; under the stencil test it is a mirror's face
       std::vector<DWORD> mp; PsAnalysis ma;
       const bool mirrorCube = !loadShader("ps_86dad57d0dc73989", mp) || (analyzePixelShader(mp.data(), mp.size(), ma) && isGlassShader(ma));
-      CHECK(mirrorCube, "glass (M82): the planar-reflection surface PS 86dad57d reads only a cube");
+      CHECK(mirrorCube && (!ma.valid || (isReflectiveSheet(ma, TRUE) && !isReflectiveSheet(ma, FALSE))), "mirror (M82, M101): the reflective sheet PS 86dad57d reads only a cube; with the stencil test on it is a mirror's face");
       // milestone 84: the Sims' soft shadow blob is never captured
       const NeverCapture* blob = findNeverCapture(0xb7d550c6421e14f4ull);
       CHECK(blob && !blob->blendedOnly, "never-capture (M84): the Sims' soft shadow blob VS b7d550c6");
@@ -1084,6 +1084,14 @@ int main() {
       const std::string u(usd.begin(), usd.end());
       CHECK(gh == kGlassMarkerHash && haveUsd && u.find(name) != std::string::npos && u.find("AperturePBR_Translucent.mdl") != std::string::npos && u.find("/RootNode/Looks/") != std::string::npos,
             "glass (M80): the marker's level-0 hash 0x%016llX names the translucent material %s in sims3/remix-mod/Sims3Glass/mod.usda", (unsigned long long) gh, name);
+      // milestone 101: the mirror marker's hash names an opaque, fully metallic, smooth material naming no albedo
+      for (auto& p : gm) p = kMirrorMarkerColour;
+      const uint64_t mh = (uint64_t) XXH3_64bits(gm, sizeof gm);
+      char mirName[32]; snprintf(mirName, sizeof mirName, "mat_%016llX", (unsigned long long) kMirrorMarkerHash);
+      const size_t mat = u.find(mirName), mend = mat == std::string::npos ? mat : u.find("token outputs:out", mat);
+      CHECK(mh == kMirrorMarkerHash && mat != std::string::npos && mend != std::string::npos && u.find("AperturePBR_Opacity.mdl", mat) < mend && u.find("metallic_constant = 1", mat) < mend
+            && u.find("reflection_roughness_constant", mat) < mend && u.find("diffuse_texture", mat) > mend && u.find("diffuse_color_constant", mat) > mend,
+            "mirror (M101): the marker's level-0 hash 0x%016llX names the opaque metallic material %s in Sims3Glass/mod.usda (no albedo of its own)", (unsigned long long) mh, mirName);
       // milestones 86, 93, 99: each water material's marker hash names its material in the water mod -- a volume
       // with its own ripple map -- and no material of the glass mod; the water shaders by name
       std::vector<uint8_t> wusd; const bool haveWater = loadBytes("../remix-mod/Sims3Water/mod.usda", wusd);
