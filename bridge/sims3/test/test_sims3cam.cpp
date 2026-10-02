@@ -789,6 +789,8 @@ int main() {
     CHECK(kindOfVerified(hc) == Kind::Main, "camera: a proper camera at the horizon -> Main (the old pitch test rejected it and broke the far view)");
     hc.fwd[1] = 0.2f;
     CHECK(kindOfVerified(hc) == Kind::Main, "camera: a proper camera looking slightly up -> Main");
+    CHECK(endsMirroredPass(true, D3DCULL_CW) && !endsMirroredPass(true, D3DCULL_CCW) && !endsMirroredPass(true, D3DCULL_NONE) && !endsMirroredPass(false, D3DCULL_CW),
+          "camera (M85): a mirrored pass ends at a draw culling clockwise; its own draws cull counter-clockwise or not at all");
     CHECK(isMirrorPass(TRUE, D3DCULL_CCW) && !isMirrorPass(FALSE, D3DCULL_CCW) && !isMirrorPass(TRUE, D3DCULL_CW) && !isMirrorPass(0, D3DCULL_CW),
           "draw: stencil on with the winding flipped = the stencil-mirror pass -> not captured; either state alone, or the defaults, capture as before");
     CHECK(isReflectionDraw(true, true, D3DZB_TRUE, FALSE, D3DCULL_CW) && isReflectionDraw(false, true, D3DZB_TRUE, TRUE, D3DCULL_CCW) && !isReflectionDraw(false, true, D3DZB_TRUE, FALSE, D3DCULL_CW)

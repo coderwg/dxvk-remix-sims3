@@ -3086,6 +3086,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetVertexShaderConstantF(UINT StartRe
           Logger::info(msg);
         }
       } else if (kind == sims3cam::Kind::OtherCamera) {
+        if (!h.camMirrored) h.cameraValidBeforeMirror = h.cameraValid;   // what holds again when the pass is over (milestone 85)
         h.cameraValid = false; h.camMirrored = true;   // a reflection pass: its 3D draws are dropped
         ++h.mirroredUploads;
         if (!h.loggedOther) {

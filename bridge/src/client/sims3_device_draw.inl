@@ -45,7 +45,7 @@ inline void sims3OnReset(Sims3Hook& h) {
   for (int i = 0; i < 16; ++i) { h.boundTex[i] = nullptr; h.boundColor2D[i] = false; h.boundKind[i] = 0; h.boundFmt[i] = 0; h.boundW[i] = h.boundH[i] = 0; }
   for (uint32_t i = 0; i < h.scratchCount; ++i) { if (h.scratch[i].surf) h.scratch[i].surf->Release(); if (h.scratch[i].tex) h.scratch[i].tex->Release(); h.scratch[i] = Sims3Hook::Scratch(); }
   h.scratchCount = 0; h.copyScratch = -1; h.ourDraw = false; h.rt0W = h.rt0H = 0; h.rt0Fmt = 0;
-  h.held = sims3cam::Held(); h.cameraValid = false; h.camMirrored = false; h.drawDropped = false; h.rtIsPrimary = true;
+  h.held = sims3cam::Held(); h.cameraValid = false; h.camMirrored = false; h.cameraValidBeforeMirror = false; h.drawDropped = false; h.rtIsPrimary = true;
   h.frameCamSet = false;
   h.tssOurs = 0; h.uvIndexHidden = false; h.factorOurs = false; h.sentFactor = 0xFFFFFFFFu; h.gameFactor = 0xFFFFFFFFu;
   h.gameTss0[0] = D3DTOP_MODULATE; h.gameTss0[1] = D3DTA_TEXTURE; h.gameTss0[2] = D3DTA_CURRENT; h.gameTss0[3] = 0;

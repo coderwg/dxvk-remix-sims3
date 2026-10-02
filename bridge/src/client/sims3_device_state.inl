@@ -169,7 +169,9 @@ struct Sims3Hook {
   // client: those under a mirrored camera upload, and those carrying the stencil mirror's render
   // states (draws whose own constants never reach the classifier).
   bool camMirrored = false;                       // the last classified camera upload was a reflection's
+  bool cameraValidBeforeMirror = false;           // ...and whether the main camera held before it (milestone 85)
   bool drawDropped = false;                       // this draw is a reflection pass's (set by sims3BeginDraw; the draw returns at once)
+  uint32_t mirrorPassEnds = 0;   // mirrored passes ended by a draw culling clockwise (milestone 85)
   uint32_t mirroredUploads = 0, reflectionDrops = 0, reflectionDropsByStates = 0, reflectionFrames = 0, reflectionFrame = 0xFFFFFFFFu, reflectionLogged = 0;
   bool loggedMirrorCam = false;
   // The lot terrain drawn once per world chunk (milestone 16, sims3cam::LotCopies): the World

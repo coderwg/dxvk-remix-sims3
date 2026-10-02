@@ -269,6 +269,13 @@ inline bool fvfIs3D(DWORD fvf) {
 // camera state came before them, so the pass is also recognised from its render states.
 inline bool isMirrorPass(DWORD stencilEnable, DWORD cullMode) { return stencilEnable != 0 && cullMode == D3DCULL_CCW; }
 
+// The end of a mirrored camera's pass (milestone 85): a mirrored view draws with the winding flipped
+// (counter-clockwise culling) or with culling off, so a draw culling clockwise is the main view's
+// again. Run 192: after a wall mirror's pass the game drew on without a camera upload the hook
+// verifies, and its draws -- water, the Sims' parts, the ground's shadows -- were dropped as the
+// mirror's until one came, a different number of them each frame as the camera moved: the flicker.
+inline bool endsMirroredPass(bool cameraMirrored, DWORD cullMode) { return cameraMirrored && cullMode == D3DCULL_CW; }
+
 // A 3D draw of a reflection pass (the ray tracer renders reflections itself): the last camera
 // upload was a mirrored one, or the draw carries the stencil mirror's render states.
 inline bool isReflectionDraw(bool cameraMirrored, bool declIs3D, DWORD zEnable, DWORD stencilEnable, DWORD cullMode) {

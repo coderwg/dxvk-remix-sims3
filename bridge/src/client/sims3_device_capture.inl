@@ -8,6 +8,9 @@ template<typename Dev>
 bool sims3ApplyForDraw(Sims3Hook& h, Dev* dev, const DWORD* rs) {
   static const D3DMATRIX kIdentity = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
   const DWORD zEnable = rs[D3DRS_ZENABLE], stencil = rs[D3DRS_STENCILENABLE], cull = rs[D3DRS_CULLMODE];
+  // a mirrored camera's pass is over at the first draw culling clockwise (milestone 85): the main
+  // camera, which a mirrored upload never replaces, holds again
+  if (sims3cam::endsMirroredPass(h.camMirrored, cull)) { h.camMirrored = false; h.cameraValid = h.cameraValidBeforeMirror; ++h.mirrorPassEnds; }
   // a reflection pass's draw (runs 66-68): dropped before it reaches the runtime; the ray tracer
   // renders reflections itself. Nothing is changed on the device for it.
   h.drawDropped = sims3cam::isReflectionDraw(h.camMirrored, h.declIs3D, zEnable, stencil, cull);

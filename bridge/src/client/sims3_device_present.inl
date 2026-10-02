@@ -68,8 +68,8 @@ static void sims3LogStats(bool withTable) {
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   walls: %u draws, openings cut in %u (%u triangles cut, %u removed, %u hidden dropped; %u geometries built, %u evicted, %u build failures, %u refused; %u without an opening test, %u skipped with no client copy; %u masks decoded)",
            h.wallDraws, h.wallCutDraws, h.wallCutTriangles, h.wallRemovedTriangles, h.wallHiddenTriangles, h.wallBuilt, h.wallEvicted, h.wallBuildFailed, h.wallRefused, h.wallNoOpeningTest, h.wallSkipped, h.wallMasksDecoded);
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   reflections: %u mirrored camera uploads; %u draws dropped in %u frames (%u of them by the stencil mirror's render states alone)",
-           h.mirroredUploads, h.reflectionDrops, h.reflectionFrames, h.reflectionDropsByStates);
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   reflections: %u mirrored camera uploads; %u draws dropped in %u frames (%u of them by the stencil mirror's render states alone); %u mirrored passes ended by a draw culling clockwise",
+           h.mirroredUploads, h.reflectionDrops, h.reflectionFrames, h.reflectionDropsByStates, h.mirrorPassEnds);
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   terrain: %u base draws and %u layer passes (%u lot chunk copies) for the baker, %u without a variant; %u pixel shader variants (%u unlit, %u with alpha forced to 1), %u sampler states copied, sRGB sampling turned off %u times, both held across %u terrain blocks (%u holds cancelled by the game, %u uncaptured draws let through); markers %s; %u lot chunk copies dropped",
            h.terrainBaseDraws, h.terrainLayerDraws, h.terrainLotCopyDraws, h.terrainNoVariant, h.psVariantsMade, h.psVariantsUnlit, h.psVariantsAlpha, h.samplerCopies, h.srgbOffs, h.tblockFlushes, h.tblockCancelled, h.tblockKept, h.markersConfigSent ? "tagged in rtx.conf" : (h.marker[0] ? "made, NOT tagged in rtx.conf" : "not made yet"), h.lotCopyDrops);
