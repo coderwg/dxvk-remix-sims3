@@ -1052,6 +1052,16 @@ int main() {
       CHECK(tgOk && hairOk && beamOk && namedGlass(0xac4184cee232ed04ull) && namedGlass(0xac4184cee232ed04ull)->material == kClearGlass && !namedGlass(0x3197bfdef2330503ull)
             && door && door->material == kFrostedGlass,
             "glass (M81, M87, M88, M100): named glass 29c6b222 / ac4184ce clear, the shower door 572773cf frosted; the hair pass 57a5a049, the light-beam card 7304aaea and the cube-only pane 3197bfde are not named");
+      // milestone 102: the door from a little further frosted, the car windows clear; none of the three cube-only, so the name is what makes them glass
+      bool farOk = true;
+      for (uint64_t hsh : { 0x85e9c3381d5bf054ull, 0x45c7a7cd511b5233ull, 0xd03ebab11453bca1ull }) {
+        char n[32]; snprintf(n, sizeof n, "ps_%016llx", (unsigned long long) hsh);
+        std::vector<DWORD> sb; PsAnalysis sa;
+        if (loadShader(n, sb) && (!analyzePixelShader(sb.data(), sb.size(), sa) || isGlassShader(sa))) farOk = false;
+      }
+      const NamedGlass* doorFar = namedGlass(0x85e9c3381d5bf054ull); const NamedGlass* car = namedGlass(0x45c7a7cd511b5233ull); const NamedGlass* carFar = namedGlass(0xd03ebab11453bca1ull);
+      CHECK(farOk && doorFar && doorFar->material == kFrostedGlass && car && car->material == kClearGlass && carFar && carFar->material == kClearGlass && !namedGlass(0x0c2df3be933b2117ull),
+            "glass (M102): the shower door from further 85e9c338 frosted; the car windows 45c7a7cd and the distant car's d03ebab1 clear; the car body 0c2df3be not named; none of them cube-only");
       // milestones 82, 101: the reflective sheet's PS 86dad57d reads only a cube; under the stencil test it is a mirror's face
       std::vector<DWORD> mp; PsAnalysis ma;
       const bool mirrorCube = !loadShader("ps_86dad57d0dc73989", mp) || (analyzePixelShader(mp.data(), mp.size(), ma) && isGlassShader(ma));

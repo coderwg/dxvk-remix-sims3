@@ -1868,14 +1868,20 @@ inline bool isGlassShader(const PsAnalysis& a) {
   for (const PsSamplerUse& u : a.samplers) { if (!u.read) continue; if (!u.cube) return false; ++cubes; }
   return cubes > 0;
 }
-// Named glass (milestones 81, 87, 88, 100): the same reflection, Fresnel term and highlights, with a
-// colour texture over it. Its signature (a cube map and 2D textures) is shared by the Sims' hair and
-// skin passes, so these are named, each read from its bytecode, and go out as glass whether the game
-// blends them or not (the shower door's is opaque, its see-through look faked from a picture of the
-// scene behind), each with its material: the clear glass, or the frosted glass (its own marker and
-// the mod's translucent glass with a diffuse layer; the door's game colour texture is a frosting). All
-// seen right in game: the door (run 201); a glass dome building on a community lot drawn by one of the
-// first two (run 212's survey, magenta; which one the log did not say), the other its kin by bytecode.
+// Named glass (milestones 81, 87, 88, 100, 102): the same reflection, Fresnel term and highlights, with
+// a colour texture over it or a picture of the scene behind. Its signature (a cube map and 2D textures)
+// is shared by the Sims' hair and skin passes, so these are named, each read from its bytecode, and go
+// out as glass whether the game blends them or not (the shower door's is opaque, its see-through look
+// faked from a picture of the scene behind), each with its material: the clear glass, or the frosted
+// glass (its own marker and the mod's translucent glass with a diffuse layer; the door's game colour
+// texture is a frosting). Seen right in game: the door (run 201); a glass dome building on a community
+// lot drawn by one of the first two (run 212's survey, magenta; which one the log did not say), the
+// other its kin by bytecode. A level of detail is named with its object: the game draws the door from
+// a little further with a simpler shader, no frosting and no bump map (run 213: left out until then,
+// the door vanished), frosted here so the door looks the same at every distance. A car's windows are
+// the car's own paint shader drawn a second time, blended, the colour texture's alpha the see-through
+// amount (in step with the opaque body pass, VS 710f9a33 / PS 0c2df3be); a distant car's, a small
+// glass shader with a constant alpha.
 // (Not glass, though alike: the light-beam cards 7304aaea / 8d3a3a22 -- their cube lookup has a
 // constant direction, no normal.)
 inline constexpr uint8_t kClearGlass = 0, kFrostedGlass = 1;
@@ -1885,6 +1891,10 @@ inline const NamedGlass kNamedGlass[] = {
   { 0xac4184cee232ed04ull, "glass: colour texture s2 x c10, gloss s3, irradiance cube s1 (VS d7fede81; drawn unblended, run 201)", kClearGlass },
   { 0x572773cfbd618a3aull, "frosted glass, a shower door: normal map s2, reflection, Fresnel, the scene behind (render target s1) "
                            "read through the normal map, colour s3 (VS b51f1577, skinned: the door swings; drawn opaque; runs 192-194)", kFrostedGlass },
+  { 0x85e9c3381d5bf054ull, "frosted glass, the shower door from a little further: reflection, Fresnel, the scene behind (render target s1), "
+                           "no normal map, no colour (VS b3e88e28, skinned; also VS d251510d, in step with it; drawn opaque; run 213)", kFrostedGlass },
+  { 0x45c7a7cd511b5233ull, "glass, a car's windows: the car's paint shader blended, colour atlas s2 with its alpha, normal map s3, reflection cube s6 (VS a77613ea; run 213)", kClearGlass },
+  { 0xd03ebab11453bca1ull, "glass, a distant car's windows: ps_2_0 reflection, Fresnel, highlights, the car's atlas s1 at a decoded UV, constant alpha c6.w (VS 4e9298de; runs 159, 205)", kClearGlass },
 };
 inline const NamedGlass* namedGlass(uint64_t hash) { return findByHash(kNamedGlass, hash); }
 inline constexpr uint32_t kFrostedMarkerColour = 0xFFE0E6EAu;          // ARGB frosted pale grey: what it shows if the mod is not loaded
