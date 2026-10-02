@@ -132,6 +132,10 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
       h.remapRestore = h.boundTex[0]; if (h.remapRestore) h.remapRestore->AddRef();   // held until sims3EndDraw, as for an albedo remap
       h.remapActive = true;
       h.inRemap = true; dev->SetTexture(0, water ? (natural ? h.naturalWaterMarker : h.waterMarker) : frosted ? h.frostedMarker : h.glassMarker); h.inRemap = false;
+      // water (milestone 94): the sampler states of the game's first wave map (the one its TEXCOORD0
+      // reads) on stage 0, where the runtime takes the material's -- the normal map tiles as the game's
+      // waves do; back in sims3EndDraw with the albedo remap's
+      if (water) for (int s = 0; s < 16; ++s) if (h.boundKind[s] == 1 && sims3cam::isWaveMapFormat(h.boundFmt[s])) { if (s > 0) h.remapSamplerSet = sims3SamplerStatesTo0(h, dev, (DWORD) s, h.remapSamplerSaved); break; }
       h.blendSaved = rs[D3DRS_ALPHABLENDENABLE]; h.blendOurs = true;
       h.ourState = true; dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE); h.ourState = false;
       if (water && natural) ++h.naturalWaterDraws; else if (water) ++h.waterDraws; else if (frosted) ++h.frostedDraws; else ++h.glassDraws;

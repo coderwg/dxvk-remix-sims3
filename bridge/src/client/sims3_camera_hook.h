@@ -1902,7 +1902,12 @@ inline constexpr uint64_t kGlassMarkerHash = 0x5E30D0B82C246E6Cull;  // XXH3-64 
 // tracks whether a ray is inside the medium and turns the surface to face it, so the sheet's own
 // facing does not matter). Two kinds (milestone 93): clear water (a lot pool, an object's bowl) and
 // natural water (ponds, the sea), murkier and greener. The ground or basin under it is the game's
-// own (a pond's bed, a lot pool's walls and floor: run 197). Named, each read from its bytecode.
+// own (a pond's bed, a lot pool's walls and floor: run 197). Ripples (milestone 94): each material's
+// normal map is made from the game's own wave map (sims3/remix-mod/make_textures.py) and sampled with
+// the draw's captured TEXCOORD0 -- the game's scrolling wave coordinate -- with the game's own
+// sampler states for that wave map moved to stage 0, where the runtime takes them for the material
+// (its wrap above all: one pool shader has a reflection cube at stage 0). Named, each read from its
+// bytecode.
 // (Not water: PS f45e6c60, VS 33017462 -- a lot pool's FLOOR, a floor tile s4 under caustics s3, its
 // normal map, reflection and Fresnel; taken for the pool's surface in milestone 89, run 198 showed the
 // pool's surface itself is 011ba470 below.)

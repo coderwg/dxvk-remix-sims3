@@ -8,7 +8,8 @@ marker at stage 0, its named frosted glass (the shower door) with a frosted mark
 draw (its named water shaders) with a clear-water marker (lot pools, bowls) or a natural-water marker
 (ponds, the sea), blending off; this layer makes the markers' hashes the runtime's translucent glass,
 frosted glass (a diffuse layer from textures/frost.dds) and two water volumes (refraction, absorption
-by depth). Each hash is XXH3-64 of the marker's level 0 (sims3cam::kGlassMarkerHash,
+by depth, ripples from normal maps made from the game's own wave maps: textures/water_*_n.dds, game
+data, made locally and not in the repository). Each hash is XXH3-64 of the marker's level 0 (sims3cam::kGlassMarkerHash,
 kFrostedMarkerHash, kWaterMarkerHash, kNaturalWaterMarkerHash, checked by sims3/test/test_sims3cam.cpp).
 textures/ is written by ../make_textures.py.
 Deployed to Game/Bin/rtx-remix/mods/Sims3Glass/mod.usda; the runtime reads it while
@@ -76,10 +77,11 @@ def Xform "RootNode"
                 uniform asset info:mdl:sourceAsset = @AperturePBR_Translucent.mdl@
                 uniform token info:mdl:sourceAsset:subIdentifier = "AperturePBR_Translucent"
                 float inputs:ior_constant = 1.33
-                color3f inputs:transmittance_color = (0.75, 0.93, 0.97)
+                color3f inputs:transmittance_color = (0.6, 0.88, 0.94)
                 float inputs:transmittance_measurement_distance = 1
                 bool inputs:thin_walled = 0
                 bool inputs:use_diffuse_layer = 0
+                asset inputs:normalmap_texture = @./textures/water_clear_n.dds@
                 token outputs:out
             }
         }
@@ -100,6 +102,7 @@ def Xform "RootNode"
                 float inputs:transmittance_measurement_distance = 1
                 bool inputs:thin_walled = 0
                 bool inputs:use_diffuse_layer = 0
+                asset inputs:normalmap_texture = @./textures/water_natural_n.dds@
                 token outputs:out
             }
         }

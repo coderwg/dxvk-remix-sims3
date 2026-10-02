@@ -1083,9 +1083,10 @@ int main() {
       const size_t nat = u.find(nname);
       const size_t nend = nat == std::string::npos ? nat : u.find("token outputs:out", nat);
       CHECK(nh == kNaturalWaterMarkerHash && nat != std::string::npos && nend != std::string::npos && u.find("ior_constant = 1.33", nat) < nend && u.find("thin_walled = 0", nat) < nend
+            && u.find("@./textures/water_natural_n.dds@", nat) < nend && wat != std::string::npos && u.find("@./textures/water_clear_n.dds@", wat) < wend
             && waterKind(0xf74b4657dbfd60bcull) == kNaturalWater && waterKind(0x11a6bdfd3e77d03aull) == kNaturalWater && waterKind(0xd40999e5838e8b05ull) == kClearWater
             && waterKind(0x85c0a78a614b15d3ull) == kClearWater && waterKind(0x387e1a15c63c120aull) == kClearWater && waterKind(0x3197bfdef2330503ull) == -1,
-            "natural water (M93): the marker's level-0 hash 0x%016llX names %s (a volume); ponds and the sea natural, pools and bowls clear", (unsigned long long) nh, nname);
+            "natural water (M93, M94): the marker's level-0 hash 0x%016llX names %s (a volume); ponds and the sea natural, pools and bowls clear; each with its ripple normal map", (unsigned long long) nh, nname);
       // milestone 88: the frosted marker's hash names the frosted material (a diffuse layer)
       for (auto& p : gm) p = kFrostedMarkerColour;
       const uint64_t fh = (uint64_t) XXH3_64bits(gm, sizeof gm);
