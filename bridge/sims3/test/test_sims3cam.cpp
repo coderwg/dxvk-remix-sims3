@@ -1056,17 +1056,6 @@ int main() {
       // milestone 84: the Sims' soft shadow blob is never captured
       const NeverCapture* blob = findNeverCapture(0xb7d550c6421e14f4ull);
       CHECK(blob && !blob->blendedOnly, "never-capture (M84): the Sims' soft shadow blob VS b7d550c6");
-      // milestone 95: a pool's water box keeps its top
-      {
-        // a box: the top (two triangles at 1000), one side (corners at 1000 and 900), the floor (at 900)
-        const std::vector<uint32_t> idx = { 0, 1, 2,  2, 1, 3,  0, 4, 1,  4, 5, 6 };
-        const std::vector<uint16_t> hgt = { 1000, 1000, 1000,  1000, 1000, 1000,  1000, 900, 1000,  900, 900, 900 };
-        std::vector<uint32_t> out; TopStats st; keepTopTriangles(idx, hgt, out, st);
-        const uint8_t packed[4] = { 7, 9, 0xE8, 0x03 }, color[4] = { 0xE8, 9, 7, 0x03 };   // UBYTE4 x y z w; D3DCOLOR in memory B G R A
-        CHECK(st.in == 4 && st.kept == 2 && st.hi == 1000 && st.lo == 900 && out == std::vector<uint32_t>({ 0, 1, 2, 2, 1, 3 }) && poolWaterHeight(packed, false) == 1000 && poolWaterHeight(color, true) == 1000
-              && isPoolWaterVs(0x011ba470c488f4feull) && !isPoolWaterVs(0x2a6edce65dc2afb5ull),
-              "pool water (M95, M95b): a box keeps its top two triangles; the height is the shader's z + 256 w (UBYTE4 or D3DCOLOR order); VS 011ba470");
-      }
       const NeverCapture* cards = findNeverCapture(0x6cb3b47f30712201ull);
       CHECK(cards && cards->blendedOnly && neverCaptureDraw(neverCaptureMode(cards), TRUE) && !neverCaptureDraw(neverCaptureMode(cards), FALSE),
             "never-capture (M91): the effect cards VS 6cb3b47f, blended draws only (the pond's white surface effect, the light beams)");

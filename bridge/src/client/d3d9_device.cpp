@@ -2460,9 +2460,6 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
   LogFunctionCall();
   if (sims3cam::enabled()) { g_sims3.drawIndexed = true; g_sims3.drawType = Type; g_sims3.drawBase = BaseVertexIndex; g_sims3.drawStart = startIndex; g_sims3.drawPrims = primCount; }   // for the squares (milestone 60)
   SIMS3_BEGIN_DRAW();
-  // The Sims 3 camera hook: a lot pool's water mesh goes out as its surface only (milestone 95)
-  if (sims3cam::enabled() && !g_sims3.ourDraw && g_sims3.drawGlass && sims3cam::isPoolWaterVs(g_sims3.vsHash))
-    sims3TrimPoolWater(g_sims3, this, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount);
   // The Sims 3 camera hook: the directional light a lit terrain shader is handed for this draw, c0
   // its colour and c1 the direction toward it: the sun, or the moon (milestone 41). Present
   // forwards what the frame's last such draw was given.

@@ -212,11 +212,6 @@ struct Sims3Hook {
   IDirect3DTexture9* frostedMarker = nullptr; uint64_t frostedMarkerHash = 0; bool frostedMarkerFailed = false; uint32_t frostedDraws = 0;   // frosted glass (milestone 88)
   IDirect3DTexture9* naturalWaterMarker = nullptr; uint64_t naturalWaterMarkerHash = 0; bool naturalWaterMarkerFailed = false; uint32_t naturalWaterDraws = 0;   // natural water (milestone 93)
   uint32_t waveDumpedIds[32] = {}; uint32_t waveDumped = 0;   // the game's wave maps written (milestone 93, a diagnostic)
-  // a lot pool's water mesh as its surface only (milestone 95): per mesh and range, the trimmed index buffer (null: nothing to trim)
-  struct PoolTrim { uint32_t vbId = 0, vbVer = 0, ibId = 0, ibVer = 0; int base = 0; uint32_t start = 0, prims = 0; IDirect3DIndexBuffer9* ib = nullptr; uint32_t kept = 0, lo = 0, hi = 0; };
-  std::vector<PoolTrim> poolTrims;
-  IDirect3DIndexBuffer9* ibRestore = nullptr;   // the game's index buffer, back in sims3EndDraw
-  uint32_t poolTrimDraws = 0, poolTrimMeshes = 0, poolTrimLogged = 0, poolTrimDropped = 0;
   DWORD blendSaved = 0; bool blendOurs = false;
   uint32_t glassDraws = 0, glassLogged = 0; uint64_t glassLoggedPs[8] = {};
   uint32_t mirrorSurfaceDropped = 0;   // the planar-reflection surface passes left out (milestone 82)

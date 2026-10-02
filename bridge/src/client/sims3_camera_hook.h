@@ -1931,31 +1931,6 @@ inline constexpr uint32_t kWaterMarkerColour = 0xFF8CC4C8u;          // ARGB pal
 inline constexpr uint64_t kWaterMarkerHash = 0x2723DD62C28E1456ull;  // XXH3-64 of its level 0; the mod's material name
 inline constexpr uint32_t kNaturalWaterMarkerColour = 0xFF6E9C8Cu;          // ARGB muted green-teal: natural water without the mod
 inline constexpr uint64_t kNaturalWaterMarkerHash = 0x52B04DF3E566CA55ull;  // XXH3-64 of its level 0; the mod's material name
-// ---- the lot pool's water mesh (milestone 95) ------------------------------------------------
-// VS 011ba470 packs a vertex into four bytes: x and z on a grid and a 16-bit height (z + 256 w, then
-// x 7.97 - 200: heights below the surface exist). The game declares them D3DCOLOR (run 203), whose
-// memory order B, G, R, A reaches the shader as x = R, y = G, z = B, w = A; UBYTE4 is read as is. The mesh reads as a box -- the surface on top and
-// sides and a floor down the pool's own, for the walls-down view -- and as a see-through volume its
-// sides lie on the pool's walls: two surfaces in one place, the "overlapping triangles" at the pool
-// walls of run 202 (not seen while the surface was opaque). Only the triangles whose three corners
-// are at the mesh's highest height go to the runtime; the game's index buffer comes back after.
-inline bool isPoolWaterVs(uint64_t vsHash) { return vsHash == 0x011ba470c488f4feull; }
-inline uint16_t poolWaterHeight(const uint8_t* v, bool d3dcolor) { return (uint16_t) ((d3dcolor ? v[0] : v[2]) | (v[3] << 8)); }   // the shader's z + 256 w
-struct TopStats { uint32_t in = 0, kept = 0; uint16_t lo = 0xFFFFu, hi = 0; };
-// idx: triangle-list indices; height: each index entry's vertex height; out: the kept triangles.
-inline void keepTopTriangles(const std::vector<uint32_t>& idx, const std::vector<uint16_t>& height, std::vector<uint32_t>& out, TopStats& st) {
-  st = TopStats();
-  const size_t n = idx.size() / 3 * 3;
-  if (height.size() < n) return;
-  for (size_t k = 0; k < n; ++k) { if (height[k] < st.lo) st.lo = height[k]; if (height[k] > st.hi) st.hi = height[k]; }
-  for (size_t t = 0; t < n; t += 3) {
-    ++st.in;
-    if (height[t] != st.hi || height[t + 1] != st.hi || height[t + 2] != st.hi) continue;
-    out.push_back(idx[t]); out.push_back(idx[t + 1]); out.push_back(idx[t + 2]);
-    ++st.kept;
-  }
-}
-
 // The game's wave maps (milestone 93, a diagnostic; goes once the mod's normal maps are made from
 // them): a water draw's 2D textures in these formats are written once each to
 // rtx-remix\logs\sims3-textures, level 0 as stored.

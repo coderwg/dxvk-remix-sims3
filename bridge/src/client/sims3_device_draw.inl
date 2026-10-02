@@ -34,9 +34,6 @@ inline void sims3OnReset(Sims3Hook& h) {
   if (h.waterMarker) { h.waterMarker->Release(); h.waterMarker = nullptr; }
   if (h.frostedMarker) { h.frostedMarker->Release(); h.frostedMarker = nullptr; }
   if (h.naturalWaterMarker) { h.naturalWaterMarker->Release(); h.naturalWaterMarker = nullptr; }
-  for (auto& t : h.poolTrims) if (t.ib) t.ib->Release();   // default-pool index buffers (milestone 95)
-  h.poolTrims.clear();
-  if (h.ibRestore) { h.ibRestore->Release(); h.ibRestore = nullptr; }
   h.glassMarkerHash = 0; h.glassMarkerFailed = false; h.waterMarkerHash = 0; h.waterMarkerFailed = false; h.frostedMarkerHash = 0; h.frostedMarkerFailed = false;
   h.naturalWaterMarkerHash = 0; h.naturalWaterMarkerFailed = false; h.blendOurs = false;
   h.markerFailed = false; h.markersConfigSent = false; h.terrainFreeStage = -1; h.tblockActive = false; h.tblockStage = -1; h.tblockSet = 0; h.tblockSrgb = 0; h.ourSampler = false; h.psBound = nullptr; h.vsTerrain = nullptr; h.lotFurtherCopy = false; h.swappingPs = false;
@@ -255,82 +252,10 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
   return true;
 }
 
-// A lot pool's water mesh as its surface only (milestone 95, sims3cam::keepTopTriangles): the draw's
-// arguments become the trimmed index buffer's, made once per mesh and range; the game's index buffer
-// is held for sims3EndDraw.
-template<typename Dev>
-void sims3TrimPoolWater(Sims3Hook& h, Dev* dev, INT base, UINT& minIndex, UINT& numVertices, UINT& startIndex, UINT& primCount) {
-  if (h.drawType != D3DPT_TRIANGLELIST || primCount == 0 || h.ibRestore) return;
-  IDirect3DVertexBuffer9* vb = nullptr; UINT off = 0, stride = 0;
-  if (FAILED(dev->GetStreamSource(0, &vb, &off, &stride)) || !vb) return;
-  vb->Release();
-  IDirect3DIndexBuffer9* ib = nullptr;
-  if (FAILED(dev->GetIndices(&ib)) || !ib) return;
-  ib->Release();
-  auto* lvb = bridge_cast<Direct3DVertexBuffer9_LSS*>(vb);
-  auto* lib = bridge_cast<Direct3DIndexBuffer9_LSS*>(ib);
-  if (!lvb || !lib || stride == 0) return;
-  const uint32_t vbId = (uint32_t) lvb->getId(), ibId = (uint32_t) lib->getId();
-  Sims3Hook::PoolTrim* e = nullptr;
-  for (auto& t : h.poolTrims)
-    if (t.vbId == vbId && t.vbVer == lvb->sims3Version && t.ibId == ibId && t.ibVer == lib->sims3Version && t.base == base && t.start == startIndex && t.prims == primCount) { e = &t; break; }
-  if (!e) {
-    if (h.poolTrims.size() >= 64u) { if (h.poolTrims.front().ib) h.poolTrims.front().ib->Release(); h.poolTrims.erase(h.poolTrims.begin()); }
-    h.poolTrims.emplace_back(); e = &h.poolTrims.back();
-    e->vbId = vbId; e->vbVer = lvb->sims3Version; e->ibId = ibId; e->ibVer = lib->sims3Version; e->base = base; e->start = startIndex; e->prims = primCount;
-    ++h.poolTrimMeshes;
-    int posOffset = -1, posType = -1;   // the position: D3DCOLOR or UBYTE4 (milestone 95)
-    IDirect3DVertexDeclaration9* decl = nullptr;
-    if (SUCCEEDED(dev->GetVertexDeclaration(&decl)) && decl) {
-      auto* ld = bridge_cast<Direct3DVertexDeclaration9_LSS*>(decl);
-      const D3DVERTEXELEMENT9* el = ld ? ld->sims3Elements() : nullptr;
-      for (int i = 0; el && i < 32 && el[i].Stream != 0xFF; ++i)
-        if (el[i].Stream == 0 && el[i].Usage == D3DDECLUSAGE_POSITION && el[i].UsageIndex == 0) { posType = el[i].Type; if (el[i].Type == D3DDECLTYPE_UBYTE4 || el[i].Type == D3DDECLTYPE_D3DCOLOR) posOffset = el[i].Offset; }
-      decl->Release();
-    }
-    const uint8_t* vd = lvb->sims3Data(); const uint8_t* id = lib->sims3Data();
-    const bool ib32 = lib->getDesc().Format == D3DFMT_INDEX32;
-    const size_t isz = ib32 ? 4u : 2u, nIdx = (size_t) primCount * 3u;
-    const char* why = posOffset < 0 ? "the position is not UBYTE4 or D3DCOLOR" : (UINT) posOffset + 4u > stride ? "the position is past the stride"
-                    : !vd ? "no vertex data kept" : !id ? "no index data kept" : ((size_t) startIndex + nIdx) * isz > lib->sims3Size() ? "the range is past the index buffer" : nullptr;
-    std::vector<uint32_t> idx(why ? 0 : nIdx); std::vector<uint16_t> height(why ? 0 : nIdx);
-    for (size_t k = 0; !why && k < nIdx; ++k) {
-      idx[k] = sims3cam::readIndex(id, (size_t) startIndex + k, ib32);
-      const int64_t v = (int64_t) base + (int64_t) idx[k];
-      const size_t at = (size_t) off + (size_t) v * stride + (size_t) posOffset;
-      if (v < 0 || at + 4u > lvb->sims3Size()) { why = "a vertex is past the vertex buffer"; break; }
-      height[k] = sims3cam::poolWaterHeight(vd + at, posType == D3DDECLTYPE_D3DCOLOR);
-    }
-    if (why) {
-      if (h.poolTrimLogged < 12u) { ++h.poolTrimLogged; Logger::info(format_string("Sims 3 camera hook: pool water mesh at frame %u -> vertex buffer %u not trimmed: %s (position type %d, stride %u)", h.frames + 1, vbId, why, posType, stride)); }
-      return;
-    }
-    std::vector<uint32_t> out; sims3cam::TopStats st;
-    sims3cam::keepTopTriangles(idx, height, out, st);
-    if (!out.empty() && st.kept < st.in) {
-      uint32_t lo = 0xFFFFFFFFu, hi = 0; for (uint32_t v : out) { if (v < lo) lo = v; if (v > hi) hi = v; }
-      e->ib = sims3MakeIndexBuffer(dev, out); e->kept = st.kept; e->lo = lo; e->hi = hi;
-      h.poolTrimDropped += st.in - st.kept;
-    }
-    if (h.poolTrimLogged < 12u) {
-      ++h.poolTrimLogged;
-      Logger::info(format_string("Sims 3 camera hook: pool water mesh at frame %u -> vertex buffer %u: %u triangles, %u at the top (height %u) %s, %u below it (down to %u)%s",
-                                 h.frames + 1, vbId, st.in, st.kept, (unsigned) st.hi, e->ib ? "kept" : "(nothing below to drop)", st.in - st.kept, (unsigned) st.lo,
-                                 (st.kept < st.in && !e->ib) ? " -- no index buffer made" : ""));
-    }
-  }
-  if (!e->ib) return;
-  h.ibRestore = ib; ib->AddRef();
-  dev->SetIndices(e->ib);
-  startIndex = 0; primCount = e->kept; minIndex = e->lo; numVertices = e->hi - e->lo + 1;
-  ++h.poolTrimDraws;
-}
-
 // After the draw's message has been queued: the game's stage-0 texture and vertex shader back,
 // the masked-write emulation undone.
 template<typename Dev>
 void sims3EndDraw(Sims3Hook& h, Dev* dev) {
-  if (h.ibRestore) { dev->SetIndices(h.ibRestore); h.ibRestore->Release(); h.ibRestore = nullptr; }   // a pool's water mesh (milestone 95)
   if (h.fogOurs) { h.fogOurs = false; h.ourState = true; for (int i = 0; i < 5; ++i) dev->SetRenderState(kSims3FogRs[i], h.fogSaved[i]); h.ourState = false; }
   if (h.viewportOurs) { h.viewportOurs = false; h.ourState = true; dev->SetViewport(&h.gameViewport); h.ourState = false; }
   // a terrain draw's pixel shader variant, moved texture and sampler states (milestone 17)
