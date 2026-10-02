@@ -114,8 +114,8 @@ def main():
     ap.add_argument('--waves', help='folder with the hook\'s wave-map dumps (water_*.raw)')
     args = ap.parse_args()
     os.makedirs(OUT, exist_ok=True)
-    # very frosted (a test the user asked for, run 201: "clearly frosted"): a pale grey-white diffuse layer at 85 % opacity
-    write_dds_rgba8(os.path.join(OUT, 'frost.dds'), flat_levels(4, 4, (224, 228, 232, 217)))
+    # the frosting: a pale grey-white diffuse layer at 40 % opacity (the user's choice after the 85 % test of run 201)
+    write_dds_rgba8(os.path.join(OUT, 'frost.dds'), flat_levels(4, 4, (224, 228, 232, 102)))
     print('wrote', os.path.join(OUT, 'frost.dds'))
     if not args.waves:
         print('no --waves: the water normal maps are not made')
