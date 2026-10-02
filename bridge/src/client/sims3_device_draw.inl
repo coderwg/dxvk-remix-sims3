@@ -55,7 +55,6 @@ inline void sims3OnReset(Sims3Hook& h) {
   h.frameCamSet = false;
   h.tssOurs = 0; h.uvIndexHidden = false; h.factorOurs = false; h.sentFactor = 0xFFFFFFFFu; h.gameFactor = 0xFFFFFFFFu;
   h.gameTss0[0] = D3DTOP_MODULATE; h.gameTss0[1] = D3DTA_TEXTURE; h.gameTss0[2] = D3DTA_CURRENT; h.gameTss0[3] = 0;
-  h.gameXformSet[0] = h.gameXformSet[1] = false;
   h.sunSet = false; h.moonSet = false; h.terrainSunDraws = 0;
   for (uint32_t k = 0; k < h.lamps.n; ++k) { sims3cam::Lamp& Lr = h.lamps.lamps[k]; Lr.sent = false; Lr.api = Lr.api2 = Lr.api3 = nullptr; }   // the runtime's lights are gone with the device; the lamps are re-sent
   for (bool& r : h.rsSet) r = false;

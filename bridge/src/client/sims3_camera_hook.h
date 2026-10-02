@@ -1,17 +1,20 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestone 1b).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-120).
  *
- * The Sims 3 never calls IDirect3DDevice9::SetTransform. It uploads a fused
- * World*View*Projection matrix to vertex-shader constants c0..c3 (column-vector
- * convention, one register per matrix row), usually the object's World as a 3x4 at
- * c4..c6, and the camera's world-space eye position as a float4 somewhere in the same
- * block. DXVK-Remix derives its camera solely from D3DTS_VIEW / D3DTS_PROJECTION and
- * treats an identity projection as "no camera", so stock Remix captures nothing.
+ * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
+ * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
+ * convention, one per matrix row), usually the object's World as a 3x4 right after it, and the
+ * camera's world-space eye position as a float4 (x, y, z, 1) in the same block. The block is
+ * uploaded at c0 (the terrain, the walls, most of the lot) and, with the same layout, at
+ * c180..c187 (the Sims and the objects; the in-world trace). DXVK-Remix derives its camera solely
+ * from D3DTS_VIEW / D3DTS_PROJECTION and treats an identity projection as "no camera", so stock
+ * Remix captures nothing.
  *
- * This hook recovers View and Projection and forwards them via SetTransform; Remix's
- * vertex capture then places geometry from the vertex-shader output through
- * inverse(View*Projection), so no per-draw World is needed.
+ * This hook recovers View and Projection from the c0 uploads and forwards them via SetTransform;
+ * Remix's vertex capture then places geometry from the vertex-shader output through
+ * inverse(View*Projection). D3DTS_WORLD stays the identity, except for glass: its object's place
+ * (milestone 119), so that a moving glass keeps its motion.
  *
  * Disambiguation (learned from run 1): a projection composed with any rigid World is
  * still a perfectly valid-looking camera, just in object space. The only way to tell
@@ -20,19 +23,19 @@
  * accepted only if the camera position it implies equals a float4 in the same upload.
  *
  * Classification of a c0 upload:
- *   Main        - verified camera with a proper basis (det +1): the play camera, whichever
- *                 way it pitches                                  -> forward View/Projection
- *   OtherCamera - verified camera with a mirrored basis (det -1): a reflection pass (the
- *                 sea/pool pass, a wall mirror's stencil pass)    -> its draws are dropped
- *   None        - anything else (object-space fusions, unknown layouts, the UI's pixel-to-
- *                 clip scale) -> leave as is: those draws are still rendered by the main
- *                 camera and un-project correctly, or fail the per-draw 3D tests
+ *   Main       - verified camera with a proper basis (det +1): the play camera, whichever
+ *                way it pitches                                  -> forward View/Projection
+ *   Reflection - verified camera with a mirrored basis (det -1): a reflection pass (the
+ *                sea/pool pass, a wall mirror's stencil pass)    -> its draws are dropped
+ *   None       - anything else (object-space fusions, unknown layouts, the UI's pixel-to-
+ *                clip scale) -> leave as is: those draws are still rendered by the main
+ *                camera and un-project correctly, or fail the per-draw 3D tests
  *
  * The ray tracer renders reflections itself, so nothing of a reflection pass is sent on: its
  * 3D draws are dropped on the client (recognised by the mirrored camera, or by the stencil
  * mirror's render states for draws whose own constants never reach the classifier). Any
- * other draw that is not captured keeps the runtime's default transforms (or the game's own,
- * if it ever set any), i.e. plain rasterization, so it looks exactly as it did without the hook.
+ * other draw that is not captured gets the identity transforms, i.e. plain rasterization, so
+ * it looks exactly as it did without the hook.
  *
  * Toggle with the SIMS3_CAMERA_HOOK environment variable (unset/1 = on; 0, f or n = off).
  */
@@ -51,7 +54,7 @@ namespace sims3cam {
 
 struct M4 { float m[4][4]; };  // m[row][col], column-vector convention (M * v)
 
-enum class Kind { None, Main, OtherCamera };
+enum class Kind { None, Main, Reflection };
 
 inline bool enabled() {
   static int s = -1;
@@ -195,7 +198,7 @@ inline bool similarMatrix(const D3DMATRIX& a, const D3DMATRIX& b, float eps) {
 // apart: the play camera pitches from a few degrees below the horizon to top-down, and at the
 // horizon the earlier orientation test (forward.y < -0.05, runs 2-67) rejected it. The ray
 // tracer renders reflections itself; the reflection passes' draws are dropped (sims3ApplyForDraw).
-inline Kind kindOfVerified(const Camera& cam) { return cam.mirrored ? Kind::OtherCamera : Kind::Main; }
+inline Kind kindOfVerified(const Camera& cam) { return cam.mirrored ? Kind::Reflection : Kind::Main; }
 
 // c = constant floats beginning at register 0; count = number of float4 registers.
 inline Kind classify(const float* c, unsigned count, Camera& cam) {
@@ -215,8 +218,8 @@ inline Kind classify(const float* c, unsigned count, Camera& cam) {
   return Kind::None;
 }
 
-// What the runtime currently holds. Kind::None here means the transforms the runtime had
-// before the hook: the game's own, if it ever set any, else identity.
+// What the runtime currently holds. Kind::None here means the identity transforms (the game sets
+// none of its own).
 struct Held { Kind kind = Kind::None; D3DMATRIX view = {}; D3DMATRIX proj = {}; };
 
 // ---- draw-time decision (milestone 1d) ------------------------------------------------

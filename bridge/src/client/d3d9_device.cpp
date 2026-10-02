@@ -1248,11 +1248,6 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetTransform(D3DTRANSFORMSTATETYPE St
   }
 
   const auto idx = mapXformStateTypeToIdx(State);
-  // The Sims 3 camera hook: the game's own View / Projection, if it ever sets them (ours are marked)
-  if (sims3cam::enabled() && !g_sims3.ourState) {
-    if (State == D3DTS_VIEW) { g_sims3.gameXform[0] = *pMatrix; g_sims3.gameXformSet[0] = true; g_sims3.held.kind = sims3cam::Kind::None; }
-    else if (State == D3DTS_PROJECTION) { g_sims3.gameXform[1] = *pMatrix; g_sims3.gameXformSet[1] = true; g_sims3.held.kind = sims3cam::Kind::None; }
-  }
   UID currentUID = 0;
   {
     {
@@ -3093,7 +3088,15 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetVertexShaderConstantF(UINT StartRe
           const bool differs = std::fabs(cam.fovY - f.fovY) > 1e-4f || std::fabs(cam.nearZ - f.nearZ) > 1e-3f * f.nearZ || std::fabs(cam.aspect - f.aspect) > 1e-3f
                             || std::fabs(cam.proj._33 - f.proj._33) > 2e-6f || std::fabs(cam.proj._43 - f.proj._43) > 1e-4f * std::fabs(f.proj._43) + 1e-5f
                             || sims3cam::len3(dp) > 0.05f || sims3cam::dot3(cam.fwd, f.fwd) < 0.99999f;
-          if (differs) adopt = false;
+          if (differs) {
+            adopt = false; ++h.frameCamRejected;   // a measure (milestone 120): does this rule ever act?
+            if (h.frameCamRejectLogged < 4u) {
+              ++h.frameCamRejectLogged;
+              snprintf(msg, sizeof msg, "Sims 3 camera hook: a main camera unlike the frame's first, not adopted at frame %u (fovY %.2f / %.2f deg, near %.4f / %.4f, eye moved %.3f, fwd dot %.6f)",
+                       h.frames + 1, cam.fovY * 57.2958f, f.fovY * 57.2958f, cam.nearZ, f.nearZ, sims3cam::len3(dp), sims3cam::dot3(cam.fwd, f.fwd));
+              Logger::info(msg);
+            }
+          }
         }
         if (adopt) { h.cam = cam; h.cameraValid = true; h.camMirrored = false; }
         if (!h.loggedMain) {
@@ -3102,18 +3105,13 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetVertexShaderConstantF(UINT StartRe
                    cam.fovY * 57.2958f, cam.aspect, cam.nearZ, cam.proj._33, cam.proj._43, cam.pos[0], cam.pos[1], cam.pos[2]);
           Logger::info(msg);
         }
-      } else if (kind == sims3cam::Kind::OtherCamera) {
+      } else if (kind == sims3cam::Kind::Reflection) {
         if (!h.camMirrored) h.cameraValidBeforeMirror = h.cameraValid;   // what holds again when the pass is over (milestone 85)
         h.cameraValid = false; h.camMirrored = true;   // a reflection pass: its 3D draws are dropped
         ++h.mirroredUploads;
         if (!h.loggedOther) {
           h.loggedOther = true;
           snprintf(msg, sizeof msg, "Sims 3 camera hook: reflection camera (mirrored basis; eye=%.1f,%.1f,%.1f, fwd.y=%.2f) at frame %u -> its draws are dropped", cam.pos[0], cam.pos[1], cam.pos[2], cam.fwd[1], h.frames + 1);
-          Logger::info(msg);
-        }
-        if (cam.fwd[1] < -0.05f && !h.loggedMirrorCam) {
-          h.loggedMirrorCam = true;
-          snprintf(msg, sizeof msg, "Sims 3 camera hook: reflection camera looking down at frame %u (a wall mirror's pass; eye=%.1f,%.1f,%.1f, fwd=%.2f,%.2f,%.2f) -> its draws are dropped", h.frames + 1, cam.pos[0], cam.pos[1], cam.pos[2], cam.fwd[0], cam.fwd[1], cam.fwd[2]);
           Logger::info(msg);
         }
       }

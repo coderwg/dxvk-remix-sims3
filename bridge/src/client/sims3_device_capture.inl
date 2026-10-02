@@ -2,8 +2,38 @@
 // holds, the statistics notes, the albedo stage and its coordinate, the vertex shader variants and
 // the albedo's sampler states. Included after sims3_device_state.inl; not a standalone header.
 
+// The lot terrain drawn again for another world chunk (milestone 16): the frame's first draw of the
+// mesh was the whole lot already. With the terrain markers in place (milestone 17) the copy is baked
+// as a hidden layer pass (h.lotFurtherCopy), so its chunk's paint reaches the terrain texture;
+// without them it is dropped like a reflection pass's draw (true).
+template<typename Dev>
+bool sims3LotTerrainCopy(Sims3Hook& h, Dev* dev, bool is3D) {
+  h.lotFurtherCopy = false;
+  if (!is3D || h.vsHash != sims3cam::kLotTerrainVs) return false;
+  IDirect3DVertexBuffer9* vb = nullptr; UINT vbOffset = 0, vbStride = 0;
+  if (SUCCEEDED(dev->GetStreamSource(0, &vb, &vbOffset, &vbStride)) && vb) {
+    const uint64_t key = sims3cam::lotTerrainKey((uint64_t) (uintptr_t) vb, h.rows4to6);
+    vb->Release();
+    if (h.lotCopies.seen(key)) {
+      if (h.marker[1] != nullptr && !h.markerFailed) {
+        h.lotFurtherCopy = true; ++h.terrainLotCopyDraws;
+      } else {
+        h.drawDropped = true; h.dropWhy = "lot copy";
+        ++h.lotCopyDrops;
+        if (h.lotCopyLogged < 4) {
+          ++h.lotCopyLogged; char msg[240];
+          snprintf(msg, sizeof msg, "Sims 3 camera hook: lot terrain drawn again for another world chunk at frame %u -> dropped (mesh %p, World translation %.1f, %.1f, %.1f)", h.frames + 1, (void*) vb, h.rows4to6[3], h.rows4to6[7], h.rows4to6[11]);
+          Logger::info(msg);
+        }
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 // Returns whether this draw is captured with the main camera, and holds the runtime's transforms
-// accordingly: the main camera for a captured draw, else whatever the runtime had before the hook.
+// accordingly: the main camera for a captured draw, else the identity (plain rasterization).
 template<typename Dev>
 bool sims3ApplyForDraw(Sims3Hook& h, Dev* dev, const DWORD* rs) {
   static const D3DMATRIX kIdentity = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
@@ -27,33 +57,11 @@ bool sims3ApplyForDraw(Sims3Hook& h, Dev* dev, const DWORD* rs) {
     return false;
   }
   const bool is3D = sims3cam::drawIs3D(h.cameraValid, h.declIs3D, zEnable, h.rtIsPrimary);
-  // the lot terrain drawn again for another world chunk (milestone 16): the frame's first draw of
-  // the mesh was the whole lot already. With the terrain markers in place (milestone 17) the copy
-  // is baked as a hidden layer pass, so its chunk's paint reaches the terrain texture; without
-  // them it is dropped like a reflection pass's draw.
-  h.lotFurtherCopy = false;
-  if (is3D && h.vsHash == sims3cam::kLotTerrainVs) {
-    IDirect3DVertexBuffer9* vb = nullptr; UINT vbOffset = 0, vbStride = 0;
-    if (SUCCEEDED(dev->GetStreamSource(0, &vb, &vbOffset, &vbStride)) && vb) {
-      const uint64_t key = sims3cam::lotTerrainKey((uint64_t) (uintptr_t) vb, h.rows4to6);
-      vb->Release();
-      if (h.lotCopies.seen(key)) {
-        if (h.marker[1] != nullptr && !h.markerFailed) {
-          h.lotFurtherCopy = true; ++h.terrainLotCopyDraws;
-        } else {
-          h.drawDropped = true; h.dropWhy = "lot copy";
-          ++h.lotCopyDrops;
-          if (h.lotCopyLogged < 4) {
-            ++h.lotCopyLogged; char msg[240];
-            snprintf(msg, sizeof msg, "Sims 3 camera hook: lot terrain drawn again for another world chunk at frame %u -> dropped (mesh %p, World translation %.1f, %.1f, %.1f)", h.frames + 1, (void*) vb, h.rows4to6[3], h.rows4to6[7], h.rows4to6[11]);
-            Logger::info(msg);
-          }
-          return false;
-        }
-      }
-    }
-  }
+  if (sims3LotTerrainCopy(h, dev, is3D)) return false;   // a lot chunk copy without the baker's markers: dropped (milestone 16)
   const bool want = is3D && !sims3cam::neverCaptureDraw(h.vsNeverCapture, rs[D3DRS_ALPHABLENDENABLE]);
+  // a measure (milestone 120): a captured draw before the frame's first main camera upload is placed
+  // with the previous frame's camera
+  if (want && !h.frameCamSet) { ++h.staleCameraDraws; if (h.staleCameraFrame != h.frames) { h.staleCameraFrame = h.frames; ++h.staleCameraFrames; } }
   if (want) {
     if (h.held.kind != sims3cam::Kind::Main || !sims3cam::similarMatrix(h.held.view, h.cam.view, 1e-5f) || !sims3cam::similarMatrix(h.held.proj, h.cam.proj, 1e-5f)) {
       h.held.kind = sims3cam::Kind::Main; h.held.view = h.cam.view; h.held.proj = h.cam.proj;
@@ -65,7 +73,7 @@ bool sims3ApplyForDraw(Sims3Hook& h, Dev* dev, const DWORD* rs) {
       h.ourState = false;
     }
   } else if (h.held.kind != sims3cam::Kind::None) {
-    // back to what the runtime held before the hook: the game's own matrices when it set any, else identity
+    // back to the identity transforms: plain rasterization (the game sets no transforms of its own)
     h.held.kind = sims3cam::Kind::None;
     if (!h.loggedDraw2D) {
       h.loggedDraw2D = true;
@@ -74,8 +82,8 @@ bool sims3ApplyForDraw(Sims3Hook& h, Dev* dev, const DWORD* rs) {
       Logger::info(msg);
     }
     h.ourState = true;
-    dev->SetTransform(D3DTS_VIEW, h.gameXformSet[0] ? &h.gameXform[0] : &kIdentity);
-    dev->SetTransform(D3DTS_PROJECTION, h.gameXformSet[1] ? &h.gameXform[1] : &kIdentity);
+    dev->SetTransform(D3DTS_VIEW, &kIdentity);
+    dev->SetTransform(D3DTS_PROJECTION, &kIdentity);
     h.ourState = false;
   }
   return want;

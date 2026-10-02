@@ -24,7 +24,7 @@ using namespace sims3cam;
 static int fails = 0, skips = 0;
 #define CHECK(cond, ...) do { if (cond) { printf("  PASS  "); } else { printf("  FAIL  "); ++fails; } printf(__VA_ARGS__); printf("\n"); } while (0)
 #define SKIP(...) do { printf("  SKIP  "); ++skips; printf(__VA_ARGS__); printf("\n"); } while (0)
-static const char* kindName(Kind k) { return k == Kind::Main ? "Main" : k == Kind::OtherCamera ? "OtherCamera" : "None"; }
+static const char* kindName(Kind k) { return k == Kind::Main ? "Main" : k == Kind::Reflection ? "Reflection" : "None"; }
 
 // The in-game shader dumps (written by the hook, sims3DumpShader) and the captured buffers.
 static const char* kDumpDir = "C:\\Program Files\\EA Games\\The Sims 3\\Game\\Bin\\rtx-remix\\logs\\sims3-shaders\\";
@@ -98,12 +98,12 @@ int main() {
   printf("sims3 hook standalone test (sims3_camera_hook.h + sims3_walls.h)\n");
   CHECK(enabled(), "hook enabled by default (SIMS3_CAMERA_HOOK unset)");
 
-  // --- captured reflection-pass draws: verified cameras, looking up -> OtherCamera
+  // --- captured reflection-pass draws: verified cameras, looking up -> Reflection
   Camera A = {}, B = {};
   const Kind kA = classify(k1277907, 12, A);
-  CHECK(kA == Kind::OtherCamera, "call 1277907 (WVP + World at c4, eye at c8): %s (reflection camera, fwd.y=%.2f)", kindName(kA), A.fwd[1]);
+  CHECK(kA == Kind::Reflection, "call 1277907 (WVP + World at c4, eye at c8): %s (reflection camera, fwd.y=%.2f)", kindName(kA), A.fwd[1]);
   const Kind kB = classify(k1278332, 12, B);
-  CHECK(kB == Kind::OtherCamera, "call 1278332 (identity World, eye at c7): %s", kindName(kB));
+  CHECK(kB == Kind::Reflection, "call 1278332 (identity World, eye at c7): %s", kindName(kB));
   if (kA != Kind::None && kB != Kind::None) {
     printf("         fovY=%.2f deg  aspect=%.3f  near=%.4f  eye=(%.2f, %.2f, %.2f)\n", A.fovY*57.2958f, A.aspect, A.nearZ, A.pos[0], A.pos[1], A.pos[2]);
     CHECK(A.fovY*57.2958f > 25.f && A.fovY*57.2958f < 27.5f && A.aspect > 1.75f && A.aspect < 1.81f, "lens: fovY ~26 deg, aspect ~16:9");
@@ -793,13 +793,13 @@ int main() {
   {
     float rows[16]; memcpy(rows, k1277907, sizeof rows);            // the sea reflection pass: looks up, improper
     Camera sc = {};
-    CHECK(decompose(fromRows(rows), sc) && sc.mirrored && sc.fwd[1] > 0.05f && kindOfVerified(sc) == Kind::OtherCamera, "camera: the sea reflection camera is improper (det -1) and looks up -> OtherCamera");
+    CHECK(decompose(fromRows(rows), sc) && sc.mirrored && sc.fwd[1] > 0.05f && kindOfVerified(sc) == Kind::Reflection, "camera: the sea reflection camera is improper (det -1) and looks up -> Reflection");
     for (int r = 0; r < 4; ++r) rows[r*4+1] = -rows[r*4+1];         // un-mirrored across the water: the play camera
     Camera mc = {};
     CHECK(decompose(fromRows(rows), mc) && !mc.mirrored && mc.fwd[1] < -0.05f && kindOfVerified(mc) == Kind::Main, "camera: the play camera is a proper rotation (det +1) looking down -> Main");
     for (int r = 0; r < 4; ++r) rows[r*4+0] = -rows[r*4+0];         // reflected across a vertical plane: a wall mirror's pass
     Camera wc = {};
-    CHECK(decompose(fromRows(rows), wc) && wc.mirrored && wc.fwd[1] < -0.05f && kindOfVerified(wc) == Kind::OtherCamera, "camera: a wall mirror's reflection camera looks down too but is improper -> OtherCamera (the mirrored house and terrain popping at close zoom)");
+    CHECK(decompose(fromRows(rows), wc) && wc.mirrored && wc.fwd[1] < -0.05f && kindOfVerified(wc) == Kind::Reflection, "camera: a wall mirror's reflection camera looks down too but is improper -> Reflection (the mirrored house and terrain popping at close zoom)");
     // the play camera tilted to the horizon (and a touch above it) is still the play camera: only the basis decides
     Camera hc = mc; hc.fwd[1] = 0.f;
     CHECK(kindOfVerified(hc) == Kind::Main, "camera: a proper camera at the horizon -> Main (the old pitch test rejected it and broke the far view)");

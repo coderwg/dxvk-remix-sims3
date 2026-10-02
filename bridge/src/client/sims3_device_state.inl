@@ -127,8 +127,6 @@ struct Sims3Hook {
   DWORD gameTss0[4] = { D3DTOP_MODULATE, D3DTA_TEXTURE, D3DTA_CURRENT, 0 };   // stage 0: COLOROP, COLORARG1, COLORARG2, TEXCOORDINDEX (D3D defaults until the game sets them)
   DWORD gameFactor = 0xFFFFFFFFu;                 // D3DRS_TEXTUREFACTOR
   bool factorOurs = false;                        // the runtime holds our factor (else the game's)
-  D3DMATRIX gameXform[2] = {};                    // the game's own View / Projection, if it ever set them
-  bool gameXformSet[2] = {};
   uint32_t restoreCount = 0;
   // The compositor packs the Sim textures' channels with partial colour write masks, and the runtime
   // (with ray tracing on) drops any draw whose mask lacks R, G or B before it asks whether the target
@@ -173,7 +171,6 @@ struct Sims3Hook {
   bool drawDropped = false;                       // this draw is a reflection pass's (set by sims3BeginDraw; the draw returns at once)
   uint32_t mirrorPassEnds = 0;   // mirrored passes ended by a draw culling clockwise (milestone 85)
   uint32_t mirroredUploads = 0, reflectionDrops = 0, reflectionDropsByStates = 0, reflectionFrames = 0, reflectionFrame = 0xFFFFFFFFu, reflectionLogged = 0;
-  bool loggedMirrorCam = false;
   // The lot terrain drawn once per world chunk (milestone 16, sims3cam::LotCopies): the World
   // rows c4..c6 as last uploaded, the lot meshes drawn this frame, and the copies dropped.
   float rows4to6[12] = {};
@@ -300,6 +297,9 @@ struct Sims3Hook {
   // that differs from it in lens or position is another camera of the frame, not adopted.
   sims3cam::Camera frameCam; bool frameCamSet = false;
   uint32_t transformSends = 0;
+  // measures (milestone 120): captured draws before the frame's main camera upload (placed with the
+  // previous frame's camera) and the frames they fell in; main cameras the rule above left unadopted
+  uint32_t staleCameraDraws = 0, staleCameraFrames = 0, staleCameraFrame = 0xFFFFFFFFu, frameCamRejected = 0, frameCamRejectLogged = 0;
 } g_sims3;
 
 // the lamp reporter's block (milestone 36): where it was found, and the search for it
