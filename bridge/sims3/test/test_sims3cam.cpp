@@ -1150,8 +1150,10 @@ int main() {
       }
       CHECK(waterMaterial(0xd40999e5838e8b05ull) == kWaterPool && waterMaterial(0x85c0a78a614b15d3ull) == kWaterPool && waterMaterial(0x11a6bdfd3e77d03aull) == kWaterPond
             && waterMaterial(0xf74b4657dbfd60bcull) == kWaterSea && waterMaterial(0x387e1a15c63c120aull) == kWaterObject
+            && waterMaterial(0xd92d3913aba53da8ull) == kWaterObject && waterMaterial(0xaf6cd85bfab9f36dull) == kWaterObject && waterMaterial(0xdb58e590608be737ull) == kWaterSea
+            && !namedGlass(0xd92d3913aba53da8ull) && !namedGlass(0xdb58e590608be737ull)
             && waterMaterial(0xf45e6c607bb94189ull) == -1 && waterMaterial(0x3197bfdef2330503ull) == -1 && isWaterPs(0x11a6bdfd3e77d03aull) && !isWaterPs(0xf45e6c607bb94189ull),
-            "water (M86-M99): the pool's surfaces d40999e5 / 85c0a78a, the pond's 11a6bdfd, the town's water f74b4657 (the sea), the instanced 387e1a15 (object water); not the pool floor f45e6c60 nor the glass");
+            "water (M86-M108): the pool's surfaces d40999e5 / 85c0a78a, the pond's 11a6bdfd, the town's water f74b4657 and the open water db58e590 (the sea), the instanced 387e1a15 and d92d3913 / af6cd85b (object water); not the pool floor f45e6c60 nor the glass");
       // milestone 105: the car glass marker's hash names the tinted thin glass
       for (auto& p : gm) p = kCarGlassMarkerColour;
       const uint64_t ch = (uint64_t) XXH3_64bits(gm, sizeof gm);

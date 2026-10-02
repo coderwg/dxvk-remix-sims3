@@ -2003,6 +2003,13 @@ inline const WaterShader kWaterPs[] = {
   { 0xf74b4657dbfd60bcull, "the town's water, ponds and sea (VS 2a6edce6: a plane at a set height, waves, refraction and reflection targets, "
                            "two bump maps; its NORMAL input is no normal here, see chooseNormalTexcoord)", kWaterSea },
   { 0x387e1a15c63c120aull, "water, instanced (VS 1a047c76: waves, refraction target, reflection cube, a two-sample bump map)", kWaterObject },
+  // milestone 108 (the glass survey of milestone 107): until now sent opaque, a bump map or a ramp taken as the albedo
+  { 0xd92d3913aba53da8ull, "an object's water, ps_3_0: as 387e1a15 -- the bump map s2 read at two coordinates, the scene behind s1 "
+                           "shifted by it, reflection cube s0 (2 VS kinds; 28 runs)", kWaterObject },
+  { 0xaf6cd85bfab9f36dull, "an object's water, ps_3_0: as d92d3913 (1 run)", kWaterObject },
+  { 0xdb58e590608be737ull, "open water (VS defcc84d): as the town's water -- two scrolling signed wave maps s0 / s1 (Q8W8V8U8), the scene "
+                           "behind s4 shifted by them, reflection cube s2, the glint ramp s3 (DXT1 512x4) -- with a shore mask s6 "
+                           "(a cut-out) and the fog; 38 runs", kWaterSea },
   { 0xd40999e5838e8b05ull, "a lot pool's surface (VS 011ba470, a byte-packed grid): two scrolling wave normal maps s0 / s1, the scene behind "
                            "(render target s2) and the reflection (render target s3) read through them; captured, the wave map was its "
                            "albedo -- the slow-moving lavender 'normal map' of runs 194-198", kWaterPool },
