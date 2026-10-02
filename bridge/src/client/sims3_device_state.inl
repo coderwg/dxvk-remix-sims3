@@ -204,6 +204,10 @@ struct Sims3Hook {
   IDirect3DTexture9* marker[sims3cam::kTerrainMarkers] = {};   // the terrain / layer-pass / composite marker textures (terrainMarkerPixels)
   uint64_t markerHash[sims3cam::kTerrainMarkers] = {};         // their level-0 hashes as the runtime computes them (0 = not computed)
   bool markerFailed = false, markersConfigSent = false;
+  // glass (milestone 80): the glass marker, and the draw's blending the hook switched off
+  IDirect3DTexture9* glassMarker = nullptr; uint64_t glassMarkerHash = 0; bool glassMarkerFailed = false;
+  DWORD blendSaved = 0; bool blendOurs = false;
+  uint32_t glassDraws = 0, glassLogged = 0; uint64_t glassLoggedPs[8] = {};
   // the lot paint composite's two passes (milestone 17l, sims3cam::lotCompositeStage): the pass
   // being issued (0 = the game's own draw, pass 1; 2 = the hook's second pass, milestone 19), and
   // pass 2's black marker at stages 1 and 2 (what they held, put back in sims3EndDraw)

@@ -1827,6 +1827,24 @@ inline bool chooseAutoAlbedo(const PsAnalysis& a, const bool color2D[16], const 
   return stage >= 0;
 }
 
+// ---- glass (milestone 80) ------------------------------------------------------------------
+// The game's glass -- window panes, shower doors, glass tables -- is drawn by pixel shaders that
+// read only an environment cube map: a reflection with a Fresnel term and sharp highlights, no
+// colour texture, blended over what lies behind (five such shaders in runs 150-187). The runtime
+// drops such a draw (a cube map at stage 0 has no hash: the windows looked empty) or, with nothing
+// bound, makes it an untextured sheet (the showers flickered opaque). A blended draw of such a
+// shader is presented with the hook's glass marker at stage 0 and blending off; the hook's Remix
+// mod (sims3/remix-mod/Sims3Glass/mod.usda) makes the marker's hash the runtime's translucent glass.
+inline bool isGlassShader(const PsAnalysis& a) {
+  if (!a.valid) return false;
+  int cubes = 0;
+  for (const PsSamplerUse& u : a.samplers) { if (!u.read) continue; if (!u.cube) return false; ++cubes; }
+  return cubes > 0;
+}
+inline constexpr uint32_t kGlassMarkerSize = 32;
+inline constexpr uint32_t kGlassMarkerColour = 0xFFB8C8D0u;          // ARGB pale grey-blue: what the panes show if the mod is not loaded
+inline constexpr uint64_t kGlassMarkerHash = 0x5E30D0B82C246E6Cull;  // XXH3-64 of its level 0, as the runtime hashes it; the mod's material name
+
 // ---- which texture coordinates the runtime samples with (milestone 3g) -------------------
 // The 1.5.2 runtime takes a draw's texture coordinates from the vertex declaration element
 // whose index equals stage 0's D3DTSS_TEXCOORDINDEX, and only when no such element exists

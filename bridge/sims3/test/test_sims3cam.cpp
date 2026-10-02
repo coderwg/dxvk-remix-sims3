@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cmath>
 #include <cstring>
+#include <string>
 #include <vector>
 
 using namespace sims3cam;
@@ -1014,6 +1015,25 @@ int main() {
     CHECK((uint64_t) XXH3_64bits("", 0) == 0x2D06800538D394C2ull, "xxhash: XXH3_64bits of the empty input is the reference value (the runtime's texture hash)");
     const uint64_t h0 = (uint64_t) XXH3_64bits(m0, sizeof m0), h1 = (uint64_t) XXH3_64bits(m1, sizeof m1), h2 = (uint64_t) XXH3_64bits(m2, sizeof m2);
     CHECK(h0 != 0 && h1 != 0 && h2 != 0 && h0 != h1 && h1 != h2, "marker hashes: terrain 0x%016llX, world layer pass 0x%016llX, lot composite 0x%016llX (rtx.terrainTextures = all three, rtx.hideInstanceTextures = the layer pass and the composite, never the terrain marker)", (unsigned long long) h0, (unsigned long long) h1, (unsigned long long) h2);
+    {
+      // milestone 80: the glass rule -- the game's glass shaders read only cube maps; the marker's hash is
+      // the one the mod in the repo names
+      const char* glassPs[5] = { "ps_98e23f47d947eb22", "ps_3197bfdef2330503", "ps_66516d5db94ab307", "ps_efdac7f048e21b1f", "ps_db28eb0c60fdb2fb" };
+      int found = 0, glass = 0;
+      for (const char* n : glassPs) { std::vector<DWORD> gt; PsAnalysis ga; if (loadShader(n, gt) && analyzePixelShader(gt.data(), gt.size(), ga)) { ++found; if (isGlassShader(ga)) ++glass; } }
+      std::vector<DWORD> wt, ot; PsAnalysis wa, oa;
+      const bool notWall = !loadShader("ps_936215cf1e55a47e", wt) || (analyzePixelShader(wt.data(), wt.size(), wa) && !isGlassShader(wa));
+      const bool notObject = !loadShader("ps_0c19795eb80e2e96", ot) || (analyzePixelShader(ot.data(), ot.size(), oa) && !isGlassShader(oa));
+      CHECK(found >= 1 && glass == found && notWall && notObject && !isGlassShader(PsAnalysis()),
+            "glass (M80): the game's glass shaders read only cube maps (%d of %d dumps found); walls A, the object shader and an empty analysis are not glass", glass, found);
+      static uint32_t gm[kGlassMarkerSize * kGlassMarkerSize]; for (auto& p : gm) p = kGlassMarkerColour;
+      const uint64_t gh = (uint64_t) XXH3_64bits(gm, sizeof gm);
+      std::vector<uint8_t> usd; char name[32]; snprintf(name, sizeof name, "mat_%016llX", (unsigned long long) kGlassMarkerHash);
+      const bool haveUsd = loadBytes("../remix-mod/Sims3Glass/mod.usda", usd);
+      const std::string u(usd.begin(), usd.end());
+      CHECK(gh == kGlassMarkerHash && haveUsd && u.find(name) != std::string::npos && u.find("AperturePBR_Translucent.mdl") != std::string::npos && u.find("/RootNode/Looks/") != std::string::npos,
+            "glass (M80): the marker's level-0 hash 0x%016llX names the translucent material %s in sims3/remix-mod/Sims3Glass/mod.usda", (unsigned long long) gh, name);
+    }
     CHECK(kLotCompositePs == 0x99ee53ff6ef1b0b6ull && lotCompositeStage(0) == 0 && lotCompositeStage(1) == 4 && lotCompositeStage(2) == 3, "lot composite: pass 1 reads the mask from s4 (layer 4 out), pass 2 from s3 (layer 3 out)");
     std::vector<DWORD> lit, world, layer, comp, lit2, lit3, lit4;
     const bool have = loadShader("ps_17eabad58f650687", lit) && loadShader("ps_028ce2dde691b739", world) && loadShader("ps_3608ab95ab50c8b4", layer) && loadShader("ps_99ee53ff6ef1b0b6", comp)
