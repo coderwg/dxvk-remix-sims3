@@ -1912,6 +1912,9 @@ inline const WaterShader kWaterPs[] = {
                            "(render target s2) and the reflection (render target s3) read through them; captured, the wave map was its "
                            "albedo -- the slow-moving lavender 'normal map' of runs 194-198" },
   { 0x85c0a78a614b15d3ull, "a lot pool's surface, cube-reflected (VS 011ba470): wave maps s1 / s2, the scene behind s3, reflection cubes s0 / s4" },
+  { 0x11a6bdfd3e77d03aull, "a pond's surface (VS 24bd4713, a byte-packed mesh of its own, no culling; drawn right after the town's water): "
+                           "two scrolling signed wave maps s0 / s1 (Q8W8V8U8), reflection cubes s2 / s3, a sun-glint ramp s4 (DXT1 512x4), "
+                           "the shadow map s5, the scene behind s6; captured, the glint ramp was its albedo -- the flat white pond of runs 194-199" },
 };
 inline bool isWaterPs(uint64_t hash) { return findByHash(kWaterPs, hash) != nullptr; }
 inline constexpr uint32_t kWaterMarkerColour = 0xFF8CC4C8u;          // ARGB pale teal: what the water shows if the mod is not loaded
