@@ -1045,13 +1045,13 @@ int main() {
             "glass (M80): the game's glass shaders read only cube maps (%d of %d dumps found); walls A, the object shader and an empty analysis are not glass", glass, found);
       // milestone 81: textured glass by name; the Sims' hair pass and the light-beam cards (cube + 2D, blended) are not glass
       std::vector<DWORD> tg, hair, beam; PsAnalysis tga, ha, ba;
-      const bool tgOk = !loadShader("ps_29c6b22234617c1a", tg) || (analyzePixelShader(tg.data(), tg.size(), tga) && !isGlassShader(tga) && namedGlass(0x29c6b22234617c1aull));
+      const bool tgOk = !loadShader("ps_29c6b22234617c1a", tg) || (analyzePixelShader(tg.data(), tg.size(), tga) && !isGlassShader(tga) && !namedGlass(0x29c6b22234617c1aull));
       const bool hairOk = !loadShader("ps_57a5a049ffa47770", hair) || (analyzePixelShader(hair.data(), hair.size(), ha) && !isGlassShader(ha) && !namedGlass(0x57a5a049ffa47770ull));
       const bool beamOk = !loadShader("ps_7304aaea6a75fb3f", beam) || (analyzePixelShader(beam.data(), beam.size(), ba) && !isGlassShader(ba) && !namedGlass(0x7304aaea6a75fb3full));
       const NamedGlass* door = namedGlass(0x572773cfbd618a3aull);
       CHECK(tgOk && hairOk && beamOk && namedGlass(0xac4184cee232ed04ull) && namedGlass(0xac4184cee232ed04ull)->material == kClearGlass && !namedGlass(0x3197bfdef2330503ull)
             && door && door->material == kClearGlass && door->bumpStage == 2,
-            "glass (M81, M87, M100, M109): named glass 29c6b222 / ac4184ce clear, the shower door 572773cf bumpy; the hair pass 57a5a049, the light-beam card 7304aaea and the cube-only pane 3197bfde are not named");
+            "glass (M81, M87, M100, M109, M117): named glass ac4184ce clear, the shower door 572773cf bumpy; the skill pill 29c6b222 not glass (its own colours), the hair pass 57a5a049, the light-beam card 7304aaea and the cube-only pane 3197bfde are not named");
       // milestones 102, 105, 107: the named forms 2 and 3 are not cube-only, so the name is what makes them glass
       bool farOk = true;
       for (uint64_t hsh : { 0x85e9c3381d5bf054ull, 0x45c7a7cd511b5233ull, 0xd03ebab11453bca1ull, 0x2b1da1b45f51d3f9ull, 0x8ff495765d26a6fdull,

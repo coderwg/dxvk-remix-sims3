@@ -1864,7 +1864,7 @@ inline bool chooseAutoAlbedo(const PsAnalysis& a, const bool color2D[16], const 
 //     drawn opaque: clear, a colour texture over the reflection, or a normal map bending the scene
 //     behind (bumpy glass: the shower door);
 //  3. glass passes of other shaders: a parked car's paint shader drawn blended for its windows, a
-//     distant car's small glass shader with a constant alpha, two textured glass shaders.
+//     distant car's small glass shader with a constant alpha, a textured glass shader (a dome).
 // The runtime drops a draw whose stage 0 is a cube map (no hash: the panes looked empty) and takes a
 // 2D texture there as an opaque albedo, so every glass draw goes out with one of the hook's markers at
 // stage 0 and blending off; the Sims3Glass mod (sims3/remix-mod/Sims3Glass/mod.usda) makes each
@@ -1916,7 +1916,6 @@ inline const NamedGlass kNamedGlass[] = {
                            "(VS b51f1577, skinned: the door swings; runs 192-217)", kClearGlass, false, 2, 14 },
   { 0x8fe3ce7c5fbc6234ull, "bumpy glass: as 572773cf, its colour s3 x c10 tinting the scene behind (16 runs)", kClearGlass, false, 2, 14 },
   // form 3
-  { 0x29c6b22234617c1aull, "glass, the skill progress pill over a Sim's head (run 221): colour texture s1 x c8, mask s2 (VS 5b18d2ce)", kClearGlass },
   { 0xac4184cee232ed04ull, "glass: colour texture s2 x c10, gloss s3, irradiance cube s1 (VS d7fede81; an unplayable lot's dome, runs 212, 218)", kClearGlass },
   { 0x45c7a7cd511b5233ull, "car glass, a parked car's windows: the car's paint shader blended, colour atlas s2 with its alpha, normal map s3, "
                            "reflection cube s6 (VS a77613ea; run 213)", kCarGlass, true },
@@ -1946,7 +1945,9 @@ inline const LeftOutPs* leftOutPs(uint64_t hash) { return findByHash(kLeftOutPs,
 // outdoors, 85e9c338 a decorative object on a table, efdac7f0 glass furniture, 910a56f2 an unplayable
 // lot's windows, ac4184ce its dome; run 219 three more: 2b1da1b4 the plumbob over the active Sim,
 // a9336d35 the sound waves from speakers (an effect, not glass), db28eb0c an unplayable lot's windows;
-// run 221 one more: 29c6b222 the skill progress pill over a Sim's head (cooking). The oil bottle the user
+// run 221 one more: 29c6b222 the skill progress pill over a Sim's head (cooking) -- not glass since
+// milestone 117 (the user: "like the game, its own colours"): out of the glass table, it goes out as
+// any object, its texture as the albedo, blended as the game draws it. The oil bottle the user
 // suspected is no glass at all (run 220's marks: an ordinary object).
 // At the mark the log names every glass shader drawn in that frame (milestone 113, goes with the
 // survey). A window's two sides are two draws: the side facing
