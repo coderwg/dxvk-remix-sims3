@@ -360,8 +360,9 @@ struct TexcoordPromote { uint64_t hash; const char* name; uint8_t texcoordIndex;
 // object shader, terrain, walls C) need nothing; three shaders keep the UV in .zw of
 // TEXCOORD0 and are not handled yet. Names are the shader handles in the trace.
 // The texcoord to promote is the one the pixel shader reads with the ALBEDO sampler
-// (kAlbedoStages), not merely with the first colour texture: five earlier rules that
-// pointed at normal or lighting maps (floor, walls B, two door/window families, 0xddc1880)
+// (kAlbedoStages), not merely with the first colour texture: six earlier rules that
+// pointed at normal or lighting maps (floor, walls B, two door/window families, 0xddc1880,
+// and 0x164d8920 = 9f227c82, whose TEXCOORD1 is its pixel shader's light map, milestone 76)
 // were removed after reading the pixel shaders' arithmetic.
 inline const TexcoordPromote kTexcoordPromotes[] = {
   { 0x0ba6ddb9aa01913cull, "objects 0x12d25080 vs_3_0 (diffuse s3 on TEXCOORD2)", 2 },
@@ -376,7 +377,6 @@ inline const TexcoordPromote kTexcoordPromotes[] = {
   { 0x24ef09fb3303a9d0ull, "outer ground / water sibling (pattern tile s2 on TEXCOORD2)", 2 },
   { 0xe228d963a38f3e41ull, "vs_2_0 e228d963 (diffuse s1 on TEXCOORD2)", 2 },
   { 0x23072b72226654bdull, "0x164cc3c0 vs_3_0", 5 },
-  { 0x9f227c82c758a989ull, "0x164d8920 vs_2_0", 1 },
   { 0x294ca59dd766bd6eull, "0x16b30160 vs_2_0", 1 },
   { 0xe0c97675a334022eull, "0x16b38500 vs_2_0", 1 },
   // 0x16b56360 (floor tiles): the colour texture is on TEXCOORD0, no promotion
@@ -790,7 +790,9 @@ inline const AlbedoStage kAlbedoStages[] = {
   { 0x028ce2dde691b739ull, "terrain PS 0x13be0fa0", 0 },
   { 0x3608ab95ab50c8b4ull, "terrain PS 0x13be12c0", 0 },
   { 0xc30755d3de24af9aull, "terrain PS 0x13be1360", 0 },
-  { 0xff72720db4324926ull, "PS 0x167e8be0 (s0, TEXCOORD1)", 0 },
+  // PS 0x167e8be0 (ff72720d): colour = s1 (TEXCOORD0) x s0 (TEXCOORD1), the floor tiles' layout; its
+  // entry here named s0, a room light map (256x128, or a 32x32 / 4x4 stand-in): left to the
+  // chooser since milestone 76, which takes the compressed s1
   { 0xda37b5ef6f7a09a6ull, "floor tiles PS 0x167e3320 (s1 on TEXCOORD0; s0 is the lightmap)", 1 },
   { 0xdeeecbb3cdf04655ull, "PS 0xdbbbc40 (s1)", 1 },
   { 0xb0fb977be6b7bbccull, "PS 0x106fe840 (s1)", 1 },
@@ -1798,11 +1800,14 @@ inline uint32_t cutAlphaTest(float a, float b, uint32_t& ref) {
 }
 
 // The albedo for a draw of an untabled pixel shader: among the samplers that reach the colour
-// with a coordinate taken straight from an input, and hold a bound 2D colour texture, the one
-// scoring highest: larger textures, compressed formats (the game's albedos are DXT; lightmaps,
-// ramps and render targets are not), lower coordinate indices. Returns false when none.
+// with a coordinate taken straight from an input, and hold a bound 2D colour texture, a
+// compressed one whenever there is one -- the game's colour textures are DXT; its light maps,
+// which it makes itself, are not (milestone 76: the lot's 1024x512 light map outscored a 16x64
+// wall trim by size, and objects' 256x128 sky-light maps their smaller colour textures, so the
+// runtime lit baked light) -- and within that, the one scoring highest: larger textures, lower
+// coordinate indices. Returns false when none.
 inline bool chooseAutoAlbedo(const PsAnalysis& a, const bool color2D[16], const uint32_t fmt[16], const uint16_t w[16], const uint16_t h[16], int& stage, int& texcoord) {
-  float best = -1e9f; stage = -1; texcoord = -1;
+  float best = -1e9f; bool bestCompressed = false; stage = -1; texcoord = -1;
   for (int s = 0; s < 16; ++s) {
     const PsSamplerUse& u = a.samplers[s];
     if (!u.read || !u.reachesColor() || u.dependent || u.projective || u.cube || u.texcoord < 0) continue;
@@ -1812,8 +1817,8 @@ inline bool chooseAutoAlbedo(const PsAnalysis& a, const bool color2D[16], const 
     // all three channels reaching the colour is the signature of an albedo; a mask or a
     // gloss map contributes one channel, and a tie between two candidates goes to the later
     // sampler (the game binds masks below their albedo)
-    const float score = std::log2((std::max)(area, 1.f)) + (compressed ? 3.f : 0.f) - 2.f * u.texcoord + 2.f * u.colorChannels + 0.01f * s;
-    if (score > best) { best = score; stage = s; texcoord = u.texcoord; }
+    const float score = std::log2((std::max)(area, 1.f)) - 2.f * u.texcoord + 2.f * u.colorChannels + 0.01f * s;
+    if (stage < 0 || (compressed && !bestCompressed) || (compressed == bestCompressed && score > best)) { best = score; bestCompressed = compressed; stage = s; texcoord = u.texcoord; }
   }
   return stage >= 0;
 }

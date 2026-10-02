@@ -507,6 +507,30 @@ int main() {
       if (loadShader("ps_0c19795eb80e2e96", t)) {
         CHECK(analyzePixelShader(t.data(), t.size(), a) && a.samplers[3].texcoord == 2 && a.samplers[3].colorChannels == 3 && (a.normalTexcoords & (1u << 1)), "auto: object PS 0c19795e -> diffuse s3 on TEXCOORD2, as the hand table says; TEXCOORD1 used as a normal");
       } else SKIP("auto: ps_0c19795eb80e2e96 not found");
+      // milestone 76: a compressed candidate beats an uncompressed one (the game's light maps are not DXT)
+      auto bindTex = [](bool* color2D, uint32_t* fmt, uint16_t* w, uint16_t* h, int s, D3DFORMAT f, uint16_t W, uint16_t H) { color2D[s] = true; fmt[s] = (uint32_t) f; w[s] = W; h[s] = H; };
+      if (loadShader("ps_579ba93e4482bba9", t)) {
+        bool color2D[16] = {}; uint32_t fmt[16] = {}; uint16_t w[16] = {}, h[16] = {}; int stage = -1, tc = -1;
+        bindTex(color2D, fmt, w, h, 0, D3DFMT_A8R8G8B8, 1024, 512); bindTex(color2D, fmt, w, h, 1, D3DFMT_DXT1, 16, 64); bindTex(color2D, fmt, w, h, 2, D3DFMT_DXT1, 256, 256);
+        CHECK(analyzePixelShader(t.data(), t.size(), a) && chooseAutoAlbedo(a, color2D, fmt, w, h, stage, tc) && stage == 1 && tc == 0,
+              "auto (M76): walls-D trim 579ba93e -> the 16x64 DXT1 trim s1 at TEXCOORD0, not the lot's 1024x512 light map s0 (chose s%d at TEXCOORD%d)", stage, tc);
+      } else SKIP("auto: ps_579ba93e4482bba9 not found");
+      if (loadShader("ps_2ee776917a22577f", t)) {
+        bool color2D[16] = {}; uint32_t fmt[16] = {}; uint16_t w[16] = {}, h[16] = {}; int stage = -1, tc = -1;
+        bindTex(color2D, fmt, w, h, 1, D3DFMT_A8R8G8B8, 256, 128); bindTex(color2D, fmt, w, h, 2, D3DFMT_DXT1, 64, 64);
+        CHECK(analyzePixelShader(t.data(), t.size(), a) && chooseAutoAlbedo(a, color2D, fmt, w, h, stage, tc) && stage == 2 && tc == 2,
+              "auto (M76): object 2ee77691 -> its 64x64 DXT1 colour s2 at TEXCOORD2, not the 256x128 sky-light map s1 (chose s%d at TEXCOORD%d)", stage, tc);
+        bool c2[16] = {}; uint32_t f2[16] = {}; uint16_t w2[16] = {}, h2[16] = {};
+        bindTex(c2, f2, w2, h2, 1, D3DFMT_A8R8G8B8, 32, 32); bindTex(c2, f2, w2, h2, 2, D3DFMT_A1R5G5B5, 4, 4);
+        CHECK(chooseAutoAlbedo(a, c2, f2, w2, h2, stage, tc) && stage == 1, "  with no compressed candidate the score decides as before (chose s%d)", stage);
+      } else SKIP("auto: ps_2ee776917a22577f not found");
+      if (loadShader("ps_ff72720db4324926", t)) {
+        bool color2D[16] = {}; uint32_t fmt[16] = {}; uint16_t w[16] = {}, h[16] = {}; int stage = -1, tc = -1;
+        bindTex(color2D, fmt, w, h, 0, D3DFMT_A8R8G8B8, 256, 128); bindTex(color2D, fmt, w, h, 1, D3DFMT_DXT1, 256, 256);
+        CHECK(findAlbedoStage(0xff72720db4324926ull) == nullptr && findTexcoordPromote(0x9f227c82c758a989ull) == nullptr
+              && analyzePixelShader(t.data(), t.size(), a) && chooseAutoAlbedo(a, color2D, fmt, w, h, stage, tc) && stage == 1 && tc == 0,
+              "auto (M76): ff72720d (the floor tiles' layout) untabled, its vertex shader 9f227c82 unpromoted -> the DXT1 s1 at TEXCOORD0, not the room light map s0 (chose s%d at TEXCOORD%d)", stage, tc);
+      } else SKIP("auto: ps_ff72720db4324926 not found");
     }
     {
       // the light table (format 3): the lights per model, and the objects naming the models
