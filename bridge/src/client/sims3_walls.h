@@ -531,25 +531,34 @@ inline bool cutWallOpenings(const WallCutInput& in, WallCutOutput& out) {
   return true;
 }
 
-// ---- a zero-thickness wall's back side (milestone 97) ---------------------------------------
+// ---- a zero-thickness wall's back side (milestones 97, 97c) ----------------------------------
 // A pool's walls have no thickness: the wall object (one vertex buffer) carries the pool side and,
-// on the very same faces in the opposite winding, the outer side (run 207: 344 triangles, then 104 +
-// 240 reversed; the runtime texture hashes 73C9E3A9 / 254EA684 / 12B386FA). The game culls the side
-// facing away. The runtime does not cull rays that have passed through a translucent surface
-// (rtx.enableCullingInSecondaryRays changed nothing, run 207), so behind the water both sides came
-// back at one distance and fought pixel by pixel -- the speckle on the pool walls. A wall piece whose
-// triangles all repeat, reversed, triangles of an earlier piece of the same vertex buffer in the frame
-// is such a back side and is left out; walls with a thickness have no coinciding faces.
-// A triangle's key: its corners' position bytes sorted, hashed, and the winding of that order in the
-// low bit -- the reversed triangle's key is the key ^ 1. Degenerate triangles have none (0).
-inline uint64_t wallTriKey(uint64_t p0, uint64_t p1, uint64_t p2) {
-  if (p0 == p1 || p1 == p2 || p0 == p2) return 0;
-  bool odd = false;
-  if (p0 > p1) { std::swap(p0, p1); odd = !odd; }
-  if (p1 > p2) { std::swap(p1, p2); odd = !odd; }
-  if (p0 > p1) { std::swap(p0, p1); odd = !odd; }
-  const uint64_t c[3] = { p0, p1, p2 };
-  uint64_t k = fnv1a64(c, sizeof c) << 1 | (odd ? 1u : 0u);
+// on the very same planes and areas facing the other way, the outer side (runs 207-209: the tile
+// side 344 triangles, then 104 + 240; texture hashes 73C9E3A9 / 254EA684 / 12B386FA; on every wall
+// plane the tile side's count facing one way equals the outer pieces' facing the other, the outer
+// squares cut along the other diagonal -- no triangle shares its corners -- and the vertex data the
+// same at every camera). The game culls the side facing away. The runtime does not cull rays that
+// have passed through a translucent surface (rtx.enableCullingInSecondaryRays changed nothing), so
+// behind the water both sides came back at one distance and fought pixel by pixel -- the speckle on
+// the pool walls. A wall piece whose triangles all lie on planes where an earlier piece of the same
+// vertex buffer has triangles facing the other way is such a back side and is left out; a wall with a
+// thickness has its two sides on different planes.
+// A triangle's key: its plane (the integer normal of its stored positions, reduced, and the plane's
+// offset), signed so the first nonzero normal component is positive, and the facing in the low bit --
+// the plane faced the other way is the key ^ 1. Degenerate triangles have none (0).
+inline uint64_t wallTriKey(const int16_t* a, const int16_t* b, const int16_t* c) {
+  const int64_t u[3] = { (int64_t) b[0] - a[0], (int64_t) b[1] - a[1], (int64_t) b[2] - a[2] };
+  const int64_t v[3] = { (int64_t) c[0] - a[0], (int64_t) c[1] - a[1], (int64_t) c[2] - a[2] };
+  int64_t n[3] = { u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0] };
+  int64_t g = 0;
+  for (int64_t x : n) { int64_t y = x < 0 ? -x : x; while (y) { const int64_t t = g % y; g = y; y = t; } }
+  if (g == 0) return 0;
+  for (int64_t& x : n) x /= g;
+  const int64_t s = n[0] ? n[0] : n[1] ? n[1] : n[2];
+  const bool facing = s > 0;
+  if (!facing) for (int64_t& x : n) x = -x;
+  const int64_t key[4] = { n[0], n[1], n[2], n[0] * a[0] + n[1] * a[1] + n[2] * a[2] };
+  const uint64_t k = fnv1a64(key, sizeof key) << 1 | (facing ? 1u : 0u);
   return k ? k : 2u;
 }
 // Whether a piece (its triangles' keys) is the back side of the triangles kept so far: every one of

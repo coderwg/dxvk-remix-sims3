@@ -1057,19 +1057,20 @@ int main() {
       // milestone 84: the Sims' soft shadow blob is never captured
       const NeverCapture* blob = findNeverCapture(0xb7d550c6421e14f4ull);
       CHECK(blob && !blob->blendedOnly, "never-capture (M84): the Sims' soft shadow blob VS b7d550c6");
-      // milestone 97: a zero-thickness wall's back side
+      // milestones 97, 97c: a zero-thickness wall's back side -- the same square in the plane x = 512, the back
+      // cut along the other diagonal (run 209); a wall with a thickness has its other side on another plane
       {
-        const uint64_t a = 0x0001000200030004ull, b = 0x0005000600070008ull, c = 0x0009000a000b000cull, d = 0x000d000e000f0010ull;
+        const int16_t a[4] = { 512, -770, 768, 0 }, b[4] = { 512, -770, 896, 0 }, c[4] = { 512, -2, 896, 0 }, d[4] = { 512, -2, 768, 0 };
+        const int16_t e[4] = { 527, -770, 768, 0 }, f[4] = { 527, -770, 896, 0 }, g[4] = { 527, -2, 896, 0 };
         const std::vector<uint64_t> front = { wallTriKey(a, b, c), wallTriKey(a, c, d) };
-        const std::vector<uint64_t> back = { wallTriKey(c, b, a), wallTriKey(d, c, a) };           // the same faces, reversed
-        const std::vector<uint64_t> same = { wallTriKey(b, c, a), wallTriKey(c, d, a) };           // rotations: the same winding
+        const std::vector<uint64_t> back = { wallTriKey(b, a, d), wallTriKey(b, d, c) };        // the other diagonal, facing the other way
+        const std::vector<uint64_t> same = { wallTriKey(b, c, d), wallTriKey(b, d, a) };        // the other diagonal, the same facing
+        const std::vector<uint64_t> thick = { wallTriKey(f, e, g) };                             // the other way, 15 units further out
         std::unordered_set<uint64_t> kept(front.begin(), front.end());
         uint32_t m1 = 0, m2 = 0, m3 = 0;
-        const bool backIs = isWallBackSide(back, kept, m1), sameIs = isWallBackSide(same, kept, m2);
-        const std::vector<uint64_t> half = { wallTriKey(c, b, a), wallTriKey(a, b, d) };
-        const bool halfIs = isWallBackSide(half, kept, m3);
-        CHECK(backIs && m1 == 2 && !sameIs && m2 == 0 && !halfIs && m3 == 1 && wallTriKey(a, a, b) == 0 && wallTriKey(a, b, c) == wallTriKey(b, c, a) && (wallTriKey(a, b, c) ^ 1u) == wallTriKey(c, b, a),
-              "wall back side (M97): the reversed faces are a back side; the same winding, or only some reversed, is not");
+        const bool backIs = isWallBackSide(back, kept, m1), sameIs = isWallBackSide(same, kept, m2), thickIs = isWallBackSide(thick, kept, m3);
+        CHECK(backIs && m1 == 2 && !sameIs && m2 == 0 && !thickIs && m3 == 0 && wallTriKey(a, a, b) == 0 && wallTriKey(a, b, c) == wallTriKey(b, c, a) && (wallTriKey(a, b, c) ^ 1u) == wallTriKey(c, b, a),
+              "wall back side (M97c): the other diagonal facing the other way on the same plane is a back side; the same facing, or another plane, is not");
       }
       const NeverCapture* cards = findNeverCapture(0x6cb3b47f30712201ull);
       CHECK(cards && cards->blendedOnly && neverCaptureDraw(neverCaptureMode(cards), TRUE) && !neverCaptureDraw(neverCaptureMode(cards), FALSE),

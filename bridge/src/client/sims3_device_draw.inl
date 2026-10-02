@@ -86,11 +86,11 @@ bool sims3WallBackSide(Sims3Hook& h, Dev* dev) {
     if (vd && id && ((size_t) h.drawStart + n) * isz <= lib->sims3Size()) {
       tris.reserve(h.drawPrims);
       for (size_t t = 0; t < n; t += 3) {
-        uint64_t p[3]; bool ok = true;
+        int16_t p[3][4]; bool ok = true;
         for (int c = 0; c < 3 && ok; ++c) {
           const int64_t v = (int64_t) h.drawBase + (int64_t) sims3cam::readIndex(id, (size_t) h.drawStart + t + (size_t) c, ib32);
           const size_t at = (size_t) off + (size_t) v * stride + (size_t) h.wallLayout.posOff;
-          if (v < 0 || at + 8u > lvb->sims3Size()) ok = false; else memcpy(&p[c], vd + at, 8);   // SHORT4: the corner's position as stored
+          if (v < 0 || at + 8u > lvb->sims3Size()) ok = false; else memcpy(p[c], vd + at, 8);   // SHORT4: x, full height, z, stub height
         }
         tris.push_back(ok ? sims3cam::wallTriKey(p[0], p[1], p[2]) : 0u);
       }
@@ -135,7 +135,7 @@ bool sims3WallBackSide(Sims3Hook& h, Dev* dev) {
   if (sims3cam::isWallBackSide(it->second, kept, matched)) {
     if (h.wallBackLogged < 12u) {
       ++h.wallBackLogged;
-      Logger::info(format_string("Sims 3 camera hook: wall back side left out at frame %u -> VS %016llx PS %016llx, vertex buffer %u base %d: %u triangles, all the reverse of an earlier piece's",
+      Logger::info(format_string("Sims 3 camera hook: wall back side left out at frame %u -> VS %016llx PS %016llx, vertex buffer %u base %d: %u triangles, all on planes an earlier piece faces the other way",
                                  h.frames + 1, (unsigned long long) h.vsHash, (unsigned long long) h.psHash, vbId, (int) h.drawBase, (unsigned) h.drawPrims));
     }
     return true;
