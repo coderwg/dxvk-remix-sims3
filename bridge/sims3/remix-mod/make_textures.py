@@ -102,13 +102,15 @@ def decode_dxt5(data, w, h):
 
 
 def read_bump_map(path, fmt, w, h, scale):
-    """A bumpy glass's bump map as unit tangent-space normals, decoded as its pixel shader does: DXT5 -- x in
-    alpha, y in blue, each 2.00787401 t - 1.03937006, z = sqrt(1 - x^2 - y^2), the slopes scaled by the
+    """A bumpy glass's bump map as unit tangent-space normals, decoded as its pixel shader does: DXT5 / A8L8 --
+    x in alpha, y in blue, each 2.00787401 t - 1.03937006, z = sqrt(1 - x^2 - y^2), the slopes scaled by the
     shader's constant (c14.x), and n = s x T - s y B + z N; Q8W8V8U8 -- signed as the game's wave maps."""
     data = open(path, 'rb').read()
-    if fmt == 'DXT5':
+    if fmt in ('DXT5', 'A8L8'):
+        # A8L8 (a door's flat 4x4 stand-in, run 218): L, A per texel, sampled as (L, L, L, A)
+        texels = decode_dxt5(data, w, h) if fmt == 'DXT5' else [(data[i * 2], data[i * 2], data[i * 2], data[i * 2 + 1]) for i in range(w * h)]
         out = []
-        for r, g, b, a in decode_dxt5(data, w, h):
+        for r, g, b, a in texels:
             x, y = 2.00787401 * a / 255.0 - 1.03937006, 2.00787401 * b / 255.0 - 1.03937006
             z = math.sqrt(max(0.0, 1.0 - x * x - y * y))
             out.append((scale * x, -scale * y, z))
