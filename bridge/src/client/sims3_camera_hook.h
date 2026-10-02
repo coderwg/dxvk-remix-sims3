@@ -1851,23 +1851,54 @@ inline const TexturedGlass kTexturedGlass[] = {
   { 0xac4184cee232ed04ull, "glass: colour texture s2 x c10, gloss s3, irradiance cube s1 (VS d7fede81)" },
 };
 inline bool isGlassPs(const PsAnalysis& a, uint64_t hash) { return isGlassShader(a) || findByHash(kTexturedGlass, hash) != nullptr; }
-// The float constant registers a vertex shader reads (milestone 82): one past the highest it names,
-// or all 256 when it indexes them (relative addressing: a bone palette or an instance table). Two
-// draws of one shader with the same buffers, range and these constants put the same triangles in
-// the same place.
-inline uint32_t vsConstRegisterCount(const DWORD* tokens, size_t count) {
-  uint32_t n = 0; bool relative = false;
+// The float constant registers that place a vertex shader's vertices (milestone 83): those whose
+// values flow into its position output (oPos; in vs_3_0 the output declared POSITION 0), followed
+// through temporaries register by register (a superset); every register when a relative read or flow
+// control takes part (a palette, an instance table). DEF'd registers are the shader's own literals.
+// Two draws of one shader with the same buffers, range and these constants put the same triangles in
+// the same place, whatever else differs between them (run 190: a window pane's two passes differ in
+// constants the position never reads -- a colour, the fog).
+struct ConstMask {
+  uint64_t bits[4] = {};
+  void set(uint32_t r) { if (r < 256u) bits[r >> 6] |= 1ull << (r & 63u); }
+  void add(const ConstMask& o) { for (int i = 0; i < 4; ++i) bits[i] |= o.bits[i]; }
+  void all() { for (auto& x : bits) x = ~0ull; }
+  bool has(uint32_t r) const { return r < 256u && ((bits[r >> 6] >> (r & 63u)) & 1ull) != 0; }
+  uint32_t count() const { uint32_t n = 0; for (uint32_t r = 0; r < 256u; ++r) n += has(r) ? 1u : 0u; return n; }
+};
+inline ConstMask vsPositionConstMask(const DWORD* tokens, size_t count) {
+  ConstMask result;
+  if (!tokens || count < 2 || (tokens[0] & 0xFFFF0000u) != 0xFFFE0000u) { result.all(); return result; }
+  const bool vs3 = ((tokens[0] >> 8) & 0xFFu) >= 3u;
+  bool defd[256] = {}; int posOut = -1; bool giveUp = false;
   dxsoForEach(tokens, count, [&](size_t pos, uint32_t op, uint32_t len) {
-    if (op == kDxsoOpDcl || op == 0x51u || op == 0x30u || op == 0x2Fu) return true;   // DCL, DEF, DEFI, DEFB: no source registers
-    for (uint32_t i = 1; i <= len; ++i) {
-      const uint32_t t = tokens[pos + i];
-      if (dxsoRegType(t) != 2u) continue;                                          // CONST
-      n = (std::max)(n, dxsoRegNum(t) + 1u);
-      if (t & 0x2000u) relative = true;                                            // D3DSHADER_ADDRMODE_RELATIVE
-    }
+    if (op == 0x51u && len >= 1 && dxsoRegType(tokens[pos + 1]) == 2u) { const uint32_t r = dxsoRegNum(tokens[pos + 1]); if (r < 256u) defd[r] = true; }
+    uint32_t u, i, r;
+    if (vs3 && op == kDxsoOpDcl && dxsoDcl(tokens, pos, len, kDxsoRegOutput, u, i, r) && u == kUsagePosition && i == 0) posOut = (int) r;
     return true;
   });
-  return relative || n > 256u ? 256u : n;
+  ConstMask temps[32], addr;
+  dxsoForEach(tokens, count, [&](size_t pos, uint32_t op, uint32_t len) {
+    if (op == kDxsoOpDcl || op == 0x51u || op == 0x30u || op == 0x2Fu || op == 0u) return true;   // DCL, DEF, DEFI, DEFB, NOP
+    if ((op >= 0x19u && op <= 0x1Eu) || (op >= 0x26u && op <= 0x2Du) || op == 0x60u) { giveUp = true; return false; }   // flow control
+    if (len < 1) return true;
+    ConstMask m;
+    for (uint32_t k = 2; k <= len; ++k) {
+      const uint32_t t = tokens[pos + k], type = dxsoRegType(t), n = dxsoRegNum(t);
+      if (t & 0x2000u) { if (type == 2u) { giveUp = true; return false; } m.add(addr); ++k; continue; }   // relative: its address token follows
+      if (type == 0u && n < 32u) m.add(temps[n]);
+      else if (type == 2u) { if (n < 256u && !defd[n]) m.set(n); }
+      else if (type == 3u) m.add(addr);
+    }
+    const uint32_t d = tokens[pos + 1], dtype = dxsoRegType(d), dn = dxsoRegNum(d);
+    const bool full = ((d >> 16) & 0xFu) == 0xFu;
+    if (dtype == 0u && dn < 32u) { if (full) temps[dn] = m; else temps[dn].add(m); }
+    else if (dtype == 3u) addr.add(m);
+    else if ((!vs3 && dtype == 4u && dn == 0u) || (vs3 && dtype == kDxsoRegOutput && (int) dn == posOut)) result.add(m);
+    return true;
+  });
+  if (giveUp) result.all();
+  return result;
 }
 inline constexpr uint32_t kGlassMarkerSize = 32;
 inline constexpr uint32_t kGlassMarkerColour = 0xFFB8C8D0u;          // ARGB pale grey-blue: what the panes show if the mod is not loaded

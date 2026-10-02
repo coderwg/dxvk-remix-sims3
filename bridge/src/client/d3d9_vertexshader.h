@@ -48,7 +48,7 @@ public:
   uint64_t sims3Hash = 0;     // FNV-1a-64 of the original bytecode (diagnostics)
   sims3cam::VsNormalInfo sims3Normal;   // where the world-space normal leaves this shader (milestone 11)
   sims3cam::WallVsInfo sims3Wall;       // a wall shader's clamp of the up-ness flag, for the opening cut (milestone 13)
-  uint16_t sims3ConstRegs = 0;          // the float constant registers it reads (sims3cam::vsConstRegisterCount, milestone 82)
+  sims3cam::ConstMask sims3PosConsts;   // the float constants that place its vertices (sims3cam::vsPositionConstMask, milestone 83)
 
   /*** IUnknown methods ***/
   STDMETHOD(QueryInterface)(THIS_ REFIID riid, void** ppvObj);

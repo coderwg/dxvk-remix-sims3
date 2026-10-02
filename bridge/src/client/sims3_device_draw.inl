@@ -19,7 +19,7 @@ inline void sims3OnReset(Sims3Hook& h) {
   for (uint32_t i = 0; i < h.wallCacheCount; ++i) sims3ReleaseWallEntry(h.wallCache[i]);
   h.wallCacheCount = 0; for (auto& m : h.masks) m = Sims3Hook::MaskEntry(); h.maskUse = 0;
   for (auto& e : h.bufHashes) e = Sims3Hook::HashEntry(); h.bufHashUse = 0;
-  h.vsWall = nullptr; h.wallLayout = sims3cam::WallLayout(); h.wallDeclId = 0;
+  h.vsWall = nullptr; h.vsPosConsts = nullptr; h.wallLayout = sims3cam::WallLayout(); h.wallDeclId = 0;
   for (uint32_t i = 0; i < h.vsVariantCount; ++i) if (h.vsVariants[i].variant) h.vsVariants[i].variant->Release();
   h.vsVariantCount = 0;
   if (h.autoVsRestore) { h.autoVsRestore->Release(); h.autoVsRestore = nullptr; }
@@ -85,14 +85,14 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
   // reflected scene between them is a mirror pass, dropped since milestone 13c) -- is left out: the
   // ray tracer reflects by itself, and the object's own glass pane stays (run 189: the shower door's
   // grey was this pass going out untextured); (2) a glass draw repeating one already sent this frame
-  // (the same vertex shader, buffers, range and every constant it reads -- run 189: a window's pane
-  // drawn twice) is left out: two coincident glass surfaces flicker against each other.
+  // (the same vertex shader, buffers, range and the constants that place its vertices, milestone 83 --
+  // run 189: a window's pane drawn twice) is left out: two coincident glass surfaces flicker.
   if (h.psAuto && h.psAuto->valid && rs[D3DRS_STENCILENABLE] && sims3cam::isGlassShader(*h.psAuto)) { h.drawDropped = true; h.drawCaptured = false; ++h.mirrorSurfaceDropped; return false; }
   if (h.psAuto && rs[D3DRS_ALPHABLENDENABLE] && sims3cam::isGlassPs(*h.psAuto, h.psHash) && sims3GlassRepeat(h, dev)) { h.drawDropped = true; h.drawCaptured = false; ++h.glassRepeats; return false; }
   int k = -1;
   ++h.capturedDraws;
   if (rs[D3DRS_FOGENABLE] && (rs[D3DRS_FOGTABLEMODE] != D3DFOG_NONE || rs[D3DRS_FOGVERTEXMODE] != D3DFOG_NONE)) ++h.gameFogDraws;   // a fog state of the game's own (milestone 56: none expected)
-  h.autoCapturedUv = false; h.pendingPromote = 0;
+  h.autoCapturedUv = false; h.pendingPromote = 0; h.drawGlass = false;
   // a terrain draw (milestone 17): handed to the runtime's terrain baker with the marker at
   // stage 0 and the game's pixel shader variant; no albedo stage, no vertex shader variant
   uint8_t terrainKind = sims3cam::terrainDrawKind(h.vsTerrain, rs[D3DRS_ALPHABLENDENABLE], h.lotFurtherCopy);
@@ -121,6 +121,7 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
     // glass (milestone 80): the glass marker at stage 0 and the draw's blending off; its material is
     // the hook's Remix mod's translucent glass (sims3cam::isGlassShader)
     if (h.psAuto && rs[D3DRS_ALPHABLENDENABLE] && sims3cam::isGlassPs(*h.psAuto, h.psHash) && sims3EnsureGlassMarker(h, dev)) {
+      h.drawGlass = true;
       h.remapRestore = h.boundTex[0]; if (h.remapRestore) h.remapRestore->AddRef();   // held until sims3EndDraw, as for an albedo remap
       h.remapActive = true;
       h.inRemap = true; dev->SetTexture(0, h.glassMarker); h.inRemap = false;
