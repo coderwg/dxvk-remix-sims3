@@ -155,12 +155,16 @@ struct Sims3Hook {
   struct WallEntry { uint64_t key; uint32_t lastFrame; bool changed; IDirect3DVertexBuffer9* vb0; IDirect3DVertexBuffer9* vb1; IDirect3DIndexBuffer9* ib; uint32_t vertexCount, triangleCount; };
   static constexpr uint32_t kWallCacheSize = 256;
   WallEntry wallCache[kWallCacheSize] = {}; uint32_t wallCacheCount = 0;
-  struct MaskEntry { bool used = false, ok = false; uint32_t texId = 0, version = 0; uint64_t contentHash = 0; std::vector<uint8_t> red; };
-  static constexpr uint32_t kMasks = 4, kBufHashes = 64;
-  MaskEntry masks[kMasks]; uint32_t maskNext = 0;   // the mask atlases decoded, per (texture, upload)
-  struct HashEntry { bool used; uint32_t id, version; uint64_t hash; };
-  HashEntry bufHashes[kBufHashes] = {}; uint32_t bufHashNext = 0;   // content hashes of the wall buffers, per (object, upload): the cache key follows the bytes
-  uint32_t wallDraws = 0, wallCutDraws = 0, wallCutTriangles = 0, wallRemovedTriangles = 0, wallHiddenTriangles = 0, wallBuilt = 0, wallEvicted = 0, wallBuildFailed = 0, wallSkipped = 0, wallLogged = 0, wallSkipLogged = 0, wallHiddenLogged = 0, wallMasksDecoded = 0;
+  // the mask atlases decoded, per (texture, upload), and the content hashes of the wall buffers, per
+  // (object, upload): the cache key follows the bytes. Sized for the lots of a neighbourhood (16 in
+  // full detail since 2026-10-01; four mask slots had every lookup decode again, run 183: 5,777 decodes);
+  // the least recently used entry goes (milestone 77).
+  struct MaskEntry { bool used = false, ok = false; uint32_t texId = 0, version = 0, lastUse = 0; uint64_t contentHash = 0; std::vector<uint8_t> red; };
+  static constexpr uint32_t kMasks = 32, kBufHashes = 256;
+  MaskEntry masks[kMasks]; uint32_t maskUse = 0;
+  struct HashEntry { bool used; uint32_t id, version, lastUse; uint64_t hash; };
+  HashEntry bufHashes[kBufHashes] = {}; uint32_t bufHashUse = 0;
+  uint32_t wallDraws = 0, wallCutDraws = 0, wallCutTriangles = 0, wallRemovedTriangles = 0, wallHiddenTriangles = 0, wallBuilt = 0, wallEvicted = 0, wallBuildFailed = 0, wallRefused = 0, wallSkipped = 0, wallNoOpeningTest = 0, wallLogged = 0, wallSkipLogged = 0, wallHiddenLogged = 0, wallMasksDecoded = 0;
   // Reflection passes (runs 66-68): the ray tracer renders reflections itself, so the 3D draws of
   // every reflection pass -- the sea/pool pass, a wall mirror's stencil pass -- are dropped on the
   // client: those under a mirrored camera upload, and those carrying the stencil mirror's render

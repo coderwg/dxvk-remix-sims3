@@ -2546,48 +2546,47 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
       // The Sims 3 camera hook: a captured wall draw gets its window and door openings cut into
       // the geometry (milestone 13, sims3_walls.h). The pixel shader's mask test is evaluated on
       // the client from the buffers' shadow copies and the mask atlas, and the cut triangles are
-      // drawn from the hook's own buffers; the game's bindings come back afterwards.
+      // drawn from the hook's own buffers; the game's bindings come back afterwards. A draw whose
+      // opening test cannot be evaluated -- a pixel shader the analyser does not know, walls C
+      // without its alpha test, a mask not readable on the client -- still loses the triangles its
+      // vertex shader hides, which never depended on the mask (milestone 77).
       bool wallDone_ = false;
-      if (sims3cam::enabled() && sims3cam::wallCutEnabled() && g_sims3.drawCaptured && Type == D3DPT_TRIANGLELIST && g_sims3.wallLayout.valid && g_sims3.vsWall && g_sims3.vsWall->valid
-          && g_sims3.psAuto && g_sims3.psAuto->valid && g_sims3.psAuto->maskSampler >= 0 && g_sims3.psAuto->maskSampler < 16
+      if (sims3cam::enabled() && g_sims3.drawCaptured && Type == D3DPT_TRIANGLELIST && g_sims3.wallLayout.valid && g_sims3.vsWall && g_sims3.vsWall->valid
           && *m_state.streams[0] != nullptr && *m_state.streams[1] != nullptr && *m_state.indices != nullptr) {
         auto wallDraw_ = [&]() -> bool {
           auto& h = g_sims3;
-          const sims3cam::PsAnalysis& ps = *h.psAuto;
+          const sims3cam::PsAnalysis* ps = (h.psAuto && h.psAuto->valid && h.psAuto->maskSampler >= 0 && h.psAuto->maskSampler < 16) ? h.psAuto : nullptr;
           const DWORD* rs = m_state.renderStates.data();
-          // the discard threshold: texkill at 0.5; walls C alpha-tests mask + z - 0.5 against the reference
+          // the discard threshold: texkill at 0.5; walls C alpha-tests mask + z - 0.5 against the
+          // reference; below 0: no opening test
           float thr = -1.f;
-          if (ps.maskKill) thr = 0.5f;
-          else if (ps.maskAlpha && rs[D3DRS_ALPHATESTENABLE] && (rs[D3DRS_ALPHAFUNC] == D3DCMP_GREATEREQUAL || rs[D3DRS_ALPHAFUNC] == D3DCMP_GREATER)) thr = 0.5f + (float) (rs[D3DRS_ALPHAREF] & 0xFFu) / 255.f;
-          if (thr < 0.f) return false;
+          if (ps && ps->maskKill) thr = 0.5f;
+          else if (ps && ps->maskAlpha && rs[D3DRS_ALPHATESTENABLE] && (rs[D3DRS_ALPHAFUNC] == D3DCMP_GREATEREQUAL || rs[D3DRS_ALPHAFUNC] == D3DCMP_GREATER)) thr = 0.5f + (float) (rs[D3DRS_ALPHAREF] & 0xFFu) / 255.f;
           auto* vb0 = bridge_cast<Direct3DVertexBuffer9_LSS*>(*m_state.streams[0]);
           auto* vb1 = bridge_cast<Direct3DVertexBuffer9_LSS*>(*m_state.streams[1]);
           auto* ib = bridge_cast<Direct3DIndexBuffer9_LSS*>(*m_state.indices);
           const uint8_t* d0 = vb0->sims3Data(); const uint8_t* d1 = vb1->sims3Data(); const uint8_t* di = ib->sims3Data();
           if (!d0 || !d1 || !di) { ++h.wallSkipped; return false; }
           // the mask: the texture at the pixel shader's mask sampler (none bound: black everywhere)
-          const int s = ps.maskSampler;
-          uint32_t maskId = 0, maskVer = 0, maskW = 0, maskH = 0, maskFmt = 0; uint64_t maskHash = 0; const uint8_t* mask = nullptr; bool maskOk = true;
-          if (h.boundTex[s] != nullptr) {
-            if ((h.boundKind[s] & 0x7F) != 1) {
-              maskOk = false;
-            } else {
+          const int s = ps ? ps->maskSampler : -1;
+          uint32_t maskId = 0, maskVer = 0, maskW = 0, maskH = 0, maskFmt = 0; uint64_t maskHash = 0; const uint8_t* mask = nullptr;
+          if (thr >= 0.f && h.boundTex[s] != nullptr) {
+            if ((h.boundKind[s] & 0x7F) == 1) {
               auto* tex = bridge_cast<Direct3DTexture9_LSS*>(h.boundTex[s]);
               const D3DSURFACE_DESC d = tex->getLevelDesc(0);
               maskId = (uint32_t) tex->getId(); maskVer = tex->sims3Level0Version(); maskW = d.Width; maskH = d.Height; maskFmt = (uint32_t) d.Format;
               mask = sims3WallMask(h, maskId, maskVer, maskFmt, d.Width, d.Height, tex->sims3Level0Data(), maskHash);
-              maskOk = mask != nullptr;
+            }
+            if (!mask) {
+              thr = -1.f;
+              if (h.wallSkipLogged < 4) {
+                ++h.wallSkipLogged; char fb[16]; char m[288];
+                snprintf(m, sizeof m, "Sims 3 camera hook: wall draw's openings not cut at frame %u -> the mask at stage %d (%s %ux%u) is not readable on the client (its hidden triangles still go), VS %016llx PS %016llx", h.frames + 1, s, sims3FormatName(maskFmt, fb, sizeof fb), maskW, maskH, (unsigned long long) h.vsHash, (unsigned long long) h.psHash);
+                Logger::info(m);
+              }
             }
           }
-          if (!maskOk) {
-            ++h.wallSkipped;
-            if (h.wallSkipLogged < 4) {
-              ++h.wallSkipLogged; char fb[16]; char m[256];
-              snprintf(m, sizeof m, "Sims 3 camera hook: wall draw not cut at frame %u -> the mask at stage %d (%s %ux%u) is not readable on the client, VS %016llx PS %016llx", h.frames + 1, s, sims3FormatName(maskFmt, fb, sizeof fb), maskW, maskH, (unsigned long long) h.vsHash, (unsigned long long) h.psHash);
-              Logger::info(m);
-            }
-            return false;
-          }
+          if (thr < 0.f) { maskW = maskH = 0; maskHash = 0; ++h.wallNoOpeningTest; }
           sims3cam::WallCutInput in;
           in.layout = h.wallLayout;
           in.vb0 = d0; in.vb0Size = vb0->sims3Size(); in.offset0 = m_state.streamOffsets[0]; in.stride0 = m_state.streamStrides[0];
@@ -2634,7 +2633,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
           if (built && h.wallLogged < 8) {
             ++h.wallLogged; char m[400];
             snprintf(m, sizeof m, "Sims 3 camera hook: wall openings cut at frame %u -> VS %016llx PS %016llx: %u triangles -> %u (%u cut, %u removed, %u hidden; %u cells, %u with openings, %u rectangles), %u vertices, mask s%d %ux%u%s, up-ness %.2f..%.2f x%.2f, visible from %.2f, threshold %.2f",
-                     h.frames + 1, (unsigned long long) h.vsHash, (unsigned long long) h.psHash, (unsigned) primCount, e->triangleCount, st.cut, st.removed, st.hidden, st.cells, st.cellsWithOpenings, st.holeRects, e->vertexCount, s, maskW, maskH, mask ? "" : " (none bound: black)", ck[0], ck[1], in.params.kScale, ck[2], thr);
+                     h.frames + 1, (unsigned long long) h.vsHash, (unsigned long long) h.psHash, (unsigned) primCount, e->triangleCount, st.cut, st.removed, st.hidden, st.cells, st.cellsWithOpenings, st.holeRects, e->vertexCount, s, maskW, maskH, thr < 0.f ? " (no opening test)" : mask ? "" : " (none bound: black)", ck[0], ck[1], in.params.kScale, ck[2], thr);
             Logger::info(m);
           }
           return true;

@@ -94,17 +94,6 @@ inline bool decodeMaskRed(uint32_t format, const uint8_t* data, size_t size, uin
   }
 }
 
-// The cut can be switched off for A/B tests with SIMS3_WALL_CUT=0 (unset / 1 = on).
-inline bool wallCutEnabled() {
-  static int s = -1;
-  if (s < 0) {
-    char e[8] = {};
-    const DWORD n = GetEnvironmentVariableA("SIMS3_WALL_CUT", e, sizeof e);
-    s = (n > 0 && (e[0] == '0' || e[0] == 'f' || e[0] == 'F' || e[0] == 'n' || e[0] == 'N')) ? 0 : 1;
-  }
-  return s == 1;
-}
-
 // ---- vertex elements ------------------------------------------------------------------------
 inline uint32_t declTypeBytes(uint8_t type) {
   switch (type) {
@@ -269,7 +258,8 @@ struct WallCutParams {
   float clampLo = 0.f, clampHi = 1.f;   // the shader's clamp of the per-vertex up-ness flag (cK.x, cK.y)
   float clampVis = 0.f;                 // cK.z: the lower bound of the visibility flag (1 = every vertex visible)
   float kScale = 1.f;
-  float threshold = 0.5f;               // a texel is discarded where mask.red + z < threshold
+  float threshold = 0.5f;               // a texel is discarded where mask.red + z < threshold; below 0: no opening
+                                        // test (the mask unknown or unreadable) -- the hidden triangles still go
 };
 
 struct WallCutInput {
@@ -278,7 +268,7 @@ struct WallCutInput {
   const uint8_t* vb1 = nullptr; size_t vb1Size = 0; uint32_t offset1 = 0, stride1 = 0;
   const uint8_t* ib = nullptr; size_t ibSize = 0; bool ib32 = false;
   int32_t baseVertex = 0; uint32_t startIndex = 0, primCount = 0;
-  const uint8_t* mask = nullptr; uint32_t maskW = 0, maskH = 0;   // the red plane; null = black everywhere
+  const uint8_t* mask = nullptr; uint32_t maskW = 0, maskH = 0;   // the red plane; null = black everywhere (unread below threshold 0)
   WallCutParams params;
 };
 

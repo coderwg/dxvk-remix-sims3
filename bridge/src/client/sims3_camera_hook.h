@@ -320,14 +320,14 @@ inline const T* findByHash(const T (&table)[N], uint64_t hash) {
 }
 
 // ---- per-shader constant patches (milestone 1f) ----------------------------------------
-// The engine hides geometry inside its vertex shaders. Wall shaders multiply the projected
-// x,y,z by a per-vertex visibility factor floored by a constant (the cut-away view); the lot
-// terrain shader moves vertices outside a rectangle to a far clip position. The game's
-// rasterizer draws nothing for such vertices, but Remix's vertex capture reconstructs them
-// onto the focal axis at the near plane: triangles from real vertices to that point are the
-// fans converging on the screen centre, and the giant sheets, seen in runs 1-5.
-// Patching the constants makes every vertex a normal point: walls are always visible (the
-// walls-down lowering is a separate lerp and still works) and terrain chunks are complete.
+// The engine hides geometry inside its vertex shaders: the lot terrain shader moves vertices
+// outside a rectangle to a far clip position. The game's rasterizer draws nothing for such
+// vertices, but Remix's vertex capture reconstructs them onto the focal axis at the near plane:
+// triangles from real vertices to that point are the fans converging on the screen centre, and
+// the giant sheets, seen in runs 1-5. Patching the constants makes every vertex a normal point
+// and terrain chunks complete. (The wall shaders hide vertices the same way, by a per-vertex
+// visibility factor -- the cut-away view; since milestone 13 the wall cut drops those triangles
+// instead, sims3_walls.h.)
 // Shaders are recognised by an FNV-1a-64 hash of their token stream; the hashes below were
 // taken from the game's own shaders in the trace (shaders/hashes.txt).
 struct ConstPatch { uint16_t reg; uint8_t comp; float value; };
@@ -369,7 +369,6 @@ inline const TexcoordPromote kTexcoordPromotes[] = {
   { 0xc3af2a4a82d84e6eull, "objects 0x12d213c0 vs_3_0 (diffuse s3 on TEXCOORD2)", 2 },
   { 0x7d1bc3ce6acbd715ull, "objects 0x12d17440 vs_3_0 (diffuse s2 on TEXCOORD2)", 2 },
   // 0x10a51180 (floors): the pattern is on TEXCOORD0, no promotion (see kAlbedoStages)
-  { 0x3c837e49bf748d99ull, "0x164c8ea0 vs_3_0 (diffuse s2 on TEXCOORD1)", 1 },
   // in-game variants (run-15 shader dump)
   { 0x1bd4405f8346ded4ull, "objects, skinned (diffuse s3 on TEXCOORD2)", 2 },
   { 0x4c1d851f37e3c3f2ull, "objects, skinned, 0x10a68220 family (diffuse s2 on TEXCOORD2)", 2 },
@@ -776,7 +775,6 @@ inline const AlbedoStage kAlbedoStages[] = {
   { 0x77e55c68700be25full, "PS 0x14594ae0", 4 },
   { 0x1cbf4a03015f901cull, "PS 0x10a2afa0 (s3, TEXCOORD0)", 3 },
   { 0x920fb3f3573d30d4ull, "PS 0x10ea7000 (s3, TEXCOORD0)", 3 },
-  { 0x9b8f4e2b9fbb9bb1ull, "PS 0x13d26d00 (s2, TEXCOORD1)", 2 },
   { 0x9ccd448262adfd4dull, "PS 0x105dbc60 (s2, TEXCOORD1)", 2 },
   { 0xd99d3c12905fd7c9ull, "PS 0xd7adc80 (s1, TEXCOORD2)", 1 },
   // layered ground decals: four layers on TEXCOORD0, first layer as albedo

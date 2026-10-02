@@ -65,8 +65,8 @@ static void sims3LogStats(bool withTable) {
            !sims3cam::liteTable().models.empty() ? format_string("%u models and %u objects read from sims3lights.txt", (unsigned) sims3cam::liteTable().models.size(), (unsigned) sims3cam::liteTable().objects.size()).c_str()
              : (sims3cam::liteTable().lines ? "sims3lights.txt is of an older format (no lamps; run sims3/tools/lite_table.py)" : "no sims3lights.txt next to the DLL (no lamps; run sims3/tools/lite_table.py)"));
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   walls: %u draws, openings cut in %u (%u triangles cut, %u removed, %u hidden dropped; %u geometries built, %u evicted, %u build failures, %u skipped, %u masks decoded)",
-           h.wallDraws, h.wallCutDraws, h.wallCutTriangles, h.wallRemovedTriangles, h.wallHiddenTriangles, h.wallBuilt, h.wallEvicted, h.wallBuildFailed, h.wallSkipped, h.wallMasksDecoded);
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   walls: %u draws, openings cut in %u (%u triangles cut, %u removed, %u hidden dropped; %u geometries built, %u evicted, %u build failures, %u refused; %u without an opening test, %u skipped with no client copy; %u masks decoded)",
+           h.wallDraws, h.wallCutDraws, h.wallCutTriangles, h.wallRemovedTriangles, h.wallHiddenTriangles, h.wallBuilt, h.wallEvicted, h.wallBuildFailed, h.wallRefused, h.wallNoOpeningTest, h.wallSkipped, h.wallMasksDecoded);
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   reflections: %u mirrored camera uploads; %u draws dropped in %u frames (%u of them by the stencil mirror's render states alone)",
            h.mirroredUploads, h.reflectionDrops, h.reflectionFrames, h.reflectionDropsByStates);

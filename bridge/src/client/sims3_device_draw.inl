@@ -17,8 +17,8 @@ inline void sims3OnReset(Sims3Hook& h) {
   if (h.platePs) { h.platePs->Release(); h.platePs = nullptr; }
   h.platePsFailed = false;
   for (uint32_t i = 0; i < h.wallCacheCount; ++i) sims3ReleaseWallEntry(h.wallCache[i]);
-  h.wallCacheCount = 0; for (auto& m : h.masks) m = Sims3Hook::MaskEntry(); h.maskNext = 0;
-  for (auto& e : h.bufHashes) e = Sims3Hook::HashEntry(); h.bufHashNext = 0;
+  h.wallCacheCount = 0; for (auto& m : h.masks) m = Sims3Hook::MaskEntry(); h.maskUse = 0;
+  for (auto& e : h.bufHashes) e = Sims3Hook::HashEntry(); h.bufHashUse = 0;
   h.vsWall = nullptr; h.wallLayout = sims3cam::WallLayout(); h.wallDeclId = 0;
   for (uint32_t i = 0; i < h.vsVariantCount; ++i) if (h.vsVariants[i].variant) h.vsVariants[i].variant->Release();
   h.vsVariantCount = 0;

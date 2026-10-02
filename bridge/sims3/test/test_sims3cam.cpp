@@ -877,6 +877,13 @@ int main() {
         for (int v = 84; v <= 89; ++v) flags[v * 4 + 2] = 0;
         hi.params.clampVis = 0.f;
         CHECK(cutWallOpenings(hi, ho) && ho.stats.hidden == 4 && ho.stats.hiddenMixed == 0 && ho.stats.hiddenCorners == 12 && ho.triangleCount == 36, "walls: a fully hidden segment: four triangles dropped, none mixed (%u corners)", ho.stats.hiddenCorners);
+        // milestone 77: with no opening test (threshold below 0: the mask unknown or unreadable) the
+        // hidden triangles still go, and nothing is cut -- not even with no mask at all
+        hi.params.threshold = -1.f; hi.mask = nullptr;
+        CHECK(cutWallOpenings(hi, ho) && ho.changed && ho.stats.hidden == 4 && ho.stats.cut == 0 && ho.stats.removed == 0 && ho.stats.cellsWithOpenings == 0 && ho.triangleCount == 36,
+              "walls (M77): no opening test: the hidden segment's four triangles still dropped, nothing cut (%u hidden, %u cut, %u triangles left)", ho.stats.hidden, ho.stats.cut, ho.triangleCount);
+        hi.vb1 = vb1.data();
+        CHECK(cutWallOpenings(hi, ho) && !ho.changed && ho.stats.cut == 0 && ho.stats.removed == 0, "walls (M77): no opening test and nothing hidden -> unchanged (the game's draw goes out)");
       }
       {
         // a segment edge-on in mask space (all corners on one s): the cut would leave nothing, so it is left whole
@@ -893,7 +900,6 @@ int main() {
         uint8_t px565[2] = { 0x00, 0xF8 };   // red 31, green 0, blue 0
         CHECK(decodeMaskRed(D3DFMT_R5G6B5, px565, 2, 1, 1, r16) && r16[0] == 255 && maskBytes(D3DFMT_R5G6B5, 1, 1) == 2, "walls: R5G6B5 red decodes");
       }
-      CHECK(wallCutEnabled(), "walls: the cut is on by default (SIMS3_WALL_CUT unset)");
     }
     // the shader facts, on the in-game dumps
     {
