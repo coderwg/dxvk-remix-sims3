@@ -176,13 +176,14 @@ inline void sims3AutoTexcoord(Sims3Hook& h, int k, int tc, bool tabledPs) {
 }
 
 // The normal the runtime should shade with, for the bound shaders (milestone 11): the register
-// of the vertex shader's world-normal output (chooseNormalTexcoord; the pixel shader's own use
-// of a coordinate as a normal breaks ties), 0xFF to hide the packed input normal instead
-// (vs_2_x, or no such output), 0xFE when the shader has no normal input at all.
+// of the vertex shader's world-normal output (chooseNormalTexcoord: one the pixel shader reads,
+// milestone 90; its own use of a coordinate as a normal breaks ties), 0xFF to hide the packed
+// input normal instead (vs_2_x, or no such output), 0xFE when the shader has no normal input at all.
 inline uint8_t sims3NormalChoice(const Sims3Hook& h) {
   if (!h.vsNormal || !h.vsNormal->valid || !h.vsNormal->hasNormalInput) return 0xFE;
-  const uint16_t ps = (h.psAuto && h.psAuto->valid) ? h.psAuto->normalTexcoords : (uint16_t) 0;
-  const int tc = sims3cam::chooseNormalTexcoord(*h.vsNormal, ps);
+  const bool psKnown = h.psAuto && h.psAuto->valid;
+  const uint16_t ps = psKnown ? h.psAuto->normalTexcoords : (uint16_t) 0;
+  const int tc = sims3cam::chooseNormalTexcoord(*h.vsNormal, ps, psKnown ? h.psAuto->inputTexcoords : (uint16_t) 0xFFFFu);
   if (tc >= 0) return h.vsNormal->outReg[tc];   // a vs_2_x candidate is an oT#, which convertVs2To3 keeps as o#
   return 0xFF;
 }
@@ -324,8 +325,6 @@ template<typename Dev>
 bool sims3EnsureGlassMarker(Sims3Hook& h, Dev* dev) { return sims3EnsureMarker(dev, h.glassMarker, h.glassMarkerHash, h.glassMarkerFailed, sims3cam::kGlassMarkerColour, sims3cam::kGlassMarkerHash, "glass"); }
 template<typename Dev>
 bool sims3EnsureFrostedMarker(Sims3Hook& h, Dev* dev) { return sims3EnsureMarker(dev, h.frostedMarker, h.frostedMarkerHash, h.frostedMarkerFailed, sims3cam::kFrostedMarkerColour, sims3cam::kFrostedMarkerHash, "frosted glass"); }
-template<typename Dev>
-bool sims3EnsureOpenWaterMarker(Sims3Hook& h, Dev* dev) { return sims3EnsureMarker(dev, h.openWaterMarker, h.openWaterMarkerHash, h.openWaterMarkerFailed, sims3cam::kOpenWaterMarkerColour, sims3cam::kOpenWaterMarkerHash, "open water"); }
 template<typename Dev>
 bool sims3EnsureWaterMarker(Sims3Hook& h, Dev* dev) { return sims3EnsureMarker(dev, h.waterMarker, h.waterMarkerHash, h.waterMarkerFailed, sims3cam::kWaterMarkerColour, sims3cam::kWaterMarkerHash, "water"); }
 

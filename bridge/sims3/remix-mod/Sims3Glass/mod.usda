@@ -4,13 +4,11 @@
     doc = """The Sims 3 camera hook's glass, frosted glass and water (milestones 80, 86, 88, 89): the
 materials of the hook's marker textures. The hook presents every glass draw of the game (a pixel shader
 reading only cube maps, blended, or one of its named textured glass shaders) with a flat 32x32 glass
-marker at stage 0, its named frosted glass (the shower door) with a frosted marker, its contained water
-(a lot pool, an object's bowl) with a water marker and the town's open water (ponds, the sea) with an
-open-water marker, blending off; this layer makes the markers' hashes the runtime's translucent glass,
-frosted glass (a diffuse layer), thin-walled water and an opaque glossy water whose colour is the
-marker's (nothing lies under the town's water in the ray-traced scene). Each hash is XXH3-64 of the
-marker's level 0 (sims3cam::kGlassMarkerHash, kFrostedMarkerHash, kWaterMarkerHash,
-kOpenWaterMarkerHash, checked by sims3/test/test_sims3cam.cpp).
+marker at stage 0, its named frosted glass (the shower door) with a frosted marker, and every water
+draw (its named water shaders: ponds, the sea, lot pools) with a water marker, blending off; this layer
+makes the markers' hashes the runtime's translucent glass, frosted glass (a diffuse layer) and
+thin-walled water. Each hash is XXH3-64 of the marker's level 0 (sims3cam::kGlassMarkerHash,
+kFrostedMarkerHash, kWaterMarkerHash, checked by sims3/test/test_sims3cam.cpp).
 Deployed to Game/Bin/rtx-remix/mods/Sims3Glass/mod.usda; the runtime reads it while
 rtx.enableReplacementAssets is on."""
     metersPerUnit = 1
@@ -80,23 +78,6 @@ def Xform "RootNode"
                 bool inputs:thin_walled = 1
                 float inputs:thin_wall_thickness = 1
                 bool inputs:use_diffuse_layer = 0
-                token outputs:out
-            }
-        }
-
-        def Material "mat_F25BBF23B4DFB708"
-        {
-            token outputs:mdl:displacement.connect = </RootNode/Looks/mat_F25BBF23B4DFB708/Shader.outputs:out>
-            token outputs:mdl:surface.connect = </RootNode/Looks/mat_F25BBF23B4DFB708/Shader.outputs:out>
-            token outputs:mdl:volume.connect = </RootNode/Looks/mat_F25BBF23B4DFB708/Shader.outputs:out>
-
-            def Shader "Shader"
-            {
-                uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:mdl:sourceAsset = @AperturePBR_Opacity.mdl@
-                uniform token info:mdl:sourceAsset:subIdentifier = "AperturePBR_Opacity"
-                float inputs:reflection_roughness_constant = 0.04
-                float inputs:metallic_constant = 0
                 token outputs:out
             }
         }

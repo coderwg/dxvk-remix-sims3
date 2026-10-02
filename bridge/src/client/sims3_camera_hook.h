@@ -500,6 +500,12 @@ inline uint32_t promoteTexcoord(DWORD* tokens, size_t count, uint8_t K) {
 // NORMAL semantic and repeats every instruction that writes the found register into it. A
 // shader with a normal input but no such output gets the input's semantic renamed instead, so
 // the runtime falls back to the triangle normal rather than the packed bytes.
+// Only an output the pixel shader reads counts (milestone 90): the town's water VS 2a6edce6
+// decodes its NORMAL input into TEXCOORD7, which its pixel shader never reads -- for water those
+// bytes are no normal, and the runtime shaded the ponds with a near-sideways normal, an even white
+// (runs 194-197). Of 154 shader pairs with a normal input in runs 183-197, four had such a dead
+// output: the water, one wall pair (now triangle normals) and f10077e8, whose pixel shader reads
+// its other candidate.
 struct VsNormalInfo {
   bool valid = false;
   bool hasNormalInput = false;
@@ -579,12 +585,13 @@ inline bool analyzeVertexNormal(const DWORD* tokens, size_t count, VsNormalInfo&
   return true;
 }
 
-// The candidate to use: the one the pixel shader itself treats as a normal when that is known,
-// else the lowest. -1 when the shader has no candidate.
-inline int chooseNormalTexcoord(const VsNormalInfo& v, uint16_t psNormalTexcoords) {
-  if (!v.valid || !v.candidates) return -1;
-  uint16_t pick = (uint16_t) (v.candidates & psNormalTexcoords);
-  if (!pick) pick = v.candidates;
+// The candidate to use, among those the pixel shader reads (psInputTexcoords; all when not known):
+// the one it treats as a normal when that is known, else the lowest. -1 when none is left.
+inline int chooseNormalTexcoord(const VsNormalInfo& v, uint16_t psNormalTexcoords, uint16_t psInputTexcoords = 0xFFFFu) {
+  const uint16_t read = (uint16_t) (v.candidates & psInputTexcoords);
+  if (!v.valid || !read) return -1;
+  uint16_t pick = (uint16_t) (read & psNormalTexcoords);
+  if (!pick) pick = read;
   int i = 0;
   while (!(pick & (1u << i))) ++i;                                // pick is non-zero here
   return i;
@@ -1583,6 +1590,7 @@ struct CutPoly {
 struct PsAnalysis {
   PsSamplerUse samplers[16];
   uint16_t normalTexcoords = 0;   // TEXCOORD inputs the shader treats as a normal: normalised, or dotted with a constant (a light direction)
+  uint16_t inputTexcoords = 0;    // TEXCOORD inputs the shader declares (ps_3_0 dcl_texcoord#, ps_2_x t#)
   // The wall opening mask (milestone 13): the sampler whose red is added to its own coordinate's
   // z (the wall shaders' "mask.r + t.z" test), and whether that value feeds a texkill or the
   // alpha output (walls C: alpha-tested).
@@ -1670,8 +1678,8 @@ inline bool analyzePixelShader(const DWORD* tokens, size_t count, PsAnalysis& ou
       const uint32_t usage = tokens[pos + 1], dest = tokens[pos + 2];
       const uint32_t type = dxsoRegType(dest), n = dxsoRegNum(dest);
       if (type == kSampler && n < 16) out.samplers[n].cube = ((usage >> 27) & 0xFu) == 3u;   // texture type: 2 = 2D, 3 = cube, 4 = volume
-      else if (type == kInput && n < 32 && major >= 3 && (usage & 0x1Fu) == kUsageTexcoord) inputTexcoord[n] = (int8_t) ((usage >> 16) & 0xFu);
-      else if (type == kTexture && n < 32 && major < 3) inputTexcoord[n] = (int8_t) n;
+      else if (type == kInput && n < 32 && major >= 3 && (usage & 0x1Fu) == kUsageTexcoord) { inputTexcoord[n] = (int8_t) ((usage >> 16) & 0xFu); out.inputTexcoords |= (uint16_t) (1u << ((usage >> 16) & 0xFu)); }
+      else if (type == kTexture && n < 32 && major < 3) { inputTexcoord[n] = (int8_t) n; if (n < 16) out.inputTexcoords |= (uint16_t) (1u << n); }
       return true;
     }
     if (op == 0x51u && len >= 5) {                                     // DEF c#, four literals (the cut-out's constants)
@@ -1877,36 +1885,25 @@ inline constexpr uint32_t kGlassMarkerSize = 32;
 inline constexpr uint32_t kGlassMarkerColour = 0xFFB8C8D0u;          // ARGB pale grey-blue: what the panes show if the mod is not loaded
 inline constexpr uint64_t kGlassMarkerHash = 0x5E30D0B82C246E6Cull;  // XXH3-64 of its level 0, as the runtime hashes it; the mod's material name
 
-// ---- water (milestones 86, 89) ---------------------------------------------------------------
+// ---- water (milestones 86, 89, 90) -----------------------------------------------------------
 // The game paints its water's look in the shader -- a reflection, bump maps, caustics, a colour or
 // foam texture, the scene behind from a render target -- over waves made in the vertex shader; the
 // runtime took one of those textures as an albedo (an opaque grey plane, run 193; a pool's rippled
-// light-blue colour, run 196). A water draw is presented with one of the hook's markers at stage 0,
-// blending off, and the hook's Remix mod makes the marker's hash a water material. Named, each read
-// from its bytecode.
-// Contained water -- in a basin of the lot's or an object's own (a lot pool's walls are drawn, run
-// 196) -- is see-through: the mod's translucent water, thin-walled (a single sheet whose facing is
-// not known), IOR 1.33.
+// light-blue colour, run 196). A water draw is presented with the hook's water marker at stage 0,
+// blending off; the hook's Remix mod makes the marker's hash the runtime's translucent water, IOR
+// 1.33, thin-walled (a single sheet whose facing is not known). The ground or basin under it is the
+// game's own (a pond's bed, a lot pool's walls and floor: run 197). Named, each read from its bytecode.
 struct WaterShader { uint64_t hash; const char* name; };
 inline const WaterShader kWaterPs[] = {
+  { 0xf74b4657dbfd60bcull, "the town's water, ponds and sea (VS 2a6edce6: a plane at a set height, waves, refraction and reflection targets, "
+                           "two bump maps; its NORMAL input is no normal here, see chooseNormalTexcoord)" },
   { 0x387e1a15c63c120aull, "water, instanced (VS 1a047c76: waves, refraction target, reflection cube, a two-sample bump map)" },
-  { 0xf45e6c607bb94189ull, "a lot pool's surface (VS 33017462, a position-only grid): drawn opaque, its look painted -- a rippled "
+  { 0xf45e6c607bb94189ull, "a lot pool's surface (VS 33017462, a grid without normals): drawn opaque, its look painted -- a rippled "
                            "light-blue colour s4, caustics s3, a normal map s7 (.wz), reflection and irradiance cubes, a shadow map (run 196)" },
 };
 inline bool isWaterPs(uint64_t hash) { return findByHash(kWaterPs, hash) != nullptr; }
 inline constexpr uint32_t kWaterMarkerColour = 0xFF8CC4C8u;          // ARGB pale teal: what the water shows if the mod is not loaded
 inline constexpr uint64_t kWaterMarkerHash = 0x2723DD62C28E1456ull;  // XXH3-64 of its level 0; the mod's material name
-// Open water -- the town's ponds and sea -- has nothing under it in the ray-traced scene: through any
-// see-through material it showed the sky, an even white with no shadow, edged sharply at the shore
-// (runs 194-196). It is opaque and glossy: the mod's material sets only the gloss, and the runtime
-// takes an opaque replacement's albedo from the draw's stage-0 texture when the material names none
-// (mergeLegacyMaterial, 1.5.2), so the marker's colour is the water's colour.
-inline const WaterShader kOpenWaterPs[] = {
-  { 0xf74b4657dbfd60bcull, "the town's water (VS 2a6edce6: a plane at a set height, waves, refraction and reflection targets, two bump maps)" },
-};
-inline bool isOpenWaterPs(uint64_t hash) { return findByHash(kOpenWaterPs, hash) != nullptr; }
-inline constexpr uint32_t kOpenWaterMarkerColour = 0xFF1A4448u;          // ARGB dark blue-teal: the open water's albedo
-inline constexpr uint64_t kOpenWaterMarkerHash = 0xF25BBF23B4DFB708ull;  // XXH3-64 of its level 0; the mod's material name
 
 // ---- which texture coordinates the runtime samples with (milestone 3g) -------------------
 // The 1.5.2 runtime takes a draw's texture coordinates from the vertex declaration element

@@ -383,12 +383,26 @@ int main() {
       CHECK(analyzeVertexNormal(wallsB3.data(), wallsB3.size(), w) && w.candidates == ((1u << 2) | (1u << 6)),
             "walls B VS 84b06922: two normal-derived outputs, TEXCOORD2 and TEXCOORD6 (candidates %x)", w.candidates);
       CHECK(chooseNormalTexcoord(w, (uint16_t) (1u << 6)) == 6 && chooseNormalTexcoord(w, 0) == 2, "  the pixel shader's own use breaks the tie, else the lowest");
+      CHECK(chooseNormalTexcoord(w, 0, (uint16_t) (1u << 6)) == 6 && chooseNormalTexcoord(w, 0, (uint16_t) (1u << 3)) == -1, "  (M90) only a candidate the pixel shader reads: the read one, or none");
       VsNormalInfo r;
       CHECK(analyzeVertexNormal(roof.data(), roof.size(), r) && r.hasNormalInput && r.candidates == 0, "roof VS b077115f: normal mixed with the per-vertex pitch (POSITION2): no candidate");
       VsNormalInfo f;
       CHECK(analyzeVertexNormal(floors.data(), floors.size(), f) && !f.hasNormalInput && f.candidates == 0, "floors VS 0fcdd508: no normal input");
       PsAnalysis pa;
       CHECK(analyzePixelShader(psObj.data(), psObj.size(), pa) && (pa.normalTexcoords & (1u << 1)), "object PS 0c19795e treats TEXCOORD1 as a normal (mask %x)", pa.normalTexcoords);
+      // milestone 90: the town's water decodes its NORMAL input into TEXCOORD7, which its pixel shader never reads
+      std::vector<DWORD> wvs, wps, fvs, fps;
+      if (loadShader("vs_2a6edce65dc2afb5", wvs) && loadShader("ps_f74b4657dbfd60bc", wps) && loadShader("vs_f10077e8d85a0f0f", fvs) && loadShader("ps_9a371afbc53c8ed8", fps)) {
+        VsNormalInfo wv, fv; PsAnalysis wp, fp;
+        const bool okW = analyzeVertexNormal(wvs.data(), wvs.size(), wv) && analyzePixelShader(wps.data(), wps.size(), wp) && wv.candidates == (1u << 7) && wp.inputTexcoords == 0x3Fu
+                         && chooseNormalTexcoord(wv, wp.normalTexcoords, wp.inputTexcoords) == -1 && chooseNormalTexcoord(wv, wp.normalTexcoords) == 7;
+        std::vector<DWORD> hid = wvs; VsNormalInfo hv;
+        const bool okHide = okW && hideNormalInput(hid, wv) && analyzeVertexNormal(hid.data(), hid.size(), hv) && !hv.hasNormalInput;
+        CHECK(okW && okHide, "normal (M90): water VS 2a6edce6's candidate TEXCOORD7 is not read by PS f74b4657 (reads %x): no candidate, the packed input hidden (triangle normals)", wp.inputTexcoords);
+        const bool okF = analyzeVertexNormal(fvs.data(), fvs.size(), fv) && analyzePixelShader(fps.data(), fps.size(), fp)
+                         && chooseNormalTexcoord(fv, fp.normalTexcoords) == 0 && chooseNormalTexcoord(fv, fp.normalTexcoords, fp.inputTexcoords) == 4;
+        CHECK(okF, "normal (M90): VS f10077e8 with PS 9a371afb: TEXCOORD4, the candidate the pixel shader reads (was TEXCOORD0, which it does not; candidates %x, reads %x)", fv.candidates, fp.inputTexcoords);
+      } else SKIP("water / f10077e8 shader dumps not found: the M90 normal rule not tested on them");
       // the variant: one more output, NORMAL, written wherever o4 is
       std::vector<DWORD> v = obj;
       const size_t before = v.size();
@@ -1056,18 +1070,8 @@ int main() {
       const size_t wat = u.find(wname);
       const size_t wend = wat == std::string::npos ? wat : u.find("token outputs:out", wat);
       CHECK(wh == kWaterMarkerHash && wat != std::string::npos && wend != std::string::npos && u.find("ior_constant = 1.33", wat) < wend && u.find("thin_walled = 1", wat) < wend && kWaterMarkerHash != kGlassMarkerHash
-            && isWaterPs(0xf45e6c607bb94189ull) && isWaterPs(0x387e1a15c63c120aull) && !isWaterPs(0xf74b4657dbfd60bcull) && !isWaterPs(0x3197bfdef2330503ull),
-            "water (M86, M89): the marker's level-0 hash 0x%016llX names the water material %s (IOR 1.33, thin-walled); the pool's surface f45e6c60 and 387e1a15, not the town's water nor the glass", (unsigned long long) wh, wname);
-      // milestone 89: the open-water marker's hash names an opaque glossy material that names no albedo (the marker's colour is it)
-      for (auto& p : gm) p = kOpenWaterMarkerColour;
-      const uint64_t oh = (uint64_t) XXH3_64bits(gm, sizeof gm);
-      char oname[32]; snprintf(oname, sizeof oname, "mat_%016llX", (unsigned long long) kOpenWaterMarkerHash);
-      const size_t oat = u.find(oname);
-      const size_t oend = oat == std::string::npos ? oat : u.find("token outputs:out", oat);
-      CHECK(oh == kOpenWaterMarkerHash && oat != std::string::npos && oend != std::string::npos && u.find("AperturePBR_Opacity.mdl", oat) < oend && u.find("reflection_roughness_constant", oat) < oend
-            && u.find("diffuse_texture", oat) > oend && u.find("diffuse_color_constant", oat) > oend
-            && isOpenWaterPs(0xf74b4657dbfd60bcull) && !isOpenWaterPs(0xf45e6c607bb94189ull) && !isOpenWaterPs(0x387e1a15c63c120aull),
-            "open water (M89): the marker's level-0 hash 0x%016llX names the opaque glossy material %s (no albedo of its own); the town's water f74b4657", (unsigned long long) oh, oname);
+            && isWaterPs(0xf74b4657dbfd60bcull) && isWaterPs(0xf45e6c607bb94189ull) && isWaterPs(0x387e1a15c63c120aull) && !isWaterPs(0x3197bfdef2330503ull),
+            "water (M86, M89): the marker's level-0 hash 0x%016llX names the water material %s (IOR 1.33, thin-walled); the town's water f74b4657, the pool's surface f45e6c60 and 387e1a15, not the glass", (unsigned long long) wh, wname);
       // milestone 88: the frosted marker's hash names the frosted material (a diffuse layer)
       for (auto& p : gm) p = kFrostedMarkerColour;
       const uint64_t fh = (uint64_t) XXH3_64bits(gm, sizeof gm);
