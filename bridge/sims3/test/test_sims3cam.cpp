@@ -1045,11 +1045,13 @@ int main() {
             "glass (M80): the game's glass shaders read only cube maps (%d of %d dumps found); walls A, the object shader and an empty analysis are not glass", glass, found);
       // milestone 81: textured glass by name; the Sims' hair pass and the light-beam cards (cube + 2D, blended) are not glass
       std::vector<DWORD> tg, hair, beam; PsAnalysis tga, ha, ba;
-      const bool tgOk = !loadShader("ps_29c6b22234617c1a", tg) || (analyzePixelShader(tg.data(), tg.size(), tga) && !isGlassShader(tga) && isGlassPs(tga, 0x29c6b22234617c1aull));
-      const bool hairOk = !loadShader("ps_57a5a049ffa47770", hair) || (analyzePixelShader(hair.data(), hair.size(), ha) && !isGlassPs(ha, 0x57a5a049ffa47770ull));
-      const bool beamOk = !loadShader("ps_7304aaea6a75fb3f", beam) || (analyzePixelShader(beam.data(), beam.size(), ba) && !isGlassPs(ba, 0x7304aaea6a75fb3full));
-      CHECK(tgOk && hairOk && beamOk && isGlassPs(PsAnalysis(), 0xac4184cee232ed04ull), "glass (M81): textured glass 29c6b222 / ac4184ce by name; the hair pass 57a5a049 and the light-beam card 7304aaea are not glass");
-      CHECK(isTexturedGlass(0x572773cfbd618a3aull) && !isTexturedGlass(0x3197bfdef2330503ull), "glass (M87): the shower door's frosted glass 572773cf is textured glass (by name, blended or not)");
+      const bool tgOk = !loadShader("ps_29c6b22234617c1a", tg) || (analyzePixelShader(tg.data(), tg.size(), tga) && !isGlassShader(tga) && namedGlass(0x29c6b22234617c1aull));
+      const bool hairOk = !loadShader("ps_57a5a049ffa47770", hair) || (analyzePixelShader(hair.data(), hair.size(), ha) && !isGlassShader(ha) && !namedGlass(0x57a5a049ffa47770ull));
+      const bool beamOk = !loadShader("ps_7304aaea6a75fb3f", beam) || (analyzePixelShader(beam.data(), beam.size(), ba) && !isGlassShader(ba) && !namedGlass(0x7304aaea6a75fb3full));
+      const NamedGlass* door = namedGlass(0x572773cfbd618a3aull);
+      CHECK(tgOk && hairOk && beamOk && namedGlass(0xac4184cee232ed04ull) && namedGlass(0xac4184cee232ed04ull)->material == kClearGlass && !namedGlass(0x3197bfdef2330503ull)
+            && door && door->material == kFrostedGlass && door->confirmed,
+            "glass (M81, M87, M88, M100): named glass 29c6b222 / ac4184ce clear, the shower door 572773cf frosted; the hair pass 57a5a049, the light-beam card 7304aaea and the cube-only pane 3197bfde are not named");
       // milestone 82: the planar-reflection surface's PS 86dad57d reads only a cube (left out under the stencil test)
       std::vector<DWORD> mp; PsAnalysis ma;
       const bool mirrorCube = !loadShader("ps_86dad57d0dc73989", mp) || (analyzePixelShader(mp.data(), mp.size(), ma) && isGlassShader(ma));
@@ -1110,7 +1112,7 @@ int main() {
       const size_t fend = fat == std::string::npos ? fat : u.find("token outputs:out", fat);
       std::vector<uint8_t> frost; const bool haveFrost = loadBytes("../remix-mod/Sims3Glass/textures/frost.dds", frost) && frost.size() > 148 && memcmp(frost.data(), "DDS ", 4) == 0;
       CHECK(fh == kFrostedMarkerHash && fat != std::string::npos && fend != std::string::npos && u.find("use_diffuse_layer = 1", fat) < fend && u.find("@./textures/frost.dds@", fat) < fend && haveFrost
-            && isFrostedGlass(0x572773cfbd618a3aull) && !isFrostedGlass(0x3197bfdef2330503ull),
+            && namedGlass(0x572773cfbd618a3aull) && namedGlass(0x572773cfbd618a3aull)->material == kFrostedGlass,
             "frosted glass (M88): the marker's level-0 hash 0x%016llX names the frosted material %s (diffuse layer); the shower door's 572773cf", (unsigned long long) fh, fname);
     }
     CHECK(kLotCompositePs == 0x99ee53ff6ef1b0b6ull && lotCompositeStage(0) == 0 && lotCompositeStage(1) == 4 && lotCompositeStage(2) == 3, "lot composite: pass 1 reads the mask from s4 (layer 4 out), pass 2 from s3 (layer 3 out)");

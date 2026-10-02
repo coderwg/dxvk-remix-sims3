@@ -316,13 +316,18 @@ bool sims3EnsureMarker(Dev* dev, IDirect3DTexture9*& marker, uint64_t& hash, boo
 #if SIMS3_HAVE_XXHASH
   hash = (uint64_t) XXH3_64bits(pixels, sizeof pixels);   // the runtime hashes level 0's bytes, rows packed
 #endif
-  snprintf(msg, sizeof msg, "Sims 3 camera hook: %s marker created, hash 0x%016llX%s (the mod rtx-remix/mods/Sims3Glass names mat_%016llX; replacement assets must be on)",
-           what, (unsigned long long) hash, hash == modHash ? "" : " -- NOT the mod's", (unsigned long long) modHash);
+  if (modHash) snprintf(msg, sizeof msg, "Sims 3 camera hook: %s marker created, hash 0x%016llX%s (the hook's Remix mods name mat_%016llX; replacement assets must be on)",
+                        what, (unsigned long long) hash, hash == modHash ? "" : " -- NOT the mod's", (unsigned long long) modHash);
+  else snprintf(msg, sizeof msg, "Sims 3 camera hook: %s marker created, hash 0x%016llX (a survey colour, no material)", what, (unsigned long long) hash);
   Logger::info(msg);
   return true;
 }
 template<typename Dev>
 bool sims3EnsureGlassMarker(Sims3Hook& h, Dev* dev) { return sims3EnsureMarker(dev, h.glassMarker, h.glassMarkerHash, h.glassMarkerFailed, sims3cam::kGlassMarkerColour, sims3cam::kGlassMarkerHash, "glass"); }
+template<typename Dev>
+bool sims3EnsureSurveyMarker(Sims3Hook& h, Dev* dev, int k) {
+  return sims3EnsureMarker(dev, h.surveyMarkers[k], h.surveyHashes[k], h.surveyFailed[k], k ? sims3cam::kSurveyGlassColour : sims3cam::kSurveySheetColour, 0, k ? "survey: unconfirmed glass" : "survey: reflective sheet");
+}
 template<typename Dev>
 bool sims3EnsureFrostedMarker(Sims3Hook& h, Dev* dev) { return sims3EnsureMarker(dev, h.frostedMarker, h.frostedMarkerHash, h.frostedMarkerFailed, sims3cam::kFrostedMarkerColour, sims3cam::kFrostedMarkerHash, "frosted glass"); }
 template<typename Dev>

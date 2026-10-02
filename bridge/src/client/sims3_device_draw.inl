@@ -32,6 +32,7 @@ inline void sims3OnReset(Sims3Hook& h) {
   for (int i = 0; i < sims3cam::kTerrainMarkers; ++i) { if (h.marker[i]) h.marker[i]->Release(); h.marker[i] = nullptr; h.markerHash[i] = 0; }
   if (h.glassMarker) { h.glassMarker->Release(); h.glassMarker = nullptr; }
   for (int m = 0; m < sims3cam::kWaterMaterials; ++m) { if (h.waterMarkers[m]) h.waterMarkers[m]->Release(); h.waterMarkers[m] = nullptr; h.waterMarkerHashes[m] = 0; h.waterMarkerFailed[m] = false; }
+  for (int k = 0; k < 2; ++k) { if (h.surveyMarkers[k]) h.surveyMarkers[k]->Release(); h.surveyMarkers[k] = nullptr; h.surveyHashes[k] = 0; h.surveyFailed[k] = false; }
   if (h.frostedMarker) { h.frostedMarker->Release(); h.frostedMarker = nullptr; }
   h.glassMarkerHash = 0; h.glassMarkerFailed = false; h.frostedMarkerHash = 0; h.frostedMarkerFailed = false; h.blendOurs = false;
   h.markerFailed = false; h.markersConfigSent = false; h.terrainFreeStage = -1; h.tblockActive = false; h.tblockStage = -1; h.tblockSet = 0; h.tblockSrgb = 0; h.ourSampler = false; h.psBound = nullptr; h.vsTerrain = nullptr; h.lotFurtherCopy = false; h.swappingPs = false;
@@ -138,7 +139,8 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
   // between them is a mirror pass, dropped since milestone 13c) -- is left out: the ray tracer reflects
   // by itself, and the object's own glass pane stays. Sent, it went out as glass when blended, as an
   // untextured sheet when nothing was bound, and dropped by the runtime with the cube bound.
-  if (h.psAuto && h.psAuto->valid && rs[D3DRS_STENCILENABLE] && sims3cam::isGlassShader(*h.psAuto)) { h.drawDropped = true; h.drawCaptured = false; h.dropWhy = "planar-reflection surface"; ++h.mirrorSurfaceDropped; return false; }
+  h.reflectiveSheet = h.psAuto && h.psAuto->valid && rs[D3DRS_STENCILENABLE] && sims3cam::isGlassShader(*h.psAuto);
+  if (h.reflectiveSheet && !sims3cam::kGlassSurvey) { h.drawDropped = true; h.drawCaptured = false; h.dropWhy = "planar-reflection surface"; ++h.mirrorSurfaceDropped; return false; }
   // a zero-thickness wall's back side (milestone 97, sims3cam::isWallBackSide): left out
   if (h.drawIndexed && h.drawType == D3DPT_TRIANGLELIST && h.wallLayout.valid && h.vsWall && h.vsWall->valid && sims3WallBackSide(h, dev)) {
     h.drawDropped = true; h.drawCaptured = false; h.dropWhy = "wall back side"; ++h.wallBackDropped; return false;
@@ -172,29 +174,32 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
     h.fogOurs = true;
   }
   if (!terrain) {
-    // glass and water (milestones 80, 86, 88, 99): the material's marker at stage 0 and the draw's
+    // glass and water (milestones 80, 86, 88, 99, 100): the material's marker at stage 0 and the draw's
     // blending off; its material is the hook's Remix mods' glass, frosted glass or the water's own
-    // (sims3cam::isGlassShader, isTexturedGlass, isFrostedGlass, waterMaterial)
+    // (sims3cam::isGlassShader, namedGlass, waterMaterial)
     const int waterMat = sims3cam::waterMaterial(h.psHash);
     const bool water = waterMat >= 0 && sims3EnsureWaterMarker(h, dev, waterMat);
-    const bool frosted = !water && sims3cam::isFrostedGlass(h.psHash) && sims3EnsureFrostedMarker(h, dev);
-    const bool glass = !water && !frosted && h.psAuto && (sims3cam::isTexturedGlass(h.psHash) || (rs[D3DRS_ALPHABLENDENABLE] && sims3cam::isGlassShader(*h.psAuto))) && sims3EnsureGlassMarker(h, dev);
-    if (water || frosted || glass) {
+    const sims3cam::NamedGlass* named = water ? nullptr : sims3cam::namedGlass(h.psHash);
+    const int survey = !sims3cam::kGlassSurvey || water ? -1 : h.reflectiveSheet ? 0 : (named && !named->confirmed) ? 1 : -1;   // the survey (milestone 100)
+    const bool surveyed = survey >= 0 && sims3EnsureSurveyMarker(h, dev, survey);
+    const bool frosted = !water && survey < 0 && named && named->material == sims3cam::kFrostedGlass && sims3EnsureFrostedMarker(h, dev);
+    const bool glass = !water && survey < 0 && !frosted && h.psAuto && (named || (rs[D3DRS_ALPHABLENDENABLE] && sims3cam::isGlassShader(*h.psAuto))) && sims3EnsureGlassMarker(h, dev);
+    if (water || surveyed || frosted || glass) {
       h.drawGlass = true;
       h.remapRestore = h.boundTex[0]; if (h.remapRestore) h.remapRestore->AddRef();   // held until sims3EndDraw, as for an albedo remap
       h.remapActive = true;
-      h.inRemap = true; dev->SetTexture(0, water ? h.waterMarkers[waterMat] : frosted ? h.frostedMarker : h.glassMarker); h.inRemap = false;
+      h.inRemap = true; dev->SetTexture(0, water ? h.waterMarkers[waterMat] : surveyed ? h.surveyMarkers[survey] : frosted ? h.frostedMarker : h.glassMarker); h.inRemap = false;
       // water (milestone 94): the sampler states of the game's first wave map (the one its TEXCOORD0
       // reads) on stage 0, where the runtime takes the material's -- the normal map tiles as the game's
       // waves do; back in sims3EndDraw with the albedo remap's
       if (water) for (int s = 0; s < 16; ++s) if (h.boundKind[s] == 1 && sims3cam::isWaveMapFormat(h.boundFmt[s])) { if (s > 0) h.remapSamplerSet = sims3SamplerStatesTo0(h, dev, (DWORD) s, h.remapSamplerSaved); break; }
       h.blendSaved = rs[D3DRS_ALPHABLENDENABLE]; h.blendOurs = true;
       h.ourState = true; dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE); h.ourState = false;
-      if (water) ++h.waterDraws[waterMat]; else if (frosted) ++h.frostedDraws; else ++h.glassDraws;
+      if (water) ++h.waterDraws[waterMat]; else if (surveyed) ++h.surveyDraws[survey]; else if (frosted) ++h.frostedDraws; else ++h.glassDraws;
       bool seen = false; for (uint32_t i = 0; i < h.glassLogged; ++i) if (h.glassLoggedPs[i] == h.psHash) seen = true;
       if (!seen && h.glassLogged < 8) {
         h.glassLoggedPs[h.glassLogged++] = h.psHash; char msg[224];
-        const char* what = water ? sims3cam::kWaterMaterial[waterMat].name : frosted ? "frosted glass" : "glass";
+        const char* what = water ? sims3cam::kWaterMaterial[waterMat].name : surveyed ? (survey ? "survey: unconfirmed glass" : "survey: reflective sheet") : frosted ? "frosted glass" : "glass";
         snprintf(msg, sizeof msg, "Sims 3 camera hook: %s at frame %u -> VS %016llx PS %016llx presented with the %s marker, blending off", what, h.frames + 1, (unsigned long long) h.vsHash, (unsigned long long) h.psHash, what);
         Logger::info(msg);
       }

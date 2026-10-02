@@ -1868,26 +1868,31 @@ inline bool isGlassShader(const PsAnalysis& a) {
   for (const PsSamplerUse& u : a.samplers) { if (!u.read) continue; if (!u.cube) return false; ++cubes; }
   return cubes > 0;
 }
-// Textured glass (milestones 81, 87): the same reflection, Fresnel term and highlights, with a colour
-// texture over it. Its signature (a cube map and 2D textures) is shared by the Sims' hair and skin
-// passes, so these are named, each read from its bytecode, and go out as glass whether the game
+// Named glass (milestones 81, 87, 88, 100): the same reflection, Fresnel term and highlights, with a
+// colour texture over it. Its signature (a cube map and 2D textures) is shared by the Sims' hair and
+// skin passes, so these are named, each read from its bytecode, and go out as glass whether the game
 // blends them or not (the shower door's is opaque, its see-through look faked from a picture of the
-// scene behind). (Not glass, though alike: the light-beam cards 7304aaea / 8d3a3a22 -- their cube
-// lookup has a constant direction, no normal.)
-struct TexturedGlass { uint64_t hash; const char* name; };
-inline const TexturedGlass kTexturedGlass[] = {
-  { 0x29c6b22234617c1aull, "glass: colour texture s1 x c8, mask s2 (VS 5b18d2ce)" },
-  { 0xac4184cee232ed04ull, "glass: colour texture s2 x c10, gloss s3, irradiance cube s1 (VS d7fede81)" },
+// scene behind), each with its material: the clear glass, or the frosted glass (its own marker and
+// the mod's translucent glass with a diffuse layer; the door's game colour texture is a frosting).
+// confirmed: seen right in game. (Not glass, though alike: the light-beam cards 7304aaea / 8d3a3a22 --
+// their cube lookup has a constant direction, no normal.)
+inline constexpr uint8_t kClearGlass = 0, kFrostedGlass = 1;
+struct NamedGlass { uint64_t hash; const char* name; uint8_t material; bool confirmed; };
+inline const NamedGlass kNamedGlass[] = {
+  { 0x29c6b22234617c1aull, "glass: colour texture s1 x c8, mask s2 (VS 5b18d2ce; drawn near the shower in run 188)", kClearGlass, false },
+  { 0xac4184cee232ed04ull, "glass: colour texture s2 x c10, gloss s3, irradiance cube s1 (VS d7fede81; drawn unblended, run 201)", kClearGlass, false },
   { 0x572773cfbd618a3aull, "frosted glass, a shower door: normal map s2, reflection, Fresnel, the scene behind (render target s1) "
-                           "read through the normal map, colour s3 (VS b51f1577, skinned: the door swings; drawn opaque; runs 192-194)" },
+                           "read through the normal map, colour s3 (VS b51f1577, skinned: the door swings; drawn opaque; runs 192-194)", kFrostedGlass, true },
 };
-inline bool isTexturedGlass(uint64_t hash) { return findByHash(kTexturedGlass, hash) != nullptr; }
-// Frosted glass (milestone 88): the shower door's glass gets its own marker and the mod's frosted
-// material (the translucent glass with a diffuse layer); its game colour texture is a frosting.
-inline bool isFrostedGlass(uint64_t hash) { return hash == 0x572773cfbd618a3aull; }
+inline const NamedGlass* namedGlass(uint64_t hash) { return findByHash(kNamedGlass, hash); }
 inline constexpr uint32_t kFrostedMarkerColour = 0xFFE0E6EAu;          // ARGB frosted pale grey: what it shows if the mod is not loaded
 inline constexpr uint64_t kFrostedMarkerHash = 0x6FBC67AF0CD76F66ull;  // XXH3-64 of its level 0; the mod's material name
-inline bool isGlassPs(const PsAnalysis& a, uint64_t hash) { return isGlassShader(a) || isTexturedGlass(hash); }
+// A survey (milestone 100, one run; goes once answered): flat colours with no material, to see in game
+// where the reflective sheets (a cube-only reflection under the stencil test, PS 86dad57d, left out
+// since milestone 82: on mirrors as well?) and the unconfirmed named glass are drawn.
+inline constexpr bool kGlassSurvey = true;
+inline constexpr uint32_t kSurveySheetColour = 0xFF00FF00u;   // bright green: a reflective sheet
+inline constexpr uint32_t kSurveyGlassColour = 0xFFFF00FFu;   // magenta: unconfirmed named glass
 inline constexpr uint32_t kGlassMarkerSize = 32;
 inline constexpr uint32_t kGlassMarkerColour = 0xFFB8C8D0u;          // ARGB pale grey-blue: what the panes show if the mod is not loaded
 inline constexpr uint64_t kGlassMarkerHash = 0x5E30D0B82C246E6Cull;  // XXH3-64 of its level 0, as the runtime hashes it; the mod's material name
