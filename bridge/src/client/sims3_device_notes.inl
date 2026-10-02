@@ -94,13 +94,18 @@ template<typename St>
 void sims3DumpDraw(Sims3Hook& h, const St& st) {
   if (h.markDump != 2 || h.diagLines >= 6000) return;
   ++h.diagLines;
-  char tex[96] = "none";
+  char tex[128] = "none";
   if (*st.textures[0] != nullptr) {
     if (st.textureTypes[0] == D3DRTYPE_CUBETEXTURE) snprintf(tex, sizeof tex, "CUBE");
     else if (st.textureTypes[0] == D3DRTYPE_TEXTURE) {
       auto* t = bridge_cast<Direct3DTexture9_LSS*>(*st.textures[0]);
       const D3DSURFACE_DESC d = t->getLevelDesc(0); char fb[16];
-      snprintf(tex, sizeof tex, "%s %ux%u%s id %u", sims3FormatName((uint32_t) d.Format, fb, sizeof fb), d.Width, d.Height, (d.Usage & D3DUSAGE_RENDERTARGET) ? " RT" : "", (unsigned) t->getId());
+      // the runtime's texture hash (milestone 95c): XXH3 of level 0's bytes as the client keeps them
+      uint64_t th = 0;
+#if SIMS3_HAVE_XXHASH
+      if (const uint8_t* data = t->sims3Level0Data()) th = (uint64_t) XXH3_64bits(data, bridge_util::calcTotalSizeOfRect(d.Width, d.Height, d.Format));
+#endif
+      snprintf(tex, sizeof tex, "%s %ux%u%s id %u hash %016llX", sims3FormatName((uint32_t) d.Format, fb, sizeof fb), d.Width, d.Height, (d.Usage & D3DUSAGE_RENDERTARGET) ? " RT" : "", (unsigned) t->getId(), (unsigned long long) th);
     } else snprintf(tex, sizeof tex, "VOLUME");
   }
   auto* vb = *st.streams[0] ? bridge_cast<Direct3DVertexBuffer9_LSS*>(*st.streams[0]) : nullptr;
@@ -110,7 +115,7 @@ void sims3DumpDraw(Sims3Hook& h, const St& st) {
   char range[64];
   if (h.drawIndexed) snprintf(range, sizeof range, "base %d start %u prims %u", h.drawBase, h.drawStart, h.drawPrims);
   else snprintf(range, sizeof range, "DP");
-  char m[440];
+  char m[480];
   snprintf(m, sizeof m, "Sims 3 camera hook: dump frame %u #%u -> %s | VS %016llx PS %016llx | stage 0: %s | vb %u +%u /%u ib %u | %s | cull %lu stencil %lu z %lu %lu/%lu blend %lu %lu/%lu atest %lu cw %lx",
            h.frames + 1, h.diagLines, what, (unsigned long long) h.vsHash, (unsigned long long) h.psHash, tex,
            vb ? (unsigned) vb->getId() : 0u, (unsigned) st.streamOffsets[0], (unsigned) st.streamStrides[0], ib ? (unsigned) ib->getId() : 0u, range,
