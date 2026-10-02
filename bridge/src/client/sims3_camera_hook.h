@@ -741,19 +741,20 @@ inline bool appendConstantRead(std::vector<DWORD>& t, uint32_t reg) {
 // s1 and the diffuse blend at s2. The stage below was read from each pixel shader's
 // arithmetic (the sample multiplied by the summed light colour) and is keyed by the pixel
 // shader's bytecode hash; it takes precedence over pickAlbedoStage for captured draws.
-// The recolourable object shaders also carry the Create-A-Style tint at c8 (tint, see packTint).
+// The recolourable object shaders also carry the Create-A-Style tint at c8, and walls C its flat
+// colour at c4 (tintReg, the pixel constant forwarded as the texture factor, see packTint; -1: none).
 // (Until milestone 52 the table also marked the shaders carrying a four-light rig at c0..c7, the
 // input of the sun's vote, removed in milestone 41.)
-struct AlbedoStage { uint64_t hash; const char* name; uint8_t stage; bool tint; };
-inline constexpr uint8_t kTintRegister = 8;
+struct AlbedoStage { uint64_t hash; const char* name; uint8_t stage; int8_t tintReg = -1; };
+inline constexpr int8_t kTintRegister = 8;
 
 inline const AlbedoStage kAlbedoStages[] = {
   // objects: s2 the lot's light map (sampled with a world-space projection, rows c15/c16 of the VS; scaled by c12.y), s3 diffuse (TEXCOORD2), s4 specular mask; light rig and tint
-  { 0x0c19795eb80e2e96ull, "object PS 0x10a68900", 3, true },
-  { 0x8282d3a0d611b62eull, "object PS 0x10a69440", 3, true },
-  { 0x54bea85dc05c7c35ull, "object PS 0x10a694e0", 3, true },
-  { 0x470c140c802b7ec0ull, "object PS 0x1118d5e0", 3, true },
-  { 0x5aee1186d554dbc4ull, "object PS 0x10a68220 (s2 diffuse, TEXCOORD2; 3 lights)", 2, false },
+  { 0x0c19795eb80e2e96ull, "object PS 0x10a68900", 3, kTintRegister },
+  { 0x8282d3a0d611b62eull, "object PS 0x10a69440", 3, kTintRegister },
+  { 0x54bea85dc05c7c35ull, "object PS 0x10a694e0", 3, kTintRegister },
+  { 0x470c140c802b7ec0ull, "object PS 0x1118d5e0", 3, kTintRegister },
+  { 0x5aee1186d554dbc4ull, "object PS 0x10a68220 (s2 diffuse, TEXCOORD2; 3 lights)", 2 },
   // lot terrain paint (VS 0x15c787a0; thousands of triangles per draw): s1 normal map,
   // diffuse = mask blend of the paint layers s2/s3/s4 (TEXCOORD0). Not the floor tiles.
   { 0x17eabad58f650687ull, "terrain paint PS 0x13d1dd40", 2 },
@@ -761,8 +762,8 @@ inline const AlbedoStage kAlbedoStages[] = {
   { 0xd63bf505ec4a44a0ull, "terrain paint PS 0x13d1d8e0", 2 },
   { 0x98062e8d4d12af7dull, "terrain paint PS 0x13d1d980", 2 },
   // in-game variants (run-15 shader dump)
-  { 0x1458c67a2c009563ull, "object PS variant 1458c67a (s2 diffuse, TEXCOORD2)", 2, false },
-  { 0xa3afadeeb6a034c6ull, "object PS variant a3afadee (s2 diffuse, TEXCOORD2)", 2, false },
+  { 0x1458c67a2c009563ull, "object PS variant 1458c67a (s2 diffuse, TEXCOORD2)", 2 },
+  { 0xa3afadeeb6a034c6ull, "object PS variant a3afadee (s2 diffuse, TEXCOORD2)", 2 },
   { 0x528502f128e81506ull, "PS 528502f1 (s1 on TEXCOORD2)", 1 },
   { 0xc0b8100612d70879ull, "PS c0b81006 (s1 on TEXCOORD1)", 1 },
   { 0x5e6fbac12103e50bull, "PS 5e6fbac1 (s1 on TEXCOORD1)", 1 },
@@ -782,6 +783,10 @@ inline const AlbedoStage kAlbedoStages[] = {
   { 0x2bc380a5a20143fcull, "PS 0x104068c0 (s7..s10 layers)", 7 },
   { 0x3ebb622c4fe0be4full, "floors PS 0x10a221a0 (s2 pattern on TEXCOORD0; s1 is the room lightmap)", 2 },
   { 0xa63ccabe650b1bc0ull, "floors PS 0x10a1f0e0 (s2 pattern on TEXCOORD0; s1 is the room lightmap)", 2 },
+  // walls C (milestone 79): the wall's thickness -- tops, edges, the sides of openings, its own index
+  // ranges of the wall buffer -- in one flat colour, c4, under the light; no colour texture. Its s1,
+  // the opening mask (greyscale, white where the wall stands), is the albedo, tinted by c4.
+  { 0x7d2cbb8e474dfaf5ull, "walls C PS 7d2cbb8e (flat colour c4; s1 the opening mask)", 1, 4 },
   // terrain and simple textured objects: stage 0 already
   { 0xe18ad53a96ff51ccull, "terrain PS 0x103f2f20", 0 },
   { 0x27ac2b7a8987e4d4ull, "terrain PS 0x13be1180", 0 },
@@ -807,7 +812,8 @@ inline const AlbedoStage* findAlbedoStage(uint64_t hash) { return findByHash(kAl
 // colour. Remix's legacy material multiplies the albedo by D3DRS_TEXTUREFACTOR when stage 0's
 // colour argument 2 is TFACTOR (d3d9_rtx_utils.cpp: materialData.tFactor = renderStates[
 // D3DRS_TEXTUREFACTOR]), and the game's pixel shaders ignore that fixed-function state, so
-// the client forwards c8 there for captured draws (white for shaders without a tint).
+// the client forwards c8 there for captured draws (white for shaders without a tint), read from
+// the device at the draw (milestone 79), as the shader reads it.
 
 inline uint32_t packTint(const float* rgb) {
   auto to8 = [](float v) -> uint32_t { if (!(v > 0.f)) return 0u; if (v > 1.f) return 255u; return (uint32_t) (v * 255.f + 0.5f); };

@@ -39,10 +39,9 @@ struct Sims3Hook {
   uint32_t loggedPatches = 0;          // bit per rule index, so each patch is announced once
   int psAlbedoStage = -1;              // bound pixel shader's known diffuse stage, or -1
   int psTintReg = -1;                  // bound pixel shader's tint constant register, or -1
-  float tint[3] = { 1.f, 1.f, 1.f };   // last tint constant uploaded for a tinted pixel shader
   uint32_t sentFactor = 0xFFFFFFFFu;   // D3DRS_TEXTUREFACTOR the runtime currently holds
   uint8_t tssOurs = 0;                 // stage 0's COLOROP / COLORARG1 / COLORARG2 (bits 0..2) currently hold the hook's TFACTOR modulation
-  bool loggedTint = false;
+  uint32_t loggedTintRegs = 0;         // tint registers whose first forwarded value was logged
   // the sun (milestone 41): the directional light the lit terrain shaders were handed, c0 and c1 at the last such draw
   float terrainSunCol[3] = {}, terrainSunDir[3] = {}; uint32_t terrainSunDraws = 0, terrainSunDrawsLast = 0;
   float terrainNightSwitch = 0.f;      // the lit terrain's c7.x: the game's night switch as handed to the terrain (milestone 54)

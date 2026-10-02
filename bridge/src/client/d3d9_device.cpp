@@ -3408,9 +3408,10 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreatePixelShader(CONST DWORD* pFunct
     sims3DumpShader("ps", hash, pFunction, count);
     if (const sims3cam::AlbedoStage* a = sims3cam::findAlbedoStage(hash)) {
       pLssPixelShader->sims3AlbedoStage = a->stage;
-      pLssPixelShader->sims3TintReg = a->tint ? sims3cam::kTintRegister : -1;
-      char msg[224];
-      snprintf(msg, sizeof msg, "Sims 3 camera hook: albedo is texture stage %u for %s%s", (unsigned) a->stage, a->name, a->tint ? "; tint constant c8 forwarded as texture factor" : "");
+      pLssPixelShader->sims3TintReg = a->tintReg;
+      char tintNote[64] = "", msg[256];
+      if (a->tintReg >= 0) snprintf(tintNote, sizeof tintNote, "; tint constant c%d forwarded as texture factor", (int) a->tintReg);
+      snprintf(msg, sizeof msg, "Sims 3 camera hook: albedo is texture stage %u for %s%s", (unsigned) a->stage, a->name, tintNote);
       Logger::info(msg);
     }
     // what the bytecode says about its samplers: the albedo choice for untabled shaders, the
@@ -3487,11 +3488,6 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetPixelShaderConstantF(UINT StartReg
     return D3DERR_INVALIDCALL;
   }
 
-  // The Sims 3 camera hook: the Create-A-Style tint constant of the bound pixel shader.
-  if (sims3cam::enabled() && g_sims3.psTintReg >= 0 && (UINT) g_sims3.psTintReg >= StartRegister && (UINT) g_sims3.psTintReg < StartRegister + Vector4fCount) {
-    const float* t = pConstantData + ((UINT) g_sims3.psTintReg - StartRegister) * 4;
-    g_sims3.tint[0] = t[0]; g_sims3.tint[1] = t[1]; g_sims3.tint[2] = t[2];
-  }
   HRESULT hresult = D3DERR_INVALIDCALL;
   {
     BRIDGE_DEVICE_LOCKGUARD();

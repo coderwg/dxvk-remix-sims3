@@ -157,11 +157,19 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
   // Create-A-Style tint: albedo x TEXTUREFACTOR (white when the shader has no tint); each of the
   // three stage-0 states the game has written since is set again
   for (int i = 0; i < 3; ++i) if (!(h.tssOurs & (1u << i))) { h.tssOurs |= (uint8_t) (1u << i); dev->SetTextureStageState(0, kSims3Tss[i], kSims3TssOurs[i]); }
-  const uint32_t factor = (h.psTintReg >= 0) ? sims3cam::packTint(h.tint) : 0xFFFFFFFFu;
+  // the tint as the game's shader reads it: its constant on the device at this draw (milestone 79)
+  float tint[4] = { 1.f, 1.f, 1.f, 1.f };
+  if (h.psTintReg >= 0) dev->GetPixelShaderConstantF((UINT) h.psTintReg, tint, 1);
+  const uint32_t factor = (h.psTintReg >= 0) ? sims3cam::packTint(tint) : 0xFFFFFFFFu;
   if (!h.factorOurs || factor != h.sentFactor) {
     h.sentFactor = factor; h.factorOurs = true;
     dev->SetRenderState(D3DRS_TEXTUREFACTOR, factor);
-    if (!h.loggedTint && factor != 0xFFFFFFFFu) { h.loggedTint = true; char msg[160]; snprintf(msg, sizeof msg, "Sims 3 camera hook: first non-white tint forwarded as texture factor: %08X", factor); Logger::info(msg); }
+  }
+  if (h.psTintReg >= 0 && h.psTintReg < 32 && !(h.loggedTintRegs & (1u << h.psTintReg))) {
+    h.loggedTintRegs |= 1u << h.psTintReg; char msg[224];
+    snprintf(msg, sizeof msg, "Sims 3 camera hook: first tint from c%d (PS %016llx) forwarded as texture factor: %08X (from %.3f %.3f %.3f)",
+             h.psTintReg, (unsigned long long) h.psHash, factor, tint[0], tint[1], tint[2]);
+    Logger::info(msg);
   }
   h.ourState = false;
   // the sky dome: any 2D texture at stage 0 (the runtime drops a draw whose stage-0 texture has

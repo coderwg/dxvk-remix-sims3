@@ -674,8 +674,17 @@ int main() {
     const AlbedoStage* tc = findAlbedoStage(0x0c19795eb80e2e96ull);
     const AlbedoStage* tn = findAlbedoStage(0x5aee1186d554dbc4ull);
     const float purple[3] = { 0.5f, 0.25f, 1.0f }, hot[3] = { 2.f, -1.f, 0.5f };
-    CHECK(tc && tc->tint && kTintRegister == 8 && findAlbedoStage(0x1234ull) == nullptr && (!tn || !tn->tint),
+    CHECK(tc && tc->tintReg == 8 && kTintRegister == 8 && findAlbedoStage(0x1234ull) == nullptr && (!tn || tn->tintReg < 0),
           "tint: the recolourable object PS carries the tint at c8; the 3-light variant carries none; unknown -> none");
+    {
+      // milestone 79: walls C has no colour texture, its colour is the constant c4; the albedo is its
+      // opening mask s1 (greyscale, white where the wall stands) tinted by c4
+      const AlbedoStage* wc = findAlbedoStage(0x7d2cbb8e474dfaf5ull);
+      std::vector<DWORD> t; PsAnalysis a;
+      const bool have = loadShader("ps_7d2cbb8e474dfaf5", t) && analyzePixelShader(t.data(), t.size(), a);
+      CHECK(wc && wc->stage == 1 && wc->tintReg == 4 && (!have || (a.maskSampler == 1 && a.maskAlpha && !a.samplers[1].reachesColor())),
+            "tint (M79): walls C -> s1, the opening mask (alpha only in the shader: %d), tinted by c4", have ? (int) a.samplers[1].colorChannels : -1);
+    }
     CHECK(packTint(purple) == 0xFF8040FFu && packTint(hot) == 0xFFFF0080u, "packTint: ARGB with rounding and clamping (%08X, %08X)", packTint(purple), packTint(hot));
     {
       // the sun: the terrain's light as the game hands it over (values of run 152)
