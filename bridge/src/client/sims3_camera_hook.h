@@ -885,6 +885,13 @@ inline const NeverCapture kNeverCapture[] = {
   // coplanar, untextured (grey) copy of the ground fighting the ground for the rays: the grey
   // terrain flickering on the hills of runs 168 to 171. The ray tracer lights the ground itself.
   { 0x3c837e49bf748d99ull, "the town ground's lighting pass (multiplied over the unlit world terrain)", false },
+  // Effect cards (milestone 91): PS 7304aaea and kin -- texture x vertex colour, alpha = texture alpha
+  // x vertex alpha, a constant-direction cube glint, no culling. The runtime drops the vertex colour
+  // (rtx.ignoreAllVertexColorBakedLighting), so a faint blended effect became an unshaded white sheet:
+  // the light beams over the downtown lot (run 173) and a pond's surface effect, drawn through the
+  // water's stencil mask (the stencil the runtime does not see) -- the "flat white" pond of runs
+  // 194-198, over the water. Its alpha-tested opaque draws stay captured.
+  { 0x6cb3b47f30712201ull, "effect cards (texture x vertex colour; blended: light beams, a pond's surface effect)", true },
 };
 
 inline const NeverCapture* findNeverCapture(uint64_t hash) { return findByHash(kNeverCapture, hash); }
@@ -1893,13 +1900,18 @@ inline constexpr uint64_t kGlassMarkerHash = 0x5E30D0B82C246E6Cull;  // XXH3-64 
 // blending off; the hook's Remix mod makes the marker's hash the runtime's translucent water, IOR
 // 1.33, thin-walled (a single sheet whose facing is not known). The ground or basin under it is the
 // game's own (a pond's bed, a lot pool's walls and floor: run 197). Named, each read from its bytecode.
+// (Not water: PS f45e6c60, VS 33017462 -- a lot pool's FLOOR, a floor tile s4 under caustics s3, its
+// normal map, reflection and Fresnel; taken for the pool's surface in milestone 89, run 198 showed the
+// pool's surface itself is 011ba470 below.)
 struct WaterShader { uint64_t hash; const char* name; };
 inline const WaterShader kWaterPs[] = {
   { 0xf74b4657dbfd60bcull, "the town's water, ponds and sea (VS 2a6edce6: a plane at a set height, waves, refraction and reflection targets, "
                            "two bump maps; its NORMAL input is no normal here, see chooseNormalTexcoord)" },
   { 0x387e1a15c63c120aull, "water, instanced (VS 1a047c76: waves, refraction target, reflection cube, a two-sample bump map)" },
-  { 0xf45e6c607bb94189ull, "a lot pool's surface (VS 33017462, a grid without normals): drawn opaque, its look painted -- a rippled "
-                           "light-blue colour s4, caustics s3, a normal map s7 (.wz), reflection and irradiance cubes, a shadow map (run 196)" },
+  { 0xd40999e5838e8b05ull, "a lot pool's surface (VS 011ba470, a byte-packed grid): two scrolling wave normal maps s0 / s1, the scene behind "
+                           "(render target s2) and the reflection (render target s3) read through them; captured, the wave map was its "
+                           "albedo -- the slow-moving lavender 'normal map' of runs 194-198" },
+  { 0x85c0a78a614b15d3ull, "a lot pool's surface, cube-reflected (VS 011ba470): wave maps s1 / s2, the scene behind s3, reflection cubes s0 / s4" },
 };
 inline bool isWaterPs(uint64_t hash) { return findByHash(kWaterPs, hash) != nullptr; }
 inline constexpr uint32_t kWaterMarkerColour = 0xFF8CC4C8u;          // ARGB pale teal: what the water shows if the mod is not loaded

@@ -1056,6 +1056,9 @@ int main() {
       // milestone 84: the Sims' soft shadow blob is never captured
       const NeverCapture* blob = findNeverCapture(0xb7d550c6421e14f4ull);
       CHECK(blob && !blob->blendedOnly, "never-capture (M84): the Sims' soft shadow blob VS b7d550c6");
+      const NeverCapture* cards = findNeverCapture(0x6cb3b47f30712201ull);
+      CHECK(cards && cards->blendedOnly && neverCaptureDraw(neverCaptureMode(cards), TRUE) && !neverCaptureDraw(neverCaptureMode(cards), FALSE),
+            "never-capture (M91): the effect cards VS 6cb3b47f, blended draws only (the pond's white surface effect, the light beams)");
       static uint32_t gm[kGlassMarkerSize * kGlassMarkerSize]; for (auto& p : gm) p = kGlassMarkerColour;
       const uint64_t gh = (uint64_t) XXH3_64bits(gm, sizeof gm);
       std::vector<uint8_t> usd; char name[32]; snprintf(name, sizeof name, "mat_%016llX", (unsigned long long) kGlassMarkerHash);
@@ -1070,8 +1073,9 @@ int main() {
       const size_t wat = u.find(wname);
       const size_t wend = wat == std::string::npos ? wat : u.find("token outputs:out", wat);
       CHECK(wh == kWaterMarkerHash && wat != std::string::npos && wend != std::string::npos && u.find("ior_constant = 1.33", wat) < wend && u.find("thin_walled = 1", wat) < wend && kWaterMarkerHash != kGlassMarkerHash
-            && isWaterPs(0xf74b4657dbfd60bcull) && isWaterPs(0xf45e6c607bb94189ull) && isWaterPs(0x387e1a15c63c120aull) && !isWaterPs(0x3197bfdef2330503ull),
-            "water (M86, M89): the marker's level-0 hash 0x%016llX names the water material %s (IOR 1.33, thin-walled); the town's water f74b4657, the pool's surface f45e6c60 and 387e1a15, not the glass", (unsigned long long) wh, wname);
+            && isWaterPs(0xf74b4657dbfd60bcull) && isWaterPs(0x387e1a15c63c120aull) && isWaterPs(0xd40999e5838e8b05ull) && isWaterPs(0x85c0a78a614b15d3ull)
+            && !isWaterPs(0xf45e6c607bb94189ull) && !isWaterPs(0x3197bfdef2330503ull),
+            "water (M86, M91): the marker's level-0 hash 0x%016llX names the water material %s (IOR 1.33, thin-walled); the town's water f74b4657, 387e1a15, the pool's surface d40999e5 / 85c0a78a; not the pool floor f45e6c60 nor the glass", (unsigned long long) wh, wname);
       // milestone 88: the frosted marker's hash names the frosted material (a diffuse layer)
       for (auto& p : gm) p = kFrostedMarkerColour;
       const uint64_t fh = (uint64_t) XXH3_64bits(gm, sizeof gm);
