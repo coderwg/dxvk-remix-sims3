@@ -210,6 +210,8 @@ struct Sims3Hook {
   IDirect3DTexture9* glassMarker = nullptr; uint64_t glassMarkerHash = 0; bool glassMarkerFailed = false;
   IDirect3DTexture9* waterMarker = nullptr; uint64_t waterMarkerHash = 0; bool waterMarkerFailed = false; uint32_t waterDraws = 0;   // water (milestone 86)
   IDirect3DTexture9* frostedMarker = nullptr; uint64_t frostedMarkerHash = 0; bool frostedMarkerFailed = false; uint32_t frostedDraws = 0;   // frosted glass (milestone 88)
+  IDirect3DTexture9* naturalWaterMarker = nullptr; uint64_t naturalWaterMarkerHash = 0; bool naturalWaterMarkerFailed = false; uint32_t naturalWaterDraws = 0;   // natural water (milestone 93)
+  uint32_t waveDumpedIds[32] = {}; uint32_t waveDumped = 0;   // the game's wave maps written (milestone 93, a diagnostic)
   DWORD blendSaved = 0; bool blendOurs = false;
   uint32_t glassDraws = 0, glassLogged = 0; uint64_t glassLoggedPs[8] = {};
   uint32_t mirrorSurfaceDropped = 0;   // the planar-reflection surface passes left out (milestone 82)

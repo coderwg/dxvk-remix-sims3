@@ -33,7 +33,9 @@ inline void sims3OnReset(Sims3Hook& h) {
   if (h.glassMarker) { h.glassMarker->Release(); h.glassMarker = nullptr; }
   if (h.waterMarker) { h.waterMarker->Release(); h.waterMarker = nullptr; }
   if (h.frostedMarker) { h.frostedMarker->Release(); h.frostedMarker = nullptr; }
-  h.glassMarkerHash = 0; h.glassMarkerFailed = false; h.waterMarkerHash = 0; h.waterMarkerFailed = false; h.frostedMarkerHash = 0; h.frostedMarkerFailed = false; h.blendOurs = false;
+  if (h.naturalWaterMarker) { h.naturalWaterMarker->Release(); h.naturalWaterMarker = nullptr; }
+  h.glassMarkerHash = 0; h.glassMarkerFailed = false; h.waterMarkerHash = 0; h.waterMarkerFailed = false; h.frostedMarkerHash = 0; h.frostedMarkerFailed = false;
+  h.naturalWaterMarkerHash = 0; h.naturalWaterMarkerFailed = false; h.blendOurs = false;
   h.markerFailed = false; h.markersConfigSent = false; h.terrainFreeStage = -1; h.tblockActive = false; h.tblockStage = -1; h.tblockSet = 0; h.tblockSrgb = 0; h.ourSampler = false; h.psBound = nullptr; h.vsTerrain = nullptr; h.lotFurtherCopy = false; h.swappingPs = false;
   h.cwOurs = false; h.atOurs = false; h.fogOurs = false;
   h.compositePass = 0; h.extraActive = false; h.splitDraw = false; h.ourConsts = false; h.reissue = false; h.reissueKind = 0; h.compositeSecond = false;
@@ -117,24 +119,26 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
     h.fogOurs = true;
   }
   if (!terrain) {
-    // glass and water (milestones 80, 86, 88): the material's marker at stage 0 and the draw's
-    // blending off; its material is the hook's Remix mod's glass, frosted glass or water
-    // (sims3cam::isGlassShader, isTexturedGlass, isFrostedGlass, isWaterPs)
-    const bool water = sims3cam::isWaterPs(h.psHash) && sims3EnsureWaterMarker(h, dev);
+    // glass and water (milestones 80, 86, 88, 93): the material's marker at stage 0 and the draw's
+    // blending off; its material is the hook's Remix mod's glass, frosted glass, clear or natural water
+    // (sims3cam::isGlassShader, isTexturedGlass, isFrostedGlass, waterKind)
+    const int waterKind = sims3cam::waterKind(h.psHash);
+    const bool natural = waterKind == sims3cam::kNaturalWater;
+    const bool water = waterKind >= 0 && (natural ? sims3EnsureNaturalWaterMarker(h, dev) : sims3EnsureWaterMarker(h, dev));
     const bool frosted = !water && sims3cam::isFrostedGlass(h.psHash) && sims3EnsureFrostedMarker(h, dev);
     const bool glass = !water && !frosted && h.psAuto && (sims3cam::isTexturedGlass(h.psHash) || (rs[D3DRS_ALPHABLENDENABLE] && sims3cam::isGlassShader(*h.psAuto))) && sims3EnsureGlassMarker(h, dev);
     if (water || frosted || glass) {
       h.drawGlass = true;
       h.remapRestore = h.boundTex[0]; if (h.remapRestore) h.remapRestore->AddRef();   // held until sims3EndDraw, as for an albedo remap
       h.remapActive = true;
-      h.inRemap = true; dev->SetTexture(0, water ? h.waterMarker : frosted ? h.frostedMarker : h.glassMarker); h.inRemap = false;
+      h.inRemap = true; dev->SetTexture(0, water ? (natural ? h.naturalWaterMarker : h.waterMarker) : frosted ? h.frostedMarker : h.glassMarker); h.inRemap = false;
       h.blendSaved = rs[D3DRS_ALPHABLENDENABLE]; h.blendOurs = true;
       h.ourState = true; dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE); h.ourState = false;
-      if (water) ++h.waterDraws; else if (frosted) ++h.frostedDraws; else ++h.glassDraws;
+      if (water && natural) ++h.naturalWaterDraws; else if (water) ++h.waterDraws; else if (frosted) ++h.frostedDraws; else ++h.glassDraws;
       bool seen = false; for (uint32_t i = 0; i < h.glassLogged; ++i) if (h.glassLoggedPs[i] == h.psHash) seen = true;
       if (!seen && h.glassLogged < 8) {
         h.glassLoggedPs[h.glassLogged++] = h.psHash; char msg[224];
-        const char* what = water ? "water" : frosted ? "frosted glass" : "glass";
+        const char* what = water ? (natural ? "natural water" : "water") : frosted ? "frosted glass" : "glass";
         snprintf(msg, sizeof msg, "Sims 3 camera hook: %s at frame %u -> VS %016llx PS %016llx presented with the %s marker, blending off", what, h.frames + 1, (unsigned long long) h.vsHash, (unsigned long long) h.psHash, what);
         Logger::info(msg);
       }

@@ -1072,16 +1072,29 @@ int main() {
       char wname[32]; snprintf(wname, sizeof wname, "mat_%016llX", (unsigned long long) kWaterMarkerHash);
       const size_t wat = u.find(wname);
       const size_t wend = wat == std::string::npos ? wat : u.find("token outputs:out", wat);
-      CHECK(wh == kWaterMarkerHash && wat != std::string::npos && wend != std::string::npos && u.find("ior_constant = 1.33", wat) < wend && u.find("thin_walled = 1", wat) < wend && kWaterMarkerHash != kGlassMarkerHash
+      CHECK(wh == kWaterMarkerHash && wat != std::string::npos && wend != std::string::npos && u.find("ior_constant = 1.33", wat) < wend && u.find("thin_walled = 0", wat) < wend && kWaterMarkerHash != kGlassMarkerHash
             && isWaterPs(0xf74b4657dbfd60bcull) && isWaterPs(0x387e1a15c63c120aull) && isWaterPs(0xd40999e5838e8b05ull) && isWaterPs(0x85c0a78a614b15d3ull)
             && isWaterPs(0x11a6bdfd3e77d03aull) && !isWaterPs(0xf45e6c607bb94189ull) && !isWaterPs(0x3197bfdef2330503ull),
-            "water (M86, M91, M92): the marker's level-0 hash 0x%016llX names the water material %s (IOR 1.33, thin-walled); the town's water f74b4657, 387e1a15, the pool's surface d40999e5 / 85c0a78a, the pond's 11a6bdfd; not the pool floor f45e6c60 nor the glass", (unsigned long long) wh, wname);
+            "water (M86, M91-M93): the marker's level-0 hash 0x%016llX names the water material %s (IOR 1.33, a volume); the town's water f74b4657, 387e1a15, the pool's surface d40999e5 / 85c0a78a, the pond's 11a6bdfd; not the pool floor f45e6c60 nor the glass", (unsigned long long) wh, wname);
+      // milestone 93: natural water (ponds, the sea) has its own marker and material
+      for (auto& p : gm) p = kNaturalWaterMarkerColour;
+      const uint64_t nh = (uint64_t) XXH3_64bits(gm, sizeof gm);
+      char nname[32]; snprintf(nname, sizeof nname, "mat_%016llX", (unsigned long long) kNaturalWaterMarkerHash);
+      const size_t nat = u.find(nname);
+      const size_t nend = nat == std::string::npos ? nat : u.find("token outputs:out", nat);
+      CHECK(nh == kNaturalWaterMarkerHash && nat != std::string::npos && nend != std::string::npos && u.find("ior_constant = 1.33", nat) < nend && u.find("thin_walled = 0", nat) < nend
+            && waterKind(0xf74b4657dbfd60bcull) == kNaturalWater && waterKind(0x11a6bdfd3e77d03aull) == kNaturalWater && waterKind(0xd40999e5838e8b05ull) == kClearWater
+            && waterKind(0x85c0a78a614b15d3ull) == kClearWater && waterKind(0x387e1a15c63c120aull) == kClearWater && waterKind(0x3197bfdef2330503ull) == -1,
+            "natural water (M93): the marker's level-0 hash 0x%016llX names %s (a volume); ponds and the sea natural, pools and bowls clear", (unsigned long long) nh, nname);
       // milestone 88: the frosted marker's hash names the frosted material (a diffuse layer)
       for (auto& p : gm) p = kFrostedMarkerColour;
       const uint64_t fh = (uint64_t) XXH3_64bits(gm, sizeof gm);
       char fname[32]; snprintf(fname, sizeof fname, "mat_%016llX", (unsigned long long) kFrostedMarkerHash);
       const size_t fat = u.find(fname);
-      CHECK(fh == kFrostedMarkerHash && fat != std::string::npos && u.find("use_diffuse_layer = 1", fat) != std::string::npos && isFrostedGlass(0x572773cfbd618a3aull) && !isFrostedGlass(0x3197bfdef2330503ull),
+      const size_t fend = fat == std::string::npos ? fat : u.find("token outputs:out", fat);
+      std::vector<uint8_t> frost; const bool haveFrost = loadBytes("../remix-mod/Sims3Glass/textures/frost.dds", frost) && frost.size() > 148 && memcmp(frost.data(), "DDS ", 4) == 0;
+      CHECK(fh == kFrostedMarkerHash && fat != std::string::npos && fend != std::string::npos && u.find("use_diffuse_layer = 1", fat) < fend && u.find("@./textures/frost.dds@", fat) < fend && haveFrost
+            && isFrostedGlass(0x572773cfbd618a3aull) && !isFrostedGlass(0x3197bfdef2330503ull),
             "frosted glass (M88): the marker's level-0 hash 0x%016llX names the frosted material %s (diffuse layer); the shower door's 572773cf", (unsigned long long) fh, fname);
     }
     CHECK(kLotCompositePs == 0x99ee53ff6ef1b0b6ull && lotCompositeStage(0) == 0 && lotCompositeStage(1) == 4 && lotCompositeStage(2) == 3, "lot composite: pass 1 reads the mask from s4 (layer 4 out), pass 2 from s3 (layer 3 out)");

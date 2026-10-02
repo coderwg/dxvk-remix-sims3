@@ -53,6 +53,39 @@ void sims3NoteDecl(Sims3Hook& h, IDirect3DVertexDeclaration9* pDecl) {
   if (pLssVtxDecl) sims3cam::wallLayoutFromDecl(pLssVtxDecl->sims3Elements(), h.wallLayout);
 }
 
+// Diagnostic (milestone 93; goes once the mod's normal maps are made): a water draw's wave maps -- its
+// bound 2D textures in a wave-map format (sims3cam::isWaveMapFormat) -- written once each, level 0 as the
+// client keeps it, to rtx-remix\logs\sims3-textures\water_<pixel shader>_s<stage>_<w>x<h>_<format>.raw.
+inline void sims3DumpWaveMaps(Sims3Hook& h) {
+  for (DWORD s = 0; s < 16 && h.waveDumped < 32u; ++s) {
+    if (h.boundKind[s] != 1 || !sims3cam::isWaveMapFormat(h.boundFmt[s]) || !h.boundTex[s]) continue;   // 2D, not a render target
+    auto* tex = bridge_cast<Direct3DTexture9_LSS*>(h.boundTex[s]);
+    if (!tex) continue;
+    const uint32_t id = (uint32_t) tex->getId();
+    bool done = false; for (uint32_t i = 0; i < h.waveDumped; ++i) if (h.waveDumpedIds[i] == id) done = true;
+    if (done) continue;
+    const uint8_t* data = tex->sims3Level0Data();
+    const D3DSURFACE_DESC d = tex->getLevelDesc(0);
+    h.waveDumpedIds[h.waveDumped++] = id;
+    if (!data) { Logger::info(format_string("Sims 3 camera hook: wave map of PS %016llx at s%u: no level-0 data kept", (unsigned long long) h.psHash, (unsigned) s)); continue; }
+    static char dir[MAX_PATH] = {};
+    if (!dir[0]) {
+      GetModuleFileNameA(nullptr, dir, MAX_PATH);
+      char* p = strrchr(dir, '\\'); if (p) *p = 0;
+      strncat_s(dir, "\\rtx-remix\\logs\\sims3-textures", _TRUNCATE);
+      CreateDirectoryA(dir, nullptr);
+    }
+    char fb[16], path[MAX_PATH + 96];
+    snprintf(path, sizeof path, "%s\\water_%016llx_s%u_%ux%u_%s.raw", dir, (unsigned long long) h.psHash, (unsigned) s, (unsigned) d.Width, (unsigned) d.Height, sims3FormatName(d.Format, fb, sizeof fb));
+    FILE* f = nullptr;
+    if (fopen_s(&f, path, "wb") == 0 && f) {
+      fwrite(data, 1, bridge_util::calcTotalSizeOfRect(d.Width, d.Height, d.Format), f);
+      fclose(f);
+      Logger::info(format_string("Sims 3 camera hook: wave map written -> %s", path));
+    }
+  }
+}
+
 // Diagnostic (milestone 84; goes once answered): at the mark key, one line per draw of the next frame
 // -- what the runtime is handed: sent, sent as glass, not captured, or left out (why); the stage-0
 // texture it sees; the states and the geometry. Two marks of one view (the shower door transparent,

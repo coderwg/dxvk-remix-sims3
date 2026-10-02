@@ -5,10 +5,12 @@
 materials of the hook's marker textures. The hook presents every glass draw of the game (a pixel shader
 reading only cube maps, blended, or one of its named textured glass shaders) with a flat 32x32 glass
 marker at stage 0, its named frosted glass (the shower door) with a frosted marker, and every water
-draw (its named water shaders: ponds, the sea, lot pools) with a water marker, blending off; this layer
-makes the markers' hashes the runtime's translucent glass, frosted glass (a diffuse layer) and
-thin-walled water. Each hash is XXH3-64 of the marker's level 0 (sims3cam::kGlassMarkerHash,
-kFrostedMarkerHash, kWaterMarkerHash, checked by sims3/test/test_sims3cam.cpp).
+draw (its named water shaders) with a clear-water marker (lot pools, bowls) or a natural-water marker
+(ponds, the sea), blending off; this layer makes the markers' hashes the runtime's translucent glass,
+frosted glass (a diffuse layer from textures/frost.dds) and two water volumes (refraction, absorption
+by depth). Each hash is XXH3-64 of the marker's level 0 (sims3cam::kGlassMarkerHash,
+kFrostedMarkerHash, kWaterMarkerHash, kNaturalWaterMarkerHash, checked by sims3/test/test_sims3cam.cpp).
+textures/ is written by ../make_textures.py.
 Deployed to Game/Bin/rtx-remix/mods/Sims3Glass/mod.usda; the runtime reads it while
 rtx.enableReplacementAssets is on."""
     metersPerUnit = 1
@@ -57,6 +59,7 @@ def Xform "RootNode"
                 bool inputs:thin_walled = 1
                 float inputs:thin_wall_thickness = 0.005
                 bool inputs:use_diffuse_layer = 1
+                asset inputs:transmittance_texture = @./textures/frost.dds@
                 token outputs:out
             }
         }
@@ -73,10 +76,29 @@ def Xform "RootNode"
                 uniform asset info:mdl:sourceAsset = @AperturePBR_Translucent.mdl@
                 uniform token info:mdl:sourceAsset:subIdentifier = "AperturePBR_Translucent"
                 float inputs:ior_constant = 1.33
-                color3f inputs:transmittance_color = (0.86, 0.95, 0.96)
+                color3f inputs:transmittance_color = (0.75, 0.93, 0.97)
                 float inputs:transmittance_measurement_distance = 1
-                bool inputs:thin_walled = 1
-                float inputs:thin_wall_thickness = 1
+                bool inputs:thin_walled = 0
+                bool inputs:use_diffuse_layer = 0
+                token outputs:out
+            }
+        }
+
+        def Material "mat_52B04DF3E566CA55"
+        {
+            token outputs:mdl:displacement.connect = </RootNode/Looks/mat_52B04DF3E566CA55/Shader.outputs:out>
+            token outputs:mdl:surface.connect = </RootNode/Looks/mat_52B04DF3E566CA55/Shader.outputs:out>
+            token outputs:mdl:volume.connect = </RootNode/Looks/mat_52B04DF3E566CA55/Shader.outputs:out>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:mdl:sourceAsset = @AperturePBR_Translucent.mdl@
+                uniform token info:mdl:sourceAsset:subIdentifier = "AperturePBR_Translucent"
+                float inputs:ior_constant = 1.33
+                color3f inputs:transmittance_color = (0.55, 0.75, 0.66)
+                float inputs:transmittance_measurement_distance = 1
+                bool inputs:thin_walled = 0
                 bool inputs:use_diffuse_layer = 0
                 token outputs:out
             }

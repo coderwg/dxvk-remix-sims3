@@ -1892,33 +1892,44 @@ inline constexpr uint32_t kGlassMarkerSize = 32;
 inline constexpr uint32_t kGlassMarkerColour = 0xFFB8C8D0u;          // ARGB pale grey-blue: what the panes show if the mod is not loaded
 inline constexpr uint64_t kGlassMarkerHash = 0x5E30D0B82C246E6Cull;  // XXH3-64 of its level 0, as the runtime hashes it; the mod's material name
 
-// ---- water (milestones 86, 89, 90) -----------------------------------------------------------
+// ---- water (milestones 86, 89-93) --------------------------------------------------------------
 // The game paints its water's look in the shader -- a reflection, bump maps, caustics, a colour or
 // foam texture, the scene behind from a render target -- over waves made in the vertex shader; the
 // runtime took one of those textures as an albedo (an opaque grey plane, run 193; a pool's rippled
-// light-blue colour, run 196). A water draw is presented with the hook's water marker at stage 0,
-// blending off; the hook's Remix mod makes the marker's hash the runtime's translucent water, IOR
-// 1.33, thin-walled (a single sheet whose facing is not known). The ground or basin under it is the
-// game's own (a pond's bed, a lot pool's walls and floor: run 197). Named, each read from its bytecode.
+// light-blue colour, run 196). A water draw is presented with one of the hook's water markers at
+// stage 0, blending off; the hook's Remix mod makes each marker's hash a translucent water VOLUME,
+// IOR 1.33 -- refraction, and an absorption that deepens with the depth to the bed (the runtime
+// tracks whether a ray is inside the medium and turns the surface to face it, so the sheet's own
+// facing does not matter). Two kinds (milestone 93): clear water (a lot pool, an object's bowl) and
+// natural water (ponds, the sea), murkier and greener. The ground or basin under it is the game's
+// own (a pond's bed, a lot pool's walls and floor: run 197). Named, each read from its bytecode.
 // (Not water: PS f45e6c60, VS 33017462 -- a lot pool's FLOOR, a floor tile s4 under caustics s3, its
 // normal map, reflection and Fresnel; taken for the pool's surface in milestone 89, run 198 showed the
 // pool's surface itself is 011ba470 below.)
-struct WaterShader { uint64_t hash; const char* name; };
+struct WaterShader { uint64_t hash; const char* name; uint8_t kind; };   // kind: kClearWater, kNaturalWater
+inline constexpr uint8_t kClearWater = 0, kNaturalWater = 1;
 inline const WaterShader kWaterPs[] = {
   { 0xf74b4657dbfd60bcull, "the town's water, ponds and sea (VS 2a6edce6: a plane at a set height, waves, refraction and reflection targets, "
-                           "two bump maps; its NORMAL input is no normal here, see chooseNormalTexcoord)" },
-  { 0x387e1a15c63c120aull, "water, instanced (VS 1a047c76: waves, refraction target, reflection cube, a two-sample bump map)" },
+                           "two bump maps; its NORMAL input is no normal here, see chooseNormalTexcoord)", kNaturalWater },
+  { 0x387e1a15c63c120aull, "water, instanced (VS 1a047c76: waves, refraction target, reflection cube, a two-sample bump map)", kClearWater },
   { 0xd40999e5838e8b05ull, "a lot pool's surface (VS 011ba470, a byte-packed grid): two scrolling wave normal maps s0 / s1, the scene behind "
                            "(render target s2) and the reflection (render target s3) read through them; captured, the wave map was its "
-                           "albedo -- the slow-moving lavender 'normal map' of runs 194-198" },
-  { 0x85c0a78a614b15d3ull, "a lot pool's surface, cube-reflected (VS 011ba470): wave maps s1 / s2, the scene behind s3, reflection cubes s0 / s4" },
+                           "albedo -- the slow-moving lavender 'normal map' of runs 194-198", kClearWater },
+  { 0x85c0a78a614b15d3ull, "a lot pool's surface, cube-reflected (VS 011ba470): wave maps s1 / s2, the scene behind s3, reflection cubes s0 / s4", kClearWater },
   { 0x11a6bdfd3e77d03aull, "a pond's surface (VS 24bd4713, a byte-packed mesh of its own, no culling; drawn right after the town's water): "
                            "two scrolling signed wave maps s0 / s1 (Q8W8V8U8), reflection cubes s2 / s3, a sun-glint ramp s4 (DXT1 512x4), "
-                           "the shadow map s5, the scene behind s6; captured, the glint ramp was its albedo -- the flat white pond of runs 194-199" },
+                           "the shadow map s5, the scene behind s6; captured, the glint ramp was its albedo -- the flat white pond of runs 194-199", kNaturalWater },
 };
 inline bool isWaterPs(uint64_t hash) { return findByHash(kWaterPs, hash) != nullptr; }
-inline constexpr uint32_t kWaterMarkerColour = 0xFF8CC4C8u;          // ARGB pale teal: what the water shows if the mod is not loaded
+inline int waterKind(uint64_t hash) { const WaterShader* w = findByHash(kWaterPs, hash); return w ? (int) w->kind : -1; }
+inline constexpr uint32_t kWaterMarkerColour = 0xFF8CC4C8u;          // ARGB pale teal: what clear water shows if the mod is not loaded
 inline constexpr uint64_t kWaterMarkerHash = 0x2723DD62C28E1456ull;  // XXH3-64 of its level 0; the mod's material name
+inline constexpr uint32_t kNaturalWaterMarkerColour = 0xFF6E9C8Cu;          // ARGB muted green-teal: natural water without the mod
+inline constexpr uint64_t kNaturalWaterMarkerHash = 0x52B04DF3E566CA55ull;  // XXH3-64 of its level 0; the mod's material name
+// The game's wave maps (milestone 93, a diagnostic; goes once the mod's normal maps are made from
+// them): a water draw's 2D textures in these formats are written once each to
+// rtx-remix\logs\sims3-textures, level 0 as stored.
+inline bool isWaveMapFormat(uint32_t fmt) { return fmt == 21u /* A8R8G8B8 */ || fmt == 22u /* X8R8G8B8 */ || fmt == 63u /* Q8W8V8U8 */; }
 
 // ---- which texture coordinates the runtime samples with (milestone 3g) -------------------
 // The 1.5.2 runtime takes a draw's texture coordinates from the vertex declaration element
