@@ -86,8 +86,8 @@ static void sims3LogStats(bool withTable) {
     snprintf(msg, sizeof msg, "Sims 3 camera hook:   cut-outs (milestones 67-68): %u pixel shaders read with a cut-out on a sampler's alpha; %u captured draws given it as an alpha test",
              h.cutShaders, h.alphaCutDraws);
     Logger::info(msg);
-    snprintf(msg, sizeof msg, "Sims 3 camera hook:   glass (milestones 80-82): %u draws presented with the glass marker (hash 0x%016llX%s); %u planar-reflection surface passes left out",
-             h.glassDraws, (unsigned long long) h.glassMarkerHash, h.glassMarker ? "" : ", not created yet", h.mirrorSurfaceDropped);
+    snprintf(msg, sizeof msg, "Sims 3 camera hook:   glass and water (milestones 80-86): %u glass draws (marker 0x%016llX%s), %u water draws (marker 0x%016llX%s); %u planar-reflection surface passes left out",
+             h.glassDraws, (unsigned long long) h.glassMarkerHash, h.glassMarker ? "" : ", not created yet", h.waterDraws, (unsigned long long) h.waterMarkerHash, h.waterMarker ? "" : ", not created yet", h.mirrorSurfaceDropped);
     Logger::info(msg);
     snprintf(msg, sizeof msg, "Sims 3 camera hook:   albedo sampler states (milestone 68): %u draws moved an albedo to stage 0 with sampler states differing from stage 0's, %u of them its sRGB flag",
              h.remapSamplerDraws, h.remapSrgbDraws);

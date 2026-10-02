@@ -1048,6 +1048,14 @@ int main() {
       const std::string u(usd.begin(), usd.end());
       CHECK(gh == kGlassMarkerHash && haveUsd && u.find(name) != std::string::npos && u.find("AperturePBR_Translucent.mdl") != std::string::npos && u.find("/RootNode/Looks/") != std::string::npos,
             "glass (M80): the marker's level-0 hash 0x%016llX names the translucent material %s in sims3/remix-mod/Sims3Glass/mod.usda", (unsigned long long) gh, name);
+      // milestone 86: the water marker's hash names the water material; the two water shaders by name
+      for (auto& p : gm) p = kWaterMarkerColour;
+      const uint64_t wh = (uint64_t) XXH3_64bits(gm, sizeof gm);
+      char wname[32]; snprintf(wname, sizeof wname, "mat_%016llX", (unsigned long long) kWaterMarkerHash);
+      const size_t wat = u.find(wname);
+      CHECK(wh == kWaterMarkerHash && wat != std::string::npos && u.find("ior_constant = 1.33", wat) != std::string::npos && kWaterMarkerHash != kGlassMarkerHash
+            && isWaterPs(0xf74b4657dbfd60bcull) && isWaterPs(0x387e1a15c63c120aull) && !isWaterPs(0x3197bfdef2330503ull),
+            "water (M86): the marker's level-0 hash 0x%016llX names the water material %s (IOR 1.33); water PS f74b4657 and 387e1a15, not the glass", (unsigned long long) wh, wname);
     }
     CHECK(kLotCompositePs == 0x99ee53ff6ef1b0b6ull && lotCompositeStage(0) == 0 && lotCompositeStage(1) == 4 && lotCompositeStage(2) == 3, "lot composite: pass 1 reads the mask from s4 (layer 4 out), pass 2 from s3 (layer 3 out)");
     std::vector<DWORD> lit, world, layer, comp, lit2, lit3, lit4;

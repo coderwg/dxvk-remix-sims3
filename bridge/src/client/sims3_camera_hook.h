@@ -1867,6 +1867,22 @@ inline constexpr uint32_t kGlassMarkerSize = 32;
 inline constexpr uint32_t kGlassMarkerColour = 0xFFB8C8D0u;          // ARGB pale grey-blue: what the panes show if the mod is not loaded
 inline constexpr uint64_t kGlassMarkerHash = 0x5E30D0B82C246E6Cull;  // XXH3-64 of its level 0, as the runtime hashes it; the mod's material name
 
+// ---- water (milestone 86) ------------------------------------------------------------------
+// The game's water -- pools, ponds, fountains -- is drawn by shaders that read the scene behind it
+// from a render target (refraction), a reflection, bump maps and a foam / caustics texture over
+// waves made in the vertex shader. The runtime took the foam texture as an albedo: an opaque grey
+// plane (run 193). A water draw is presented with the hook's water marker at stage 0, blending off;
+// the hook's Remix mod makes the marker's hash the runtime's translucent water (IOR 1.33). Named,
+// each read from its bytecode.
+struct WaterShader { uint64_t hash; const char* name; };
+inline const WaterShader kWaterPs[] = {
+  { 0xf74b4657dbfd60bcull, "water (VS 2a6edce6: a plane at a set height, waves, refraction and reflection targets, two bump maps)" },
+  { 0x387e1a15c63c120aull, "water, instanced (VS 1a047c76: waves, refraction target, reflection cube, a two-sample bump map)" },
+};
+inline bool isWaterPs(uint64_t hash) { return findByHash(kWaterPs, hash) != nullptr; }
+inline constexpr uint32_t kWaterMarkerColour = 0xFF8CC4C8u;          // ARGB pale teal: what the water shows if the mod is not loaded
+inline constexpr uint64_t kWaterMarkerHash = 0x2723DD62C28E1456ull;  // XXH3-64 of its level 0; the mod's material name
+
 // ---- which texture coordinates the runtime samples with (milestone 3g) -------------------
 // The 1.5.2 runtime takes a draw's texture coordinates from the vertex declaration element
 // whose index equals stage 0's D3DTSS_TEXCOORDINDEX, and only when no such element exists

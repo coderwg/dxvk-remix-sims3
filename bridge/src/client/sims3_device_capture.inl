@@ -291,33 +291,37 @@ inline int sims3AutoAlbedo(Sims3Hook& h) {
   return k;
 }
 
-// The glass marker (milestone 80): a flat 32x32 texture of the hook's own, the stage-0 texture of
-// every glass draw (sims3cam::isGlassShader). Its hash names the translucent material in the hook's
-// Remix mod, which the runtime reads from rtx-remix/mods while replacement assets are on.
+// A material marker (milestones 80, 86): a flat 32x32 texture of the hook's own, the stage-0 texture of
+// every glass (or water) draw. Its hash names a material in the hook's Remix mod, which the runtime
+// reads from rtx-remix/mods while replacement assets are on.
 template<typename Dev>
-bool sims3EnsureGlassMarker(Sims3Hook& h, Dev* dev) {
-  if (h.glassMarker) return true;
-  if (h.glassMarkerFailed) return false;
+bool sims3EnsureMarker(Dev* dev, IDirect3DTexture9*& marker, uint64_t& hash, bool& failed, uint32_t colour, uint64_t modHash, const char* what) {
+  if (marker) return true;
+  if (failed) return false;
+  char msg[320];
   IDirect3DTexture9* tex = nullptr;
   if (FAILED(dev->CreateTexture(sims3cam::kGlassMarkerSize, sims3cam::kGlassMarkerSize, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &tex, nullptr)) || tex == nullptr) {
-    h.glassMarkerFailed = true; Logger::info("Sims 3 camera hook: glass marker texture could not be created; glass draws go out as before"); return false;
+    failed = true; snprintf(msg, sizeof msg, "Sims 3 camera hook: %s marker texture could not be created; its draws go out as before", what); Logger::info(msg); return false;
   }
   static uint32_t pixels[sims3cam::kGlassMarkerSize * sims3cam::kGlassMarkerSize];
-  for (auto& p : pixels) p = sims3cam::kGlassMarkerColour;
+  for (auto& p : pixels) p = colour;
   D3DLOCKED_RECT lr = {};
   if (FAILED(tex->LockRect(0, &lr, nullptr, 0)) || lr.pBits == nullptr) {
-    tex->Release(); h.glassMarkerFailed = true; Logger::info("Sims 3 camera hook: glass marker texture could not be written; glass draws go out as before"); return false;
+    tex->Release(); failed = true; snprintf(msg, sizeof msg, "Sims 3 camera hook: %s marker texture could not be written; its draws go out as before", what); Logger::info(msg); return false;
   }
   for (uint32_t y = 0; y < sims3cam::kGlassMarkerSize; ++y) memcpy((uint8_t*) lr.pBits + (size_t) y * lr.Pitch, pixels + y * sims3cam::kGlassMarkerSize, sims3cam::kGlassMarkerSize * 4);
   tex->UnlockRect(0);
-  h.glassMarker = tex;
+  marker = tex;
 #if SIMS3_HAVE_XXHASH
-  h.glassMarkerHash = (uint64_t) XXH3_64bits(pixels, sizeof pixels);   // the runtime hashes level 0's bytes, rows packed
+  hash = (uint64_t) XXH3_64bits(pixels, sizeof pixels);   // the runtime hashes level 0's bytes, rows packed
 #endif
-  char msg[320];
-  snprintf(msg, sizeof msg, "Sims 3 camera hook: glass marker created, hash 0x%016llX%s (the mod rtx-remix/mods/Sims3Glass names mat_%016llX; replacement assets must be on)",
-           (unsigned long long) h.glassMarkerHash, h.glassMarkerHash == sims3cam::kGlassMarkerHash ? "" : " -- NOT the mod's", (unsigned long long) sims3cam::kGlassMarkerHash);
+  snprintf(msg, sizeof msg, "Sims 3 camera hook: %s marker created, hash 0x%016llX%s (the mod rtx-remix/mods/Sims3Glass names mat_%016llX; replacement assets must be on)",
+           what, (unsigned long long) hash, hash == modHash ? "" : " -- NOT the mod's", (unsigned long long) modHash);
   Logger::info(msg);
   return true;
 }
+template<typename Dev>
+bool sims3EnsureGlassMarker(Sims3Hook& h, Dev* dev) { return sims3EnsureMarker(dev, h.glassMarker, h.glassMarkerHash, h.glassMarkerFailed, sims3cam::kGlassMarkerColour, sims3cam::kGlassMarkerHash, "glass"); }
+template<typename Dev>
+bool sims3EnsureWaterMarker(Sims3Hook& h, Dev* dev) { return sims3EnsureMarker(dev, h.waterMarker, h.waterMarkerHash, h.waterMarkerFailed, sims3cam::kWaterMarkerColour, sims3cam::kWaterMarkerHash, "water"); }
 
