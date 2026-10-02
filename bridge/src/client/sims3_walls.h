@@ -319,9 +319,10 @@ inline bool cutWallOpenings(const WallCutInput& in, WallCutOutput& out) {
     f.vis = (std::max)((float) fl[2], in.params.clampVis) >= 0.5f;   // the shader scales clip xyz by max(flag.z, cK.z)
   };
 
-  // the openings of a cell, in (s, t) of its segment; all triangles of a segment share the cell
+  // the openings of a cell, in (s, t) of its segment, and the rest of the plane as the solid
+  // rectangles a cut triangle is clipped to (milestone 78); all triangles of a segment share the cell
   struct Hole { float s0, s1, t0, t1; };
-  struct Cell { int16_t rect[4]; std::vector<Hole> holes; };
+  struct Cell { int16_t rect[4]; std::vector<Hole> holes, solids; };
   std::vector<Cell> cells;
   auto overlaps = [](float s0, float s1, float t0, float t1, const Hole& h) { return !(s1 <= h.s0 || s0 >= h.s1 || t1 <= h.t0 || t0 >= h.t1); };
   auto cellIndex = [&](const int16_t rect[4]) -> size_t {
@@ -339,7 +340,25 @@ inline bool cutWallOpenings(const WallCutInput& in, WallCutOutput& out) {
       auto tOf = [&](int py) { return (py * 4096.f / (float) H - rect[1]) / (float) rect[3]; };   // a texel row edge in t
       struct Run { int x0, x1; };
       std::vector<Run> prev, cur; int bandY0 = py0;
-      auto flush = [&](int yEnd) { for (const Run& r : prev) c.holes.push_back({ sOf(r.x0), sOf(r.x1), tOf(bandY0), tOf(yEnd) }); };
+      // a band of rows with the same openings gives its holes and its solid runs (the complement in s,
+      // unbounded at both ends), each merged into the solid rectangle above it when their s extents match
+      const float kFar = 1e6f;
+      auto solidBand = [&](float t0, float t1, const std::vector<Run>& runs) {
+        float s = -kFar;
+        auto add = [&](float s0, float s1) {
+          if (s1 <= s0) return;
+          for (Hole& r : c.solids) if (r.t1 == t0 && r.s0 == s0 && r.s1 == s1) { r.t1 = t1; return; }
+          c.solids.push_back({ s0, s1, t0, t1 });
+        };
+        for (const Run& r : runs) { add(s, sOf(r.x0)); s = sOf(r.x1); }
+        add(s, kFar);
+      };
+      solidBand(-kFar, tOf(py0), {});
+      auto flush = [&](int yEnd) {
+        if (yEnd <= bandY0) return;
+        for (const Run& r : prev) c.holes.push_back({ sOf(r.x0), sOf(r.x1), tOf(bandY0), tOf(yEnd) });
+        solidBand(tOf(bandY0), tOf(yEnd), prev);
+      };
       for (int py = py0; py < py1; ++py) {
         cur.clear();
         // the texel row's centre; a row straddling the cell's top edge counts as just inside it
@@ -368,11 +387,8 @@ inline bool cutWallOpenings(const WallCutInput& in, WallCutOutput& out) {
         if (!same) { flush(py); prev = cur; bandY0 = py; }
       }
       flush(py1);
-      if (c.holes.size() > 64) {                                            // too irregular: its bounding box
-        Hole b = c.holes[0];
-        for (const Hole& h : c.holes) { b.s0 = (std::min)(b.s0, h.s0); b.s1 = (std::max)(b.s1, h.s1); b.t0 = (std::min)(b.t0, h.t0); b.t1 = (std::max)(b.t1, h.t1); }
-        c.holes.assign(1, b);
-      }
+      solidBand(tOf(py1), kFar, {});
+      if (c.holes.empty()) c.solids.clear();
     }
     ++out.stats.cells;
     if (!c.holes.empty()) { ++out.stats.cellsWithOpenings; out.stats.holeRects += (uint32_t) c.holes.size(); }
@@ -400,17 +416,6 @@ inline bool cutWallOpenings(const WallCutInput& in, WallCutOutput& out) {
   };
   auto area2 = [](const Poly& p) { float a = 0.f; for (size_t i = 0, n = p.size(); i < n; ++i) { const PV& u = p[i]; const PV& v = p[(i + 1) % n]; a += u.s * v.t - v.s * u.t; } return a; };
   auto keep = [&](std::vector<Poly>& dst, Poly& p) { if (p.size() >= 3 && std::fabs(area2(p)) > 1e-9f) dst.push_back(std::move(p)); };
-  auto subtract = [&](const Poly& p, const Hole& h, std::vector<Poly>& dst) {
-    float s0 = 1e9f, s1 = -1e9f, t0 = 1e9f, t1 = -1e9f;
-    for (const PV& v : p) { s0 = (std::min)(s0, v.s); s1 = (std::max)(s1, v.s); t0 = (std::min)(t0, v.t); t1 = (std::max)(t1, v.t); }
-    if (!overlaps(s0, s1, t0, t1, h)) { dst.push_back(p); return; }
-    Poly a, b, mid, tmp;
-    clipHalf(p, false, h.s0, true, a); keep(dst, a);                       // left of the opening
-    clipHalf(p, false, h.s1, false, b); keep(dst, b);                      // right of it
-    clipHalf(p, false, h.s0, false, tmp); clipHalf(tmp, false, h.s1, true, mid);
-    clipHalf(mid, true, h.t0, true, a); keep(dst, a);                      // above it
-    clipHalf(mid, true, h.t1, false, b); keep(dst, b);                     // below it
-  };
 
   // the output vertices: both streams' bytes per vertex, deduplicated
   const uint32_t rec = in.stride0 + in.stride1;
@@ -450,7 +455,7 @@ inline bool cutWallOpenings(const WallCutInput& in, WallCutOutput& out) {
 
   std::vector<uint32_t> tris;
   tris.reserve((size_t) in.primCount * 3);
-  std::vector<Poly> pieces, next;
+  std::vector<Poly> pieces;
   for (uint32_t tI = 0; tI < in.primCount; ++tI) {
     ++out.stats.triangles;
     const uint8_t* p0[3] = {}; const uint8_t* p1[3] = {}; Facts f[3] = {};
@@ -471,13 +476,13 @@ inline bool cutWallOpenings(const WallCutInput& in, WallCutOutput& out) {
       continue;
     }
     bool cut = f[0].gate && f[1].gate && f[2].gate && !memcmp(f[0].rect, f[1].rect, 8) && !memcmp(f[0].rect, f[2].rect, 8);
-    const std::vector<Hole>* holes = nullptr;
-    if (cut) { holes = &cells[cellIndex(f[0].rect)].holes; cut = !holes->empty(); }
+    const Cell* cell = nullptr;
+    if (cut) { cell = &cells[cellIndex(f[0].rect)]; cut = !cell->holes.empty(); }
+    float s0 = 1e9f, s1 = -1e9f, t0 = 1e9f, t1 = -1e9f;
+    for (int i = 0; i < 3; ++i) { s0 = (std::min)(s0, f[i].s); s1 = (std::max)(s1, f[i].s); t0 = (std::min)(t0, f[i].t); t1 = (std::max)(t1, f[i].t); }
     if (cut) {
-      float s0 = 1e9f, s1 = -1e9f, t0 = 1e9f, t1 = -1e9f;
-      for (int i = 0; i < 3; ++i) { s0 = (std::min)(s0, f[i].s); s1 = (std::max)(s1, f[i].s); t0 = (std::min)(t0, f[i].t); t1 = (std::max)(t1, f[i].t); }
       cut = false;
-      for (const Hole& h : *holes) if (overlaps(s0, s1, t0, t1, h)) { cut = true; break; }
+      for (const Hole& h : cell->holes) if (overlaps(s0, s1, t0, t1, h)) { cut = true; break; }
       // a triangle with no area in (s, t) -- an edge-on face whose texels lie on a line -- is left
       // whole: the subtraction would produce nothing and drop it
       const float area2 = (f[1].s - f[0].s) * (f[2].t - f[0].t) - (f[2].s - f[0].s) * (f[1].t - f[0].t);
@@ -487,9 +492,18 @@ inline bool cutWallOpenings(const WallCutInput& in, WallCutOutput& out) {
       for (int i = 0; i < 3; ++i) { const int64_t idx = emitOriginal(p0[i], p1[i]); if (idx < 0) return false; tris.push_back((uint32_t) idx); }
       continue;
     }
+    // the triangle clipped to each solid rectangle it overlaps (milestone 78): the pieces tile it minus
+    // the openings exactly, however many rectangles the openings take (subtracting hole after hole
+    // multiplied the pieces, so a cell of more than 64 used to be cut as their bounding box)
     pieces.clear();
-    pieces.push_back({ { f[0].s, f[0].t, 1.f, 0.f, 0.f }, { f[1].s, f[1].t, 0.f, 1.f, 0.f }, { f[2].s, f[2].t, 0.f, 0.f, 1.f } });
-    for (const Hole& h : *holes) { next.clear(); for (const Poly& p : pieces) subtract(p, h, next); pieces.swap(next); }
+    const Poly tri = { { f[0].s, f[0].t, 1.f, 0.f, 0.f }, { f[1].s, f[1].t, 0.f, 1.f, 0.f }, { f[2].s, f[2].t, 0.f, 0.f, 1.f } };
+    Poly a, b;
+    for (const Hole& r : cell->solids) {
+      if (!overlaps(s0, s1, t0, t1, r)) continue;
+      clipHalf(tri, false, r.s0, false, a); clipHalf(a, false, r.s1, true, b);
+      clipHalf(b, true, r.t0, false, a); clipHalf(a, true, r.t1, true, b);
+      keep(pieces, b);
+    }
     if (pieces.empty()) { ++out.stats.removed; continue; }
     ++out.stats.cut;
     for (const Poly& p : pieces) {

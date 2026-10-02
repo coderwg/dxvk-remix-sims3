@@ -852,6 +852,43 @@ int main() {
         CHECK(inside == 0 && kept == 6, "walls: no output vertex inside the opening (%d), all six corners of the segment kept (%d)", inside, kept);
         CHECK(atTop >= 2 && atBottom >= 2, "walls: vertices on the opening's top row (%d) and bottom row (%d) carry the interpolated height (y = 767 (1 - t))", atTop, atBottom);
       }
+      {
+        // milestone 78: six round windows (radius 11 texels) in the window cell -- more hole rectangles
+        // than the 64 that used to collapse to their bounding box: the cut is still exact, and the
+        // wall between them stays
+        std::vector<uint8_t> round = red;
+        for (int y = 4; y < 132; ++y) for (int x = 112; x < 176; ++x) round[y * 256 + x] = 255;
+        const int cx[6] = { 128, 158, 128, 158, 128, 158 }, cy[6] = { 30, 30, 66, 66, 102, 102 };
+        for (int k = 0; k < 6; ++k) for (int y = cy[k] - 11; y <= cy[k] + 11; ++y) for (int x = cx[k] - 11; x <= cx[k] + 11; ++x)
+          if ((x - cx[k]) * (x - cx[k]) + (y - cy[k]) * (y - cy[k]) <= 121) round[y * 256 + x] = 0;
+        WallCutInput ri = in; ri.mask = round.data();
+        WallCutOutput ro;
+        auto killedR = [&](int x, int y) { const float t = (y + 0.5f - 4.f) / 128.f, need = (0.5f - 0.5f * (1.f - t)) * 255.f; return (float) round[y * 256 + x] < need; };
+        double holeArea = 0; for (int y = 4; y < 132; ++y) for (int x = 112; x < 176; ++x) if (killedR(x, y)) holeArea += (1.0 / 64.0) * (1.0 / 128.0);
+        auto stR = [&](const uint8_t* v, float& s, float& t) { int16_t tc2[4]; memcpy(tc2, v + 20, 8); s = tc2[0] / 4096.f; t = tc2[1] / 4096.f; };
+        auto rectXR = [&](const uint8_t* v) { int16_t r[4]; memcpy(r, v + 32, 8); return r[0]; };
+        auto areaOf = [&](const uint8_t* const v[3]) { float s[3], t[3]; for (int i = 0; i < 3; ++i) stR(v[i], s[i], t[i]); return std::fabs((s[1] - s[0]) * (t[2] - t[0]) - (s[2] - s[0]) * (t[1] - t[0])) / 2; };
+        // the wall between the windows: s over texels 141..146, t over rows 29..101 (the windows' extent)
+        auto inGap = [&](float s, float t) { const float px = 112.f + s * 64.f, py = 4.f + t * 128.f; return px > 141.f && px < 146.f && py > 30.f && py < 100.f; };
+        CHECK(cutWallOpenings(ri, ro) && ro.changed && ro.stats.holeRects > 64 && ro.stats.cut == 4, "walls (M78): six round windows make %u hole rectangles; the window segment's 4 triangles cut", ro.stats.holeRects);
+        double before = 0, after = 0, gap = 0; int inside = 0;
+        for (int t = 0; t < 40; ++t) { const uint16_t* ix = (const uint16_t*) ib.data() + 96 + 3 * t; const uint8_t* v[3]; for (int i = 0; i < 3; ++i) v[i] = vb0.data() + (ix[i] + 48) * 44; if (rectXR(v[0]) == 1792) before += areaOf(v); }
+        for (uint32_t t = 0; t < ro.triangleCount; ++t) {
+          const uint8_t* v[3]; for (int i = 0; i < 3; ++i) v[i] = ro.vb0.data() + ro.ib[3 * t + i] * 44;
+          if (rectXR(v[0]) != 1792) continue;
+          after += areaOf(v);
+          float s[3], tt[3]; for (int i = 0; i < 3; ++i) stR(v[i], s[i], tt[i]);
+          if (inGap((s[0] + s[1] + s[2]) / 3.f, (tt[0] + tt[1] + tt[2]) / 3.f)) gap += areaOf(v);
+        }
+        for (uint32_t v = 0; v < ro.vertexCount; ++v) {
+          const uint8_t* p = ro.vb0.data() + v * 44; if (rectXR(p) != 1792) continue;
+          float s, t; stR(p, s, t);
+          const float px = 112.f + s * 64.f, py = 4.f + t * 128.f, fx = px - floorf(px), fy = py - floorf(py);
+          if (fx > 0.02f && fx < 0.98f && fy > 0.02f && fy < 0.98f && killedR((int) floorf(px), (int) floorf(py))) ++inside;
+        }
+        CHECK(std::fabs((before - holeArea) - after) < 3e-3 && inside == 0, "walls (M78): the segment's area %.4f minus the six openings %.4f = %.4f after the cut; no vertex inside an opening (%d)", before, holeArea, after, inside);
+        CHECK(gap > 0.01, "walls (M78): the wall between the round windows stays (%.4f of it in triangles; their bounding box would have removed it)", gap);
+      }
       in.primCount = 24;
       CHECK(cutWallOpenings(in, o) && !o.changed, "walls: the plain segments alone -> unchanged");
       in.primCount = 40; in.params.threshold = 0.5f + 64.f / 255.f;
