@@ -24,7 +24,7 @@ struct Sims3Hook {
   bool rtIsPrimary = true;             // render target 0 is backbuffer-sized (the 3D pass)
   IDirect3DBaseTexture9* boundTex[16] = {};   // textures the game bound, per stage
   bool boundColor2D[16] = {};          // ...and whether each is a 2D colour texture (not a render target)
-  uint32_t boundFmt[16] = {};          // D3DFORMAT per stage (diagnostics)
+  uint32_t boundFmt[16] = {};          // D3DFORMAT per stage
   uint16_t boundW[16] = {}, boundH[16] = {};
   uint8_t boundKind[16] = {};          // 0 none, 1 2D, 2 cube, 3 volume; +0x80 render target
   bool inRemap = false;                // our own SetTexture calls must not update the tracking above
@@ -80,7 +80,7 @@ struct Sims3Hook {
   // the game's clock (milestone 40), and the world lights it keeps dark by day
   sims3cam::GameClock clock = {}; bool clockSaid = false, clockNight = false; uint32_t clockLogged = 0, lampsWorldDark = 0;
   float worldFade = 0.f;   // the street lamps' fade, 0..1: the game's night switch (milestones 54, 55, 128)
-  uint32_t markDump = 0;               // frames left to log after the mark key
+  bool markFrame = false;              // the frame after the mark key
   sims3cam::Lamps lamps;               // the game's own lamps, forwarded as Remix API lights
   uint32_t lampEvents = 0;             // API light creations and destructions made for lamps
   // night from the sun (milestone 20d): the sun's luminance smoothed, the day reference, what was sent
@@ -109,9 +109,9 @@ struct Sims3Hook {
   // triangles mix vertices of different instances (the fence slivers). A captured instanced
   // draw is therefore issued once per instance, the instance stream offset stepping through
   // the instance data, with the frequency of stream 0 set to one instance for the duration.
-  bool drawCaptured = false;                      // this draw is captured (set by the draw macro)
+  bool drawCaptured = false;                      // this draw is captured (set by sims3BeginDraw)
   uint32_t deinstancedDraws = 0, deinstancedInstances = 0, deinstanceLogged = 0;
-  bool creatingVariant = false;                   // our own CreateVertexShader call: no tables, no dump
+  bool creatingVariant = false;                   // our own CreateVertexShader / CreatePixelShader call: no tables, no dump
   bool swappingVs = false;                        // our own SetVertexShader call: the bound-shader facts stay the game's
   IDirect3DVertexShader9* autoVsRestore = nullptr; // the game's shader to re-bind after a swapped draw
   bool autoCapturedUv = false;                    // this draw samples with the captured TEXCOORD0 by the auto decision
@@ -207,17 +207,17 @@ struct Sims3Hook {
   uint64_t markerHash[sims3cam::kTerrainMarkers] = {};         // their level-0 hashes as the runtime computes them (0 = not computed)
   bool markerFailed = false, markersConfigSent = false;
   // glass (milestone 80): the glass marker, and the draw's blending the hook switched off
-  IDirect3DTexture9* glassMarkers[sims3cam::kGlassMaterials] = {}; uint64_t glassMarkerHashes[sims3cam::kGlassMaterials] = {};   // per sims3cam::kGlassMaterial
+  IDirect3DTexture9* glassMarkers[sims3cam::kGlassMaterials] = {};   // per sims3cam::kGlassMaterial
   bool glassMarkerFailed[sims3cam::kGlassMaterials] = {}; uint32_t glassDraws[sims3cam::kGlassMaterials] = {};
   // the water materials' markers (milestones 86, 99), per sims3cam::kWaterMaterial
-  IDirect3DTexture9* waterMarkers[sims3cam::kWaterMaterials] = {}; uint64_t waterMarkerHashes[sims3cam::kWaterMaterials] = {};
+  IDirect3DTexture9* waterMarkers[sims3cam::kWaterMaterials] = {};
   bool waterMarkerFailed[sims3cam::kWaterMaterials] = {}; uint32_t waterDraws[sims3cam::kWaterMaterials] = {};
   // bumpy glass (milestone 109, sims3GlassBump): its bump maps' runtime hashes (by texture id and level-0
   // version), the hashes the Sims3GlassBumps mod has a material for (read once), the ones seen without
   std::unordered_map<uint64_t, uint64_t> bumpHashes; std::unordered_set<uint64_t> bumpMaterials, bumpWritten;
   bool bumpModRead = false; uint32_t bumpDraws = 0, bumpPending = 0;
   // the glass survey (milestone 110; one run): a flat marker per sims3cam::kGlassSurvey entry
-  IDirect3DTexture9* surveyMarkers[sims3cam::kGlassSurveyMax] = {}; uint64_t surveyHashes[sims3cam::kGlassSurveyMax] = {};
+  IDirect3DTexture9* surveyMarkers[sims3cam::kGlassSurveyMax] = {};
   bool surveyFailed[sims3cam::kGlassSurveyMax] = {}; uint32_t surveyDraws = 0;
   uint64_t markGlassPs[32] = {}; uint32_t markGlassCount = 0;   // the glass shaders named at the mark (milestone 113, with the survey)
   uint32_t waveDumpedIds[32] = {}; uint32_t waveDumped = 0;   // the game's wave maps looked at (milestone 93): the mod's ripple maps' source
@@ -225,13 +225,11 @@ struct Sims3Hook {
   // versions and range), and this frame's kept wall triangles per vertex buffer
   std::unordered_map<uint64_t, std::vector<uint64_t>> wallPieceTris;
   std::unordered_map<uint32_t, std::unordered_set<uint64_t>> wallFrameTris;
-  uint32_t wallBackDropped = 0, wallBackLogged = 0;
+  uint32_t wallBackLogged = 0;
   DWORD blendSaved = 0; bool blendOurs = false;
   uint32_t glassLogged = 0; uint64_t glassLoggedPs[32] = {};
-  IDirect3DTexture9* mirrorMarker = nullptr; uint64_t mirrorMarkerHash = 0; bool mirrorMarkerFailed = false; uint32_t mirrorDraws = 0;   // mirrors (milestone 101)
+  IDirect3DTexture9* mirrorMarker = nullptr; bool mirrorMarkerFailed = false; uint32_t mirrorDraws = 0;   // mirrors (milestone 101)
   bool drawGlass = false;               // this draw went out as glass
-  bool reflectiveSheet = false;         // this draw is a reflective sheet: a mirror's face (milestone 101)
-  const char* dropWhy = "";             // why this draw was left out (the mark key's dump)
   // a glass sheet's back side (milestone 104, sims3GlassOneSide): per mesh, the kept triangles as an
   // index buffer of the hook's own (D3DPOOL_DEFAULT, released at a device reset); this draw's, sent in
   // the game's place (d3d9_device.cpp)
@@ -248,7 +246,6 @@ struct Sims3Hook {
   // the lot paint composite's two passes (milestone 17l, sims3cam::lotCompositeStage): the pass
   // being issued (0 = the game's own draw, pass 1; 2 = the hook's second pass, milestone 19), and
   // pass 2's black marker at stages 1 and 2 (what they held, put back in sims3EndDraw)
-  uint8_t compositePass = 0;
   IDirect3DBaseTexture9* extraRestore[2] = {}; bool extraActive = false;
   uint32_t compositePasses = 0;
   // a lot's re-submissions issued as two half draws (milestone 17r): the runtime's draw tracker
@@ -293,7 +290,7 @@ struct Sims3Hook {
   sims3cam::FadeGroups fadeG; bool fadeSplit = false;
   uint32_t fadeSplitDraws = 0, fadeSplitParts = 0, fadeSplitUnused = 0;
   // The low-detail lots' ground plates as terrain (milestone 69): per model draw (by the buffers'
-  // content and the draw range) the house's and the plate's own index buffers.
+  // ids and versions and the draw range) the house's and the plate's own index buffers.
   struct PlateEntry { uint64_t key = 0; IDirect3DIndexBuffer9* house = nullptr; IDirect3DIndexBuffer9* plate = nullptr; IDirect3DIndexBuffer9* glow = nullptr; IDirect3DVertexBuffer9* glowVb = nullptr; uint32_t houseMin = 0, houseNum = 0, housePrims = 0, plateMin = 0, plateNum = 0, platePrims = 0, glowMin = 0, glowNum = 0, glowPrims = 0, glowStride = 0, lastFrame = 0; bool ok = false; };
   std::vector<PlateEntry> plates;
   IDirect3DPixelShader9* platePs = nullptr; bool platePsFailed = false;

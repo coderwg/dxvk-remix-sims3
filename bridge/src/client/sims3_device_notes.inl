@@ -16,7 +16,7 @@ void sims3NoteVertexShader(Sims3Hook& h, IDirect3DVertexShader9* pShader) {
   h.vsCard = pLssVertexShader ? &pLssVertexShader->sims3Card : nullptr;
   h.vsWall = pLssVertexShader ? &pLssVertexShader->sims3Wall : nullptr;
   h.vsTerrain = pLssVertexShader ? sims3cam::findTerrainShader(pLssVertexShader->sims3Hash) : nullptr;
-  h.vsTabled = pLssVertexShader && (h.vsCapturedUv || h.vsNeverCapture == 1);   // a blended-only entry still gets its opaque draws' variants
+  h.vsTabled = pLssVertexShader && h.vsCapturedUv;
 }
 void sims3NotePixelShader(Sims3Hook& h, IDirect3DPixelShader9* pShader) {
   Direct3DPixelShader9_LSS* pLssPixelShader = bridge_cast<Direct3DPixelShader9_LSS*>(pShader);

@@ -4,9 +4,6 @@
 
 // Whether rtx.conf (next to this DLL, read by the runtime at start) tags the markers: the
 // terrain option naming both hashes and the hidden-instance option naming the layer marker's.
-// (The bridge's Remix API channel cannot be used for this: the server never initialises its
-// API interface -- exposeRemixApi is off and its API version 0.5.1 predates the runtime's
-// 0.6.4 -- so RemixApi_SetConfigVariable called a null pointer and took the server down, run 74.)
 // hashes: [0] terrain, [1] the world's layer passes, [2] the lot composite's passes -- all three
 // terrain, the last two hidden, the first NOT (a hidden lot copy hides the lot, see
 // sims3BeginTerrainDraw).
@@ -53,12 +50,10 @@ bool sims3EnsureMarkers(Sims3Hook& h, Dev* dev) {
     for (uint32_t y = 0; y < sims3cam::kTerrainMarkerSize; ++y) memcpy((uint8_t*) lr.pBits + (size_t) y * lr.Pitch, pixels + y * sims3cam::kTerrainMarkerSize, sims3cam::kTerrainMarkerSize * 4);
     tex->UnlockRect(0);
     h.marker[kind] = tex;
-#if SIMS3_HAVE_XXHASH
     h.markerHash[kind] = (uint64_t) XXH3_64bits(pixels, sizeof pixels);   // the runtime hashes level 0's bytes, rows packed
-#endif
   }
   char msg[560];
-  if (h.markerHash[0] && h.markerHash[1] && h.markerHash[2]) {
+  {
     char terrain[96], hidden[64];
     snprintf(terrain, sizeof terrain, "0x%016llX, 0x%016llX, 0x%016llX", (unsigned long long) h.markerHash[0], (unsigned long long) h.markerHash[1], (unsigned long long) h.markerHash[2]);
     snprintf(hidden, sizeof hidden, "0x%016llX, 0x%016llX", (unsigned long long) h.markerHash[1], (unsigned long long) h.markerHash[2]);
@@ -66,9 +61,7 @@ bool sims3EnsureMarkers(Sims3Hook& h, Dev* dev) {
     if (h.markersConfigSent)
       snprintf(msg, sizeof msg, "Sims 3 camera hook: terrain markers created; rtx.conf tags them (rtx.terrainTextures = %s, rtx.hideInstanceTextures = %s; terrain marker dark red (visible), world layer-pass marker purple (hidden), lot composite marker black (hidden))", terrain, hidden);
     else
-      snprintf(msg, sizeof msg, "Sims 3 camera hook: terrain markers created but rtx.conf does NOT tag them as required -> the lines must read \"rtx.terrainTextures = %s\" and \"rtx.hideInstanceTextures = %s\" (the grey marker NOT hidden; or tag the three flat 32x32 textures as Terrain Texture and the purple and black ones as Hide Instance Texture in the menu, Save Settings); until then the ground shows the markers or lots vanish", terrain, hidden);
-  } else {
-    snprintf(msg, sizeof msg, "Sims 3 camera hook: terrain markers created without hashes (no xxhash.h in the build) -> in the runtime menu tag the three flat 32x32 textures (dark red, purple, black) as Terrain Texture, and the purple and black ones as Hide Instance Texture, then Save Settings");
+      snprintf(msg, sizeof msg, "Sims 3 camera hook: terrain markers created but rtx.conf does NOT tag them as required -> the lines must read \"rtx.terrainTextures = %s\" and \"rtx.hideInstanceTextures = %s\" (the dark red marker NOT hidden; or tag the three flat 32x32 textures as Terrain Texture and the purple and black ones as Hide Instance Texture in the menu, Save Settings); until then the ground shows the markers or lots vanish", terrain, hidden);
   }
   Logger::info(msg);
   return true;
@@ -155,9 +148,9 @@ void sims3CompositeSecondPass(Sims3Hook& h, Dev* dev, bool indexed, D3DPRIMITIVE
   h.compositeSecond = false;
   DWORD src = 0, dst = 0; dev->GetRenderState(D3DRS_SRCBLEND, &src); dev->GetRenderState(D3DRS_DESTBLEND, &dst);
   h.ourState = true; dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE); dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE); h.ourState = false;
-  h.reissue = true; h.reissueKind = 2; h.compositePass = 2;
+  h.reissue = true; h.reissueKind = 2;
   if (indexed) dev->DrawIndexedPrimitive(type, baseVertex, minIndex, numVertices, start, count); else dev->DrawPrimitive(type, start, count);
-  h.reissue = false; h.reissueKind = 0; h.compositePass = 0;
+  h.reissue = false; h.reissueKind = 0;
   h.ourState = true; dev->SetRenderState(D3DRS_SRCBLEND, src); dev->SetRenderState(D3DRS_DESTBLEND, dst); h.ourState = false;
 }
 
@@ -184,7 +177,7 @@ bool sims3BeginTerrainDraw(Sims3Hook& h, Dev* dev, uint8_t kind) {
   // the lot paint composite (milestone 17l, sims3cam::lotCompositeStage): its mask goes to a
   // paint layer's stage and the black marker takes that layer out; two passes, in place
   const bool composite = h.psHash == sims3cam::kLotCompositePs;
-  const int pass = composite ? (h.compositePass ? (int) h.compositePass : 1) : 0;
+  const int pass = composite ? (h.reissue && h.reissueKind == 2 ? 2 : 1) : 0;
   if (composite && pass == 1 && !h.reissue) h.compositeSecond = true;   // the second pass follows in place (milestone 19)
   IDirect3DPixelShader9* variant = sims3PsVariant(h, dev, h.psBound, h.psHash, alphaMode, sims3cam::lotCompositeStage(pass), freeStage);
   if (!variant || freeStage < 1 || freeStage > 15) { ++h.terrainNoVariant; return false; }

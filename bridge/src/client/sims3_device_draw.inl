@@ -30,17 +30,17 @@ inline void sims3OnReset(Sims3Hook& h) {
   if (h.psRestore) { h.psRestore->Release(); h.psRestore = nullptr; }
   if (h.freeStageRestore) { h.freeStageRestore->Release(); h.freeStageRestore = nullptr; }
   for (int i = 0; i < sims3cam::kTerrainMarkers; ++i) { if (h.marker[i]) h.marker[i]->Release(); h.marker[i] = nullptr; h.markerHash[i] = 0; }
-  for (int m = 0; m < sims3cam::kGlassMaterials; ++m) { if (h.glassMarkers[m]) h.glassMarkers[m]->Release(); h.glassMarkers[m] = nullptr; h.glassMarkerHashes[m] = 0; h.glassMarkerFailed[m] = false; }
-  for (int m = 0; m < sims3cam::kWaterMaterials; ++m) { if (h.waterMarkers[m]) h.waterMarkers[m]->Release(); h.waterMarkers[m] = nullptr; h.waterMarkerHashes[m] = 0; h.waterMarkerFailed[m] = false; }
+  for (int m = 0; m < sims3cam::kGlassMaterials; ++m) { if (h.glassMarkers[m]) h.glassMarkers[m]->Release(); h.glassMarkers[m] = nullptr; h.glassMarkerFailed[m] = false; }
+  for (int m = 0; m < sims3cam::kWaterMaterials; ++m) { if (h.waterMarkers[m]) h.waterMarkers[m]->Release(); h.waterMarkers[m] = nullptr; h.waterMarkerFailed[m] = false; }
   if (h.mirrorMarker) { h.mirrorMarker->Release(); h.mirrorMarker = nullptr; }
-  h.mirrorMarkerHash = 0; h.mirrorMarkerFailed = false;
-  for (size_t i = 0; i < sims3cam::kGlassSurveyMax; ++i) { if (h.surveyMarkers[i]) h.surveyMarkers[i]->Release(); h.surveyMarkers[i] = nullptr; h.surveyHashes[i] = 0; h.surveyFailed[i] = false; }
+  h.mirrorMarkerFailed = false;
+  for (size_t i = 0; i < sims3cam::kGlassSurveyMax; ++i) { if (h.surveyMarkers[i]) h.surveyMarkers[i]->Release(); h.surveyMarkers[i] = nullptr; h.surveyFailed[i] = false; }
   h.blendOurs = false; h.bumpHashes.clear(); h.worldOurs = false;
   for (auto& g : h.glassSides) if (g.second.ib) g.second.ib->Release();
   h.glassSides.clear(); h.glassIb = nullptr; h.glassPrims = 0;
   h.markerFailed = false; h.markersConfigSent = false; h.terrainFreeStage = -1; h.tblockActive = false; h.tblockStage = -1; h.tblockSet = 0; h.tblockSrgb = 0; h.ourSampler = false; h.psBound = nullptr; h.vsTerrain = nullptr; h.lotFurtherCopy = false; h.swappingPs = false;
   h.cwOurs = false; h.atOurs = false; h.fogOurs = false;
-  h.compositePass = 0; h.extraActive = false; h.splitDraw = false; h.ourConsts = false; h.reissue = false; h.reissueKind = 0; h.compositeSecond = false;
+  h.extraActive = false; h.splitDraw = false; h.ourConsts = false; h.reissue = false; h.reissueKind = 0; h.compositeSecond = false;
   h.fadeSplit = false; h.instBlockRegs = 0;
   for (int i = 0; i < 2; ++i) { if (h.extraRestore[i]) h.extraRestore[i]->Release(); h.extraRestore[i] = nullptr; }
   h.remapActive = false; h.maskEmu = 0; h.viewportOurs = false; h.vsSkyDome = false;
@@ -122,7 +122,6 @@ bool sims3WallBackSide(Sims3Hook& h, Dev* dev) {
 // shader>_s<stage>_<w>x<h>_<format>_k<slope scale x 1000>.raw.
 template<typename Dev>
 IDirect3DBaseTexture9* sims3GlassBump(Sims3Hook& h, Dev* dev, const sims3cam::NamedGlass& g) {
-#if SIMS3_HAVE_XXHASH
   const int s = g.bumpStage;
   if (s < 0 || s >= 16 || h.boundKind[s] != 1 || !h.boundTex[s]) return nullptr;   // a 2D texture, not a render target
   auto* tex = bridge_cast<Direct3DTexture9_LSS*>(h.boundTex[s]);
@@ -166,9 +165,6 @@ IDirect3DBaseTexture9* sims3GlassBump(Sims3Hook& h, Dev* dev, const sims3cam::Na
     }
   }
   return nullptr;
-#else
-  (void) h; (void) dev; (void) g; return nullptr;
-#endif
 }
 
 // Glass carries its object's place (milestone 119, sims3_vsinterp.h): the runtime keeps no motion for
@@ -238,7 +234,7 @@ void sims3GlassWorld(Sims3Hook& h, Dev* dev, UINT freq0) {
   D3DMATRIX w = {};
   w.m[0][0] = w.m[1][1] = w.m[2][2] = w.m[3][3] = 1.f;
   w.m[3][0] = world[0]; w.m[3][1] = world[1]; w.m[3][2] = world[2];
-  h.ourState = true; dev->SetTransform(D3DTS_WORLD, &w); h.ourState = false;
+  dev->SetTransform(D3DTS_WORLD, &w);
   h.worldOurs = true; ++h.worldDraws;
 }
 
@@ -363,14 +359,14 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
     return false;
   }
   // the neighbourhood view's lot picture (milestone 63): a second surface over the lot's ground, left out
-  if (h.vsHash == sims3cam::kLotPictureVs) { h.drawDropped = true; h.drawCaptured = false; h.dropWhy = "lot picture"; ++h.lotPictureDropped; return false; }
+  if (h.vsHash == sims3cam::kLotPictureVs) { h.drawDropped = true; h.drawCaptured = false; ++h.lotPictureDropped; return false; }
   // an effect the ray tracer cannot draw (milestone 114, sims3cam::leftOutPs): the speakers' sound waves, left out
-  if (sims3cam::leftOutPs(h.psHash)) { h.drawDropped = true; h.drawCaptured = false; h.dropWhy = "effect left out"; ++h.effectsLeftOut; return false; }
+  if (sims3cam::leftOutPs(h.psHash)) { h.drawDropped = true; h.drawCaptured = false; ++h.effectsLeftOut; return false; }
   // a mirror's face (milestone 101, sims3cam::isReflectiveSheet): the mirror material below
-  h.reflectiveSheet = h.psAuto && h.psAuto->valid && sims3cam::isReflectiveSheet(*h.psAuto, rs[D3DRS_STENCILENABLE]);
+  const bool reflectiveSheet = h.psAuto && h.psAuto->valid && sims3cam::isReflectiveSheet(*h.psAuto, rs[D3DRS_STENCILENABLE]);
   // a zero-thickness wall's back side (milestone 97, sims3cam::isWallBackSide): left out
   if (h.drawIndexed && h.drawType == D3DPT_TRIANGLELIST && h.wallLayout.valid && h.vsWall && h.vsWall->valid && sims3WallBackSide(h, dev)) {
-    h.drawDropped = true; h.drawCaptured = false; h.dropWhy = "wall back side"; ++h.wallBackDropped; return false;
+    h.drawDropped = true; h.drawCaptured = false; return false;
   }
   int k = -1;
   ++h.capturedDraws;
@@ -409,9 +405,9 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
     const int waterMat = sims3cam::waterMaterial(h.psHash);
     const bool water = waterMat >= 0 && sims3EnsureWaterMarker(h, dev, waterMat);
     const sims3cam::NamedGlass* named = water ? nullptr : sims3cam::namedGlass(h.psHash);
-    const bool mirror = !water && h.reflectiveSheet && sims3EnsureMirrorMarker(h, dev);
+    const bool mirror = !water && reflectiveSheet && sims3EnsureMirrorMarker(h, dev);
     // the glass material: a named glass's own, the clear glass for a blended cube-only shader
-    const int gm = (water || h.reflectiveSheet || !h.psAuto) ? -1 : named ? (int) named->material
+    const int gm = (water || reflectiveSheet || !h.psAuto) ? -1 : named ? (int) named->material
                  : (rs[D3DRS_ALPHABLENDENABLE] && sims3cam::isGlassShader(*h.psAuto)) ? (int) sims3cam::kClearGlass : -1;
     IDirect3DBaseTexture9* const bump = (gm >= 0 && named && named->bumpStage >= 0 && h.psAuto->valid) ? sims3GlassBump(h, dev, *named) : nullptr;
     const bool glass = gm >= 0 && (bump || sims3EnsureGlassMarker(h, dev, gm));
@@ -437,7 +433,7 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
       if (glass) sims3GlassOneSide(h, dev);   // a sheet's back side left out (milestone 104)
       if (glass) sims3GlassWorld(h, dev, freq0);   // its object's place as the WORLD transform (milestone 119)
       // at the mark (milestone 113, with the survey): every glass shader drawn in the marked frame, once
-      if (h.markDump == 2) {
+      if (h.markFrame) {
         bool listed = false; for (uint32_t i = 0; i < h.markGlassCount; ++i) if (h.markGlassPs[i] == h.psHash) listed = true;
         if (!listed && h.markGlassCount < 32u) {
           h.markGlassPs[h.markGlassCount++] = h.psHash;
@@ -571,7 +567,7 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
     if (k < 0 && (h.boundKind[0] & 0x7F) != 1) for (int s = 1; s < 16; ++s) if ((h.boundKind[s] & 0x7F) == 1 && h.boundTex[s]) { k = s; break; }
     dev->GetViewport(&h.gameViewport);
     D3DVIEWPORT9 vp = h.gameViewport; vp.MinZ = 1.f; vp.MaxZ = 1.f;
-    h.ourState = true; dev->SetViewport(&vp); h.ourState = false;
+    dev->SetViewport(&vp);
     h.viewportOurs = true; ++h.skyDraws;
     if (h.skyLogged < 3) {
       ++h.skyLogged; char fb[16]; char msg[288];
@@ -612,7 +608,7 @@ template<typename Dev>
 void sims3EndDraw(Sims3Hook& h, Dev* dev) {
   if (h.fadeSplit) { h.fadeSplit = false; ++h.fadeSplitUnused; }   // a per-plant split not drawn (not an indexed draw)
   if (h.fogOurs) { h.fogOurs = false; h.ourState = true; for (int i = 0; i < 5; ++i) dev->SetRenderState(kSims3FogRs[i], h.fogSaved[i]); h.ourState = false; }
-  if (h.viewportOurs) { h.viewportOurs = false; h.ourState = true; dev->SetViewport(&h.gameViewport); h.ourState = false; }
+  if (h.viewportOurs) { h.viewportOurs = false; dev->SetViewport(&h.gameViewport); }
   // a terrain draw's pixel shader variant, moved texture and sampler states (milestone 17)
   if (h.psRestore) {
     IDirect3DPixelShader9* ps = h.psRestore; h.psRestore = nullptr;
@@ -628,7 +624,7 @@ void sims3EndDraw(Sims3Hook& h, Dev* dev) {
   if (h.blendOurs) { h.blendOurs = false; h.ourState = true; dev->SetRenderState(D3DRS_ALPHABLENDENABLE, h.blendSaved); h.ourState = false; }   // a glass draw's blending (milestone 80)
   if (h.worldOurs) {   // a glass draw's place (milestone 119): every other draw keeps the identity
     static const D3DMATRIX kWorldIdentity = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
-    h.worldOurs = false; h.ourState = true; dev->SetTransform(D3DTS_WORLD, &kWorldIdentity); h.ourState = false;
+    h.worldOurs = false; dev->SetTransform(D3DTS_WORLD, &kWorldIdentity);
   }
   if (h.terrainFreeStage >= 0) {
     h.inRemap = true; dev->SetTexture((DWORD) h.terrainFreeStage, h.freeStageRestore); h.inRemap = false;

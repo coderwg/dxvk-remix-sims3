@@ -1,3 +1,8 @@
+> **Historical document (kept as written, 2026-09-03 to milestone 18f).** It records how the camera hook
+> came about. Parts of the design it describes were replaced later -- the sun from a vote over the objects'
+> light rigs, the fixed-function sun and lamps, the lot replay among them. The code's comments and the
+> commit history on branch sims3-hook describe the hook as it is.
+
 # Sims 3 + RTX Remix: why ray tracing captures nothing, and what a camera hook would need
 
 **Status (2026-09-03):** the crash is fixed (see `rtx-remix-sims3-update-2.md`); the game

@@ -11,7 +11,7 @@
 // the house (baked into the terrain by the runtime's terrain baker, with the hook's own plate shader),
 // and the windows that glow at night (the game's switch, c3.x) picked from the glow atlas, as a
 // window-only copy of it on a layer of the glow triangles lifted off the wall. The device side
-// (sims3LotPlateEntry, sims3LotGlowTexture, sims3LotModelDraw) is in d3d9_device.cpp.
+// (sims3LotPlateEntry, sims3LotGlowTexture, sims3LotModelDraw) is in sims3_device_lots.inl.
 #pragma once
 
 #include "sims3_camera_hook.h"

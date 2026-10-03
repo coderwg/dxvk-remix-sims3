@@ -22,7 +22,7 @@
 namespace sims3cam {
 
 struct VsConstants { const float* f = nullptr; const int* i = nullptr; const BOOL* b = nullptr; };   // 256 x 4 floats, 16 x 4 ints, 16 bools
-struct VsRun { const char* failed = nullptr; uint32_t op = 0; };
+struct VsRun { const char* failed = nullptr; };
 
 // One vertex element as the shader reads it: (0, 0, 0, 1) where the element has no component.
 inline bool vsDecodeElement(uint8_t type, const uint8_t* p, float out[4]) {
@@ -246,10 +246,10 @@ inline bool evalVsPosition(const DWORD* tok, size_t count, const float in[16][4]
       }
       write(d, v); return true;
     }
-    default: run.failed = "an unsupported instruction"; run.op = op; ok = false; return false;
+    default: run.failed = "an unsupported instruction"; ok = false; return false;
     }
     if (!run.failed) run.failed = "an operand";
-    run.op = op; ok = false; return false;
+    ok = false; return false;
   });
   if (!ok) return false;
   memcpy(pos, vs3 ? o[posReg] : rast[0], 16);
@@ -280,9 +280,6 @@ inline bool invert4d(const D3DMATRIX& A, double out[16]) {
   if (!(std::fabs(det) > 1e-30)) return false;
   for (int i = 0; i < 16; ++i) out[i] = inv[i] / det;
   return true;
-}
-inline void rowTimes(const float v[4], const D3DMATRIX& M, float out[4]) {
-  for (int c = 0; c < 4; ++c) out[c] = v[0] * M.m[0][c] + v[1] * M.m[1][c] + v[2] * M.m[2][c] + v[3] * M.m[3][c];
 }
 // A clip position back to the world, as the runtime's vertex capture does it (dxso_compiler.cpp):
 // clip x inverse(projection) -> view, divided by w; x inverse(view) -> world -- in double precision,

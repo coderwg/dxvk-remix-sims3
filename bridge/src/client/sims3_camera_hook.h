@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-143).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-144).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -294,8 +294,6 @@ inline bool positionIs3D(const D3DVERTEXELEMENT9* e) {
     //
     // FLOAT4 counts as 3D: the game's one FLOAT4 layout carries w = 0 in the buffer, but
     // its shader rebuilds (x, y, z, 1) before projecting, so it produces proper points.
-    // (What actually produces infinities is a shader pattern, not a layout: see
-    // shaderCollapsesPosition below.)
     switch (e->Type) {
       case D3DDECLTYPE_FLOAT3: case D3DDECLTYPE_FLOAT4:
       case D3DDECLTYPE_SHORT4: case D3DDECLTYPE_SHORT4N: case D3DDECLTYPE_USHORT4N:
@@ -314,9 +312,6 @@ inline bool fvfIs3D(DWORD fvf) {
   return pos != 0 && pos != D3DFVF_XYZRHW;
 }
 
-// The decision itself, kept free of device types so it can be unit-tested. rtIsPrimary:
-// render target 0 is the backbuffer-sized target, i.e. the 3D pass (the shadow and
-// reflection passes render into small textures and must not be touched).
 // The stencil-mirror pass (a wall mirror at close zoom, run 66): the scene is drawn again,
 // reflected across the mirror's plane, into the backbuffer -- masked by the stencil, with the
 // winding flipped (CCW) -- and the camera it uploads is caught by kindOfVerified. Draws whose
@@ -414,7 +409,7 @@ inline const T* findByHash(const T (&table)[N], uint64_t hash) {
 struct ConstPatch { uint16_t reg; uint8_t comp; float value; };
 struct ShaderPatch { uint64_t hash; const char* name; ConstPatch patches[4]; uint32_t count; };
 
-// The lot terrain's vertex shader (its draws are also de-duplicated per frame, see LotCopies).
+// The lot terrain's vertex shader (a lot's further chunk copies are baked as hidden layer passes, see LotCopies).
 inline constexpr uint64_t kLotTerrainVs = 0x976b73dbd59842cdull;
 
 inline const ShaderPatch kShaderPatches[] = {
@@ -1031,8 +1026,6 @@ inline bool cardBasisIsCamera(const float c[12], const Camera& cam) {
 // shader's bytecode hash; it takes precedence over pickAlbedoStage for captured draws.
 // The recolourable object shaders also carry the Create-A-Style tint at c8, and walls C its flat
 // colour at c4 (tintReg, the pixel constant forwarded as the texture factor, see packTint; -1: none).
-// (Until milestone 52 the table also marked the shaders carrying a four-light rig at c0..c7, the
-// input of the sun's vote, removed in milestone 41.)
 struct AlbedoStage { uint64_t hash; const char* name; uint8_t stage; int8_t tintReg = -1; };
 inline constexpr int8_t kTintRegister = 8;
 
@@ -1089,7 +1082,6 @@ inline const AlbedoStage kAlbedoStages[] = {
   { 0xb0fb977be6b7bbccull, "PS 0x106fe840 (s1)", 1 },
   { 0xc3c0476375bf7797ull, "PS 0x16e98380 (s1)", 1 },
   { 0x78a22ef03769d4deull, "PS 0x16e95cc0 (s1)", 1 },
-  { 0x6c1867be86538473ull, "PS 0x13d275c0 (s1, TEXCOORD5)", 1 },
 };
 
 inline const AlbedoStage* findAlbedoStage(uint64_t hash) { return findByHash(kAlbedoStages, hash); }
@@ -1116,8 +1108,10 @@ inline uint32_t packTint(const float* rgb) {
 struct NeverCapture { uint64_t hash; const char* name; bool blendedOnly; };   // hash: the vertex or the pixel shader's
 
 inline const NeverCapture kNeverCapture[] = {
-  // from the run-15 shader dump
-  { 0xc79615c0181b5ef1ull, "drop-shadow decals (instanced quads multiplied over the ground)", false },
+  // (The drop-shadow decals, the lot overlays and the buildings' shadow shapes on the ground, the
+  // lot-sized sheets of the top-down view and the town ground's lighting pass -- vertex shaders
+  // c79615c0, 8e7f4f65, d55820f9, 1139e30a, 23072b72, 53422654, 19c4591d, 3c837e49 -- were listed here
+  // until milestone 144: each only ever draws with a pixel shader kGameFakes drops.)
   // (The close-range grass and flower sprites, VS 5a2deada / PS e8daded2, were listed here from
   // milestone 3l to 138: whole quads under capture then -- the "green walls" -- before the hook
   // gave the runtime the shader's own texture coordinates (milestones 7-8). Their cards stand in
@@ -1125,8 +1119,6 @@ inline const NeverCapture kNeverCapture[] = {
   // never below 0) -- the cut is the game's alpha test on that alpha, which the runtime applies to
   // the albedo it samples. A hidden sprite collapses to clip (0, 0, 0, 0): its captured corners
   // are not finite and the triangle is inactive; the bounds come from the raw vertex buffer.)
-  // (The Sims' soft shadow blob, VS b7d550c6, and their black overlay pass, VS ab38a730, were listed here
-  // until milestone 131: their pixel shaders are the game's own fakes now, kGameFakes.)
   // The Sims' hair soft-edge pass (milestones 131, 133; found in run 171): each Sim's hair is drawn
   // twice -- alpha-tested and opaque, then the same mesh blended (SRCALPHA / INVSRCALPHA, no depth
   // write) for its soft edges. The vertex shader differs from Sim to Sim (e12c352d, a4ca9554, a77613ea:
@@ -1138,33 +1130,6 @@ inline const NeverCapture kNeverCapture[] = {
   { 0x57a5a049ffa47770ull, "the Sims' hair soft-edge pass (pixel shader; the blended copy of the alpha-tested hair)", true },
   { 0x00e85de9a42890fbull, "the Sims' hair soft-edge pass (pixel shader; the blended copy of the alpha-tested hair)", true },
   { 0x45c7a7cd511b5233ull, "the Sims' hair soft-edge pass outdoors (pixel shader with the sun's shadow map; the blended copy)", true },
-  // The lot overlays drawn right after each lot ground patch (milestone 18c, run 109): three
-  // families with NO texture at all (alpha-blended, depth write off), one draw per lot patch --
-  // the game's shading / fade quads over the lot -- and their textured sibling that draws the
-  // buildings' shadow shapes onto the ground. Under capture an untextured draw is an opaque white
-  // plane over the lot (the "white pop", runs 85-109; it has a geometry hash and no texture to
-  // pick) and the shadow shapes are black surfaces; the ray tracer shades and shadows the lot itself.
-  { 0x8e7f4f65c455f509ull, "lot overlay quad, untextured (one per lot ground patch)", true },
-  { 0xd55820f978e8826full, "lot overlay quad, untextured", true },
-  { 0x1139e30a9396c3c3ull, "lot overlay quad, untextured (after the world terrain)", true },
-  { 0x23072b72226654bdull, "building shadow shapes on the ground (blended decals, textured)", true },
-  // run 112: drawn in the top-down view, one per frame each -- terrain-packed positions (1/256)
-  // with a second height per vertex, placed 35 % / 80 % of the way between the two heights, a
-  // constant colour (PS 8133bb57) and the alpha from the height difference; captured they are
-  // translucent sheets over the lot that shade the ground beneath them (alpha-blended geometry
-  // casts shadows in the runtime)
-  { 0x53422654d95996b1ull, "lot-sized untextured translucent sheet (top-down view, 35 %)", true },
-  { 0x19c4591d463ac2a6ull, "lot-sized untextured translucent sheet (top-down view, 80 %)", true },
-  // (The terrain paint passes -- the lot's 0344bbc3 and the world terrain's blended layers of
-  // dfaf82cf -- were listed here until milestone 17; they are now baked by the runtime's terrain
-  // baker as hidden layer passes, see kTerrainShaders.)
-  // The town ground's lighting pass (milestone 62, run 171): the world terrain's own geometry and
-  // geomorph (the same square vertex buffers, the unlit world pieces' triangles) with a pixel
-  // shader (9b8f4e2b) that computes only the light -- sun x shadow, light map, sky probe -- and a
-  // DESTCOLOR / SRCCOLOR blend that multiplies it over the unlit paint. Captured it was an exactly
-  // coplanar, untextured (grey) copy of the ground fighting the ground for the rays: the grey
-  // terrain flickering on the hills of runs 168 to 171. The ray tracer lights the ground itself.
-  { 0x3c837e49bf748d99ull, "the town ground's lighting pass (multiplied over the unlit world terrain)", false },
   // Effect cards (milestone 91): PS 7304aaea and kin -- texture x vertex colour, alpha = texture alpha
   // x vertex alpha, a constant-direction cube glint, no culling. The runtime drops the vertex colour
   // (rtx.ignoreAllVertexColorBakedLighting), so a faint blended effect became an unshaded white sheet:
@@ -1242,8 +1207,8 @@ inline bool neverCaptureDraw(uint8_t mode, DWORD alphaBlendEnable) { return mode
 // disables, since under vertex capture the clipped vertices became the fans. With the clip off
 // every copy is the whole lot, so a lot on a chunk boundary was two coincident opaque surfaces
 // (run 73: the terrain flicker in the lot). The frame's first draw of a mesh (same vertex
-// buffer, same World rows c4..c6) is captured and the copies after it are dropped; they differ
-// only in the chunk textures, which the ray tracer does not use.
+// buffer, same World rows c4..c6) is captured; the copies after it differ only in the chunk
+// textures and are baked as hidden layer passes (lotFurtherCopy).
 inline uint64_t lotTerrainKey(uint64_t bufferId, const float rows[12]) {
   uint64_t h = 0xcbf29ce484222325ull;
   auto mix = [&](uint32_t v) { for (int i = 0; i < 4; ++i) { h ^= (v >> (8 * i)) & 0xFFu; h *= 0x100000001b3ull; } };
@@ -1468,7 +1433,6 @@ inline const TerrainShader kTerrainShaders[] = {
 // The neighbourhood view's only ground; in the household view the game draws, square by square,
 // either the detailed pieces or the coarse square, never both (run 170). It goes through the
 // squares' merged path like the detailed squares. VS: position x c16.xyx + c16.zwz, rows c8..c10.
-inline constexpr uint64_t kCoarseGroundVs = 0x2a57449ad7d2c7eeull;
 // The lot's ground as the neighbourhood view draws it (milestone 63): VS 92337a18 (the lot VS's
 // decode and per-chunk clip, plus a normal) with PS 4c59eb62, which shows only a pre-baked 256x256
 // picture of the lot's paint; two draws per frame, the active lot only (runs 168-171). It is left out:
@@ -1720,8 +1684,8 @@ inline int lotCompositeStage(int pass) { return pass == 1 ? 4 : pass == 2 ? 3 : 
 // doubled, and 0x80 makes that a factor of 1; the composite reads its marker as a paint layer,
 // and black takes that layer out. Any fixed content fixes the hashes, which are what rtx.conf
 // tags. D3DCOLOR (A R G B; memory order B, G, R, A on this machine).
-// (Run 91 diagnostic: the terrain marker is DARK RED (0xFF800000), so a lot showing its marker --
-// a draw whose bake did not replace its material -- is told apart from a lot showing alpha 0.)
+// The terrain marker is DARK RED (0xFF800000): its red 0x80 is the detail factor of 1, and a lot
+// showing its marker -- a draw whose bake did not replace its material -- is told apart (run 91).
 inline constexpr uint32_t kTerrainMarkerSize = 32;
 inline constexpr int kTerrainMarkers = 3;
 inline constexpr uint32_t kTerrainMarkerColor[kTerrainMarkers] = { 0xFF800000u, 0xFF8000FFu, 0xFF000000u };
@@ -1784,7 +1748,7 @@ inline float luminance(const float* c) { return 0.2126f*c[0] + 0.7152f*c[1] + 0.
 // day and the moon by night. Run 152 (a whole game day): the colour follows the game's timeline by the hour
 // (SunMoonLight of the sky's light file / 255, linear between its keys), it is zero at 19 h and
 // at 6 h, the direction changes sides at 19 h and at 5 h and never stands lower than 45
-// degrees. The hook forwards it as it is, as a distant light.
+// degrees. The hook sends it as a distant light, the sun's or the moon's (SkyLights below).
 //
 // (Milestones 2b to 40 took the colour from a vote over the objects' light rigs and the
 // direction from the shadow map's rows. In run 152 the vote was wrong or absent most of an
@@ -2284,7 +2248,7 @@ inline bool chooseAutoAlbedo(const PsAnalysis& a, const bool color2D[16], const 
 // behind by a constant: e.g. 7b3cb6be, a8c64e11, the cars' 834b2191 -- not glass), so they are named,
 // each read from its bytecode. The table is the survey of milestone 107: every pixel shader the logs
 // recorded through run 217 (3210 dumped) that reads an environment cube and the scene behind or only
-// cubes; 2b1da1b4 and 8ff49576, unnamed until then, were dropped (a cube at stage 0).
+// cubes.
 // (Not glass, though alike: the light-beam cards 7304aaea / 8d3a3a22 -- their cube lookup has a
 // constant direction, no normal.)
 inline bool isGlassShader(const PsAnalysis& a) {

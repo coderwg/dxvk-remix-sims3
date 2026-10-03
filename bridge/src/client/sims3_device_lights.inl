@@ -271,7 +271,7 @@ static void sims3PresentLamps(Sims3Hook& h) {
   // the lit lamps that have a definition, the nearest to the camera's target first
   h.lamps.begin();
   h.lampsOn = h.lampsUndefined = h.lampsBeyondBudget = h.lampsWorldDark = 0;
-  const bool mark = h.markDump == 2;
+  const bool mark = h.markFrame;
   if (h.lampReportLive) {
     const sims3cam::LiteTable& table = sims3cam::liteTable();
     const float* frame = h.lampRecords.data();
@@ -401,8 +401,7 @@ static void sims3PresentLamps(Sims3Hook& h) {
 // light record (milestone 128), is the sun's or the moon's by the game's clock; the moon's is
 // scaled by the user's share, and at dusk and at dawn the two are cross-faded in equal parts
 // (sims3cam::SkyLights, milestones 42 to 46). Without the record the lights the runtime holds stay.
-template<typename Dev>
-void sims3PresentSky(Sims3Hook& h, Dev* dev) {
+void sims3PresentSky(Sims3Hook& h) {
   static const char* const kBody[2] = { "sun", "moon" };
   sims3cam::Sun game = {};
   const bool fresh = h.lightRec && sims3ReadGameLight(h.lightRec, game);
@@ -551,7 +550,7 @@ void sims3PresentSky(Sims3Hook& h, Dev* dev) {
       // a line when the hue moves 8 of 255 (run 167: at 2 the dawn's drift used up the cap by 5.7 h), the
       // end a fifth or the curve a quarter (the zoom moves both), and at every mark whatever the cap
       const bool step = h.fogLoggedEnd < 0.f || moved > 8 || std::fabs(h.fogEnd - h.fogLoggedEnd) > 0.2f * h.fogLoggedEnd || std::fabs(h.fogCurve - h.fogLoggedCurve) > 0.25f;
-      if ((step && h.fogLogged < 200u) || h.markDump == 2) {
+      if ((step && h.fogLogged < 200u) || h.markFrame) {
         h.fogLoggedColour = h.fogColour; h.fogLoggedEnd = h.fogEnd; h.fogLoggedCurve = h.fogCurve; ++h.fogLogged;
         char msg[340];
         snprintf(msg, sizeof msg, "Sims 3 camera hook: the game's fog at frame %u, clock %.2f h: colour %.3f %.3f %.3f, from %.0f to %.0f (curve %.2f) -> the runtime's fog colour %u %u %u of 255 (linear hue), from %.0f to %.0f",

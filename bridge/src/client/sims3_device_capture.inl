@@ -18,7 +18,7 @@ bool sims3LotTerrainCopy(Sims3Hook& h, Dev* dev, bool is3D) {
       if (h.marker[1] != nullptr && !h.markerFailed) {
         h.lotFurtherCopy = true; ++h.terrainLotCopyDraws;
       } else {
-        h.drawDropped = true; h.dropWhy = "lot copy";
+        h.drawDropped = true;
         ++h.lotCopyDrops;
         if (h.lotCopyLogged < 4) {
           ++h.lotCopyLogged; char msg[240];
@@ -42,13 +42,12 @@ bool sims3ApplyForDraw(Sims3Hook& h, Dev* dev, const DWORD* rs) {
   // a pass whose result Remix never shows (milestone 124): the shadow map, the sky's cube, the water's reflection
   const int unshown = sims3cam::unshownPass(h.rtIsPrimary, h.rt0W, h.rt0H, rs[D3DRS_COLORWRITEENABLE], h.rtCubeFace, h.rt0Id != 0 && h.rt0Id == h.reflectionRtId);
   if (unshown >= 0) {
-    static const char* const kWhy[sims3cam::kUnshownPasses] = { "shadow map", "sky cube", "water reflection" };
-    h.drawDropped = true; h.dropWhy = kWhy[unshown]; ++h.unshownDrops[unshown];
+    h.drawDropped = true; ++h.unshownDrops[unshown];
     return false;
   }
   // the game's own fakes (milestone 130): its shadows, fog, glow and tone curve, which Remix makes itself
   if (const sims3cam::GameFake* fake = sims3cam::findGameFake(h.psHash)) {
-    h.drawDropped = true; h.dropWhy = fake->name; ++h.fakeDrops;
+    h.drawDropped = true; ++h.fakeDrops;
     return false;
   }
   // a mirrored camera's pass is over at the first draw culling clockwise (milestone 85): the main
@@ -57,7 +56,6 @@ bool sims3ApplyForDraw(Sims3Hook& h, Dev* dev, const DWORD* rs) {
   // a reflection pass's draw (runs 66-68): dropped before it reaches the runtime; the ray tracer
   // renders reflections itself. Nothing is changed on the device for it.
   h.drawDropped = sims3cam::isReflectionDraw(h.camMirrored, h.declIs3D, zEnable, stencil, cull);
-  h.dropWhy = h.drawDropped ? "reflection pass" : "";
   if (h.drawDropped) {
     ++h.reflectionDrops;
     if (!h.camMirrored) ++h.reflectionDropsByStates;
@@ -76,7 +74,7 @@ bool sims3ApplyForDraw(Sims3Hook& h, Dev* dev, const DWORD* rs) {
   // a 3D draw the ray tracer must not have (kNeverCapture): never sent (milestone 131) -- with the
   // identity transforms the runtime would trace it with an unknown camera, at the world origin
   if (is3D && (sims3cam::neverCaptureDraw(h.vsNeverCapture, rs[D3DRS_ALPHABLENDENABLE]) || sims3cam::neverCaptureDraw(h.psNeverCapture, rs[D3DRS_ALPHABLENDENABLE]))) {
-    h.drawDropped = true; h.dropWhy = "never captured"; ++h.neverSentDrops;
+    h.drawDropped = true; ++h.neverSentDrops;
     return false;
   }
   const bool want = is3D;
@@ -85,10 +83,8 @@ bool sims3ApplyForDraw(Sims3Hook& h, Dev* dev, const DWORD* rs) {
       h.held.kind = sims3cam::Kind::Main; h.held.view = h.cam.view; h.held.proj = h.cam.proj;
       if (!h.loggedDraw3D) { h.loggedDraw3D = true; Logger::info("Sims 3 camera hook: first 3D draw with the main camera (depth test on, 3-component position, primary target)"); }
       ++h.transformSends;
-      h.ourState = true;
       dev->SetTransform(D3DTS_VIEW, &h.cam.view);
       dev->SetTransform(D3DTS_PROJECTION, &h.cam.proj);
-      h.ourState = false;
     }
   } else if (h.held.kind != sims3cam::Kind::None) {
     // back to the identity transforms (the game sets no transforms of its own): a draw the runtime
@@ -100,10 +96,8 @@ bool sims3ApplyForDraw(Sims3Hook& h, Dev* dev, const DWORD* rs) {
       snprintf(msg, sizeof msg, "Sims 3 camera hook: first draw without the main camera (cameraValid=%d, declIs3D=%d, zEnable=%lu, primaryRT=%d)", (int) h.cameraValid, (int) h.declIs3D, (unsigned long) zEnable, (int) h.rtIsPrimary);
       Logger::info(msg);
     }
-    h.ourState = true;
     dev->SetTransform(D3DTS_VIEW, &kIdentity);
     dev->SetTransform(D3DTS_PROJECTION, &kIdentity);
-    h.ourState = false;
   }
   return want;
 }
@@ -327,7 +321,7 @@ inline int sims3AutoAlbedo(Sims3Hook& h) {
 // every glass (or water) draw. Its hash names a material in the hook's Remix mod, which the runtime
 // reads from rtx-remix/mods while replacement assets are on.
 template<typename Dev>
-bool sims3EnsureMarker(Dev* dev, IDirect3DTexture9*& marker, uint64_t& hash, bool& failed, uint32_t colour, uint64_t modHash, const char* what) {
+bool sims3EnsureMarker(Dev* dev, IDirect3DTexture9*& marker, bool& failed, uint32_t colour, uint64_t modHash, const char* what) {
   if (marker) return true;
   if (failed) return false;
   char msg[320];
@@ -344,9 +338,7 @@ bool sims3EnsureMarker(Dev* dev, IDirect3DTexture9*& marker, uint64_t& hash, boo
   for (uint32_t y = 0; y < sims3cam::kGlassMarkerSize; ++y) memcpy((uint8_t*) lr.pBits + (size_t) y * lr.Pitch, pixels + y * sims3cam::kGlassMarkerSize, sims3cam::kGlassMarkerSize * 4);
   tex->UnlockRect(0);
   marker = tex;
-#if SIMS3_HAVE_XXHASH
-  hash = (uint64_t) XXH3_64bits(pixels, sizeof pixels);   // the runtime hashes level 0's bytes, rows packed
-#endif
+  const uint64_t hash = (uint64_t) XXH3_64bits(pixels, sizeof pixels);   // the runtime hashes level 0's bytes, rows packed
   snprintf(msg, sizeof msg, "Sims 3 camera hook: %s marker created, hash 0x%016llX%s (the hook's Remix mods name mat_%016llX; replacement assets must be on)",
            what, (unsigned long long) hash, !modHash ? " -- no material: its flat colour shows" : hash == modHash ? "" : " -- NOT the mod's", (unsigned long long) modHash);
   Logger::info(msg);
@@ -355,10 +347,10 @@ bool sims3EnsureMarker(Dev* dev, IDirect3DTexture9*& marker, uint64_t& hash, boo
 template<typename Dev>
 bool sims3EnsureGlassMarker(Sims3Hook& h, Dev* dev, int m) {
   const sims3cam::GlassMaterial& g = sims3cam::kGlassMaterial[m];
-  return sims3EnsureMarker(dev, h.glassMarkers[m], h.glassMarkerHashes[m], h.glassMarkerFailed[m], g.colour, g.hash, g.name);
+  return sims3EnsureMarker(dev, h.glassMarkers[m], h.glassMarkerFailed[m], g.colour, g.hash, g.name);
 }
 template<typename Dev>
-bool sims3EnsureMirrorMarker(Sims3Hook& h, Dev* dev) { return sims3EnsureMarker(dev, h.mirrorMarker, h.mirrorMarkerHash, h.mirrorMarkerFailed, sims3cam::kMirrorMarkerColour, sims3cam::kMirrorMarkerHash, "mirror"); }
+bool sims3EnsureMirrorMarker(Sims3Hook& h, Dev* dev) { return sims3EnsureMarker(dev, h.mirrorMarker, h.mirrorMarkerFailed, sims3cam::kMirrorMarkerColour, sims3cam::kMirrorMarkerHash, "mirror"); }
 // The glass survey's marker for the bound pixel shader (milestone 110; one run), or nullptr when it is
 // not surveyed; made on its first draw, the log naming its colour, shader and frame.
 template<typename Dev>
@@ -369,7 +361,7 @@ IDirect3DTexture9* sims3SurveyMarker(Sims3Hook& h, Dev* dev) {
   if (!h.surveyMarkers[i] && !h.surveyFailed[i]) {
     char what[160];
     snprintf(what, sizeof what, "glass survey: %s = PS %016llx (first drawn at frame %u, VS %016llx);", s->colourName, (unsigned long long) h.psHash, h.frames + 1, (unsigned long long) h.vsHash);
-    sims3EnsureMarker(dev, h.surveyMarkers[i], h.surveyHashes[i], h.surveyFailed[i], s->colour, 0, what);
+    sims3EnsureMarker(dev, h.surveyMarkers[i], h.surveyFailed[i], s->colour, 0, what);
   }
   if (h.surveyMarkers[i]) ++h.surveyDraws;
   return h.surveyMarkers[i];
@@ -377,6 +369,6 @@ IDirect3DTexture9* sims3SurveyMarker(Sims3Hook& h, Dev* dev) {
 template<typename Dev>
 bool sims3EnsureWaterMarker(Sims3Hook& h, Dev* dev, int m) {
   const sims3cam::WaterMaterial& w = sims3cam::kWaterMaterial[m];
-  return sims3EnsureMarker(dev, h.waterMarkers[m], h.waterMarkerHashes[m], h.waterMarkerFailed[m], w.colour, w.hash, w.name);
+  return sims3EnsureMarker(dev, h.waterMarkers[m], h.waterMarkerFailed[m], w.colour, w.hash, w.name);
 }
 

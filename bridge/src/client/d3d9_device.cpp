@@ -38,15 +38,9 @@
 #include <atomic>
 #include <thread>
 // The Sims 3 camera hook (milestone 17): the runtime identifies textures by the XXH3 of their
-// level-0 bytes; with xxhash.h next to this file the hook computes its marker textures' hashes
-// and sets the runtime's terrain options itself, otherwise the markers are tagged in the menu.
-#if __has_include("xxhash.h")
+// level-0 bytes (xxhash.h, next to this file): the hook's marker textures, the bump maps.
 #define XXH_INLINE_ALL
 #include "xxhash.h"
-#define SIMS3_HAVE_XXHASH 1
-#else
-#define SIMS3_HAVE_XXHASH 0
-#endif
 
 namespace {
   // The Sims 3 camera hook, by subject: these files are parts of this one, included in this
@@ -59,8 +53,8 @@ namespace {
 #include "sims3_device_draw.inl"      // the device reset, sims3BeginDraw and sims3EndDraw
 }
 
-// Around every draw of the game (the hook's own restore quad is left alone). A reflection pass's
-// draw returns here, never sent (nothing was changed on the device for it).
+// Around every draw of the game (the hook's own restore quad is left alone). A dropped draw returns
+// here, never sent (nothing was changed on the device for it).
 #define SIMS3_BEGIN_DRAW() \
   if (sims3cam::enabled() && !g_sims3.ourDraw) { sims3BeginDraw(g_sims3, this, m_state.renderStates.data(), m_state.streamFreqs[0]); if (g_sims3.drawGlass && g_sims3.waveDumped < 32u && sims3cam::isWaterPs(g_sims3.psHash)) sims3DumpWaveMaps(g_sims3); if (g_sims3.drawDropped) return D3D_OK; }
 #define SIMS3_END_DRAW() if (sims3cam::enabled() && !g_sims3.ourDraw) sims3EndDraw(g_sims3, this)
@@ -2632,10 +2626,10 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
         wallDone_ = wallDraw_();
       }
       // The Sims 3 camera hook: a low-detail lot model (milestones 69-71), drawn by the hook in its parts.
-      if (!wallDone_ && sims3cam::enabled() && !g_sims3.ourDraw && (sims3cam::terrainLotPlate() || sims3cam::lotGlow()) && g_sims3.drawCaptured
+      if (!wallDone_ && sims3cam::enabled() && (sims3cam::terrainLotPlate() || sims3cam::lotGlow()) && g_sims3.drawCaptured
           && g_sims3.vsHash == sims3cam::kLotImpostorVs && Type == D3DPT_TRIANGLELIST)
         wallDone_ = sims3LotModelDraw(g_sims3, this, m_state, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount, currentUID);
-      if (!wallDone_ && sims3cam::enabled() && !g_sims3.ourDraw && g_sims3.glassIb && Type == D3DPT_TRIANGLELIST) {
+      if (!wallDone_ && sims3cam::enabled() && g_sims3.glassIb && Type == D3DPT_TRIANGLELIST) {
         // The Sims 3 camera hook: a glass sheet's back side left out (milestone 104): the kept triangles
         // from the hook's own index buffer; the game's index buffer back afterwards
         IDirect3DIndexBuffer9* gib_ = (IDirect3DIndexBuffer9*) bridge_cast<Direct3DIndexBuffer9_LSS*>(*m_state.indices);
