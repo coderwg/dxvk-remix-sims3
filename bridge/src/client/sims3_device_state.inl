@@ -81,6 +81,7 @@ struct Sims3Hook {
   sims3cam::GameClock clock = {}; bool clockSaid = false, clockNight = false; uint32_t clockLogged = 0, lampsWorldDark = 0;
   float worldFade = 0.f;   // the street lamps' fade, 0..1: the game's night switch (milestones 54, 55, 128)
   uint32_t markDump = 0;               // frames left to log after the mark key
+  int markStage = -1; uint32_t markDrawsLogged = 0;   // milestone 140, a diagnostic: the draw's albedo stage; the marked frame's lines
   sims3cam::Lamps lamps;               // the game's own lamps, forwarded as Remix API lights
   uint32_t lampEvents = 0;             // API light creations and destructions made for lamps
   // night from the sun (milestone 20d): the sun's luminance smoothed, the day reference, what was sent
@@ -290,7 +291,7 @@ struct Sims3Hook {
   // (SpeedTree's plants, three each), the draw's plants grouped by their cut, the first plant's fade
   // register, and whether the draw goes out once per group (drawn in DrawIndexedPrimitive)
   uint32_t instBlockRegs = 0, fadeReg = 0, fadePlants = 0; float fade0 = 0.f;
-  sims3cam::FadeGroups fadeG; bool fadeSplit = false;
+  sims3cam::FadeGroups fadeG; bool fadeSplit = false, fadeDraw = false;
   uint32_t fadeSplitDraws = 0, fadeSplitParts = 0, fadeSplitUnused = 0, fadeSplitLogged = 0;
   // The low-detail lots' ground plates as terrain (milestone 69): per model draw (by the buffers'
   // content and the draw range) the house's and the plate's own index buffers.

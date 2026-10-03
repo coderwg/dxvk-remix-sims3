@@ -304,6 +304,24 @@ void sims3GlassOneSide(Sims3Hook& h, Dev* dev) {
   if (it->second.ib) { h.glassIb = it->second.ib; h.glassPrims = it->second.prims; ++h.glassSideDraws; h.glassSideTris += it->second.dropped; }
 }
 
+// Milestone 140, a diagnostic: the marked frame, one line per ray-traced draw -- its shaders, primitives, the albedo
+// stage and its texture, the alpha test, blending, depth writes and culling as sent, the vertex shader variant, and
+// the fade test's plants and groups (a hedge with a grey shell around it, run 243). Removed once answered.
+inline void sims3MarkDraw(Sims3Hook& h, const DWORD* rs) {
+  if (h.drawDropped || !h.drawCaptured || h.markDrawsLogged >= 1500u) return;
+  ++h.markDrawsLogged;
+  const int k = h.markStage;
+  char fb[16] = "-";
+  const char* fmt = (k >= 0 && k < 16 && h.boundTex[k]) ? sims3FormatName(h.boundFmt[k], fb, sizeof fb) : "none";
+  Logger::info(format_string("Sims 3 camera hook: mark frame %u draw %u: VS %016llx PS %016llx, %u primitives, albedo s%d %s %ux%u, alpha test %lu %lu/%lu, blend %lu %lu/%lu, z write %lu, cull %lu, variant %d, fade %s %u plants %u groups%s",
+                             h.frames + 1, h.markDrawsLogged, (unsigned long long) h.vsHash, (unsigned long long) h.psHash, h.drawIndexed ? h.drawPrims : 0u,
+                             k, fmt, (k >= 0 && k < 16) ? (unsigned) h.boundW[k] : 0u, (k >= 0 && k < 16) ? (unsigned) h.boundH[k] : 0u,
+                             (unsigned long) rs[D3DRS_ALPHATESTENABLE], (unsigned long) rs[D3DRS_ALPHAFUNC], (unsigned long) rs[D3DRS_ALPHAREF],
+                             (unsigned long) rs[D3DRS_ALPHABLENDENABLE], (unsigned long) rs[D3DRS_SRCBLEND], (unsigned long) rs[D3DRS_DESTBLEND],
+                             (unsigned long) rs[D3DRS_ZWRITEENABLE], (unsigned long) rs[D3DRS_CULLMODE], h.autoVsRestore ? 1 : 0,
+                             h.fadeDraw ? "yes" : "no", h.fadeDraw ? h.fadePlants : 0u, h.fadeDraw ? h.fadeG.count : 0u, h.fadeSplit ? " (split)" : ""));
+}
+
 // The fade test of a SpeedTree draw (milestones 135, 137, 139). The draw holds up to eight plants --
 // shader instancing, three registers each from c0, the block the game last uploaded there: position,
 // rotation, (scale, fade, 1, 1) -- each with its own fade; the vertex shader hands over the first
@@ -325,7 +343,7 @@ uint32_t sims3FadeTest(Sims3Hook& h, Dev* dev, int fc, bool rel, DWORD gameFunc,
     n = plants;
     for (uint32_t i = 1; i < n; ++i) { dev->GetVertexShaderConstantF(reg0 + 3u * i, v, 1); fades[i] = v[comp]; }
   }
-  h.fade0 = fades[0]; h.fadeReg = reg0; h.fadePlants = n;
+  h.fade0 = fades[0]; h.fadeReg = reg0; h.fadePlants = n; h.fadeDraw = true;
   h.fadeG = sims3cam::groupFades(gameFunc, gameRef, fades, n);
   if (!h.fadeG.func) return 0u;
   dev->GetRenderState(D3DRS_ALPHATESTENABLE, &h.atSaved[0]); dev->GetRenderState(D3DRS_ALPHAFUNC, &h.atSaved[1]); dev->GetRenderState(D3DRS_ALPHAREF, &h.atSaved[2]);
@@ -356,7 +374,7 @@ uint32_t sims3FadeTest(Sims3Hook& h, Dev* dev, int fc, bool rel, DWORD gameFunc,
 // into an offscreen target its emulation. Returns whether the draw is captured.
 template<typename Dev>
 bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
-  h.glassIb = nullptr; h.glassPrims = 0;
+  h.glassIb = nullptr; h.glassPrims = 0; h.fadeDraw = false; h.markStage = -1;   // (milestone 140, a diagnostic: markStage)
   if (h.mergePending >= 0 && !h.reissue) {   // a square's shape that was not sent after its piece (the piece took another way out): next piece then
     if ((size_t) h.mergePending < h.squares.size()) h.squares[(size_t) h.mergePending].mergedFrame = 0xFFFFFFFFu;
     h.mergePending = -1; ++h.mergeSkipped;
@@ -554,6 +572,7 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
     sims3BindVariant(h, dev, h.pendingPromote, sims3NormalChoice(h), (freq0 & D3DSTREAMSOURCE_INDEXEDDATA) && (freq0 & 0x3FFFFFFFu) > 1u, outward);
   }
   if (k >= 0 && k < 16) ++h.remapCount[k];
+  h.markStage = k;
   sims3NoteCapture(h, k, rs, freq0);
   // texture coordinates: hide the raw input set from the runtime (stage 0 index -> 7) for the
   // families whose shader output is verified, so it samples with the captured TEXCOORD0
