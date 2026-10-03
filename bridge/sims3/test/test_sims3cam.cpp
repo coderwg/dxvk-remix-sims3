@@ -563,6 +563,24 @@ int main() {
       CHECK(made && ran && fixed && flat && sized && level,
             "cards: %s's variant holds the leaf still under both cameras (%d), flat across the centre's direction from the tree (%d), its top edge level (%d), its size kept (%d)", L.name, (int) fixed, (int) flat, (int) level, (int) sized);
     }
+    // trees near the camera (milestone 137): the blended set's vertex shaders hand the fade over where the table says
+    {
+      std::vector<DWORD> leafFadeVs, branchFadeVs, ps;
+      if (loadShader("vs_1b5224b7e9bee689", leafFadeVs) && loadShader("vs_01729eebdb3cafd4", branchFadeVs)) {
+        VsConstantOutputs lv, bv;
+        const SolidFade* leavesNear = findSolidFade(0x714d5dae31da4378ull); const SolidFade* branchesNear = findSolidFade(0xd3759d8d17c63b92ull); const SolidFade* frondsNear = findSolidFade(0xca3faba5c3d2dbc2ull);
+        CHECK(leavesNear && branchesNear && frondsNear && analyzeVertexConstantOutputs(leafFadeVs.data(), leafFadeVs.size(), lv) && analyzeVertexConstantOutputs(branchFadeVs.data(), branchFadeVs.size(), bv)
+              && lv.c[leavesNear->fadeInput] == 2 * 4 + 1 && bv.c[branchesNear->fadeInput] == 2 * 4 + 1 && bv.c[frondsNear->fadeInput] == 2 * 4 + 1 && !findSolidFade(0x7e48acce64547cd0ull),
+              "near trees: VS 1b5224b7 hands c2.y over in TEXCOORD1.w, 01729eeb in COLOR0.w -- the fade the table reads; the opaque leaves' PS is not in the table");
+        bool samplersOk = true;
+        for (const SolidFade& f : kSolidFades) {
+          char name[32]; snprintf(name, sizeof name, "ps_%016llx", (unsigned long long) f.hash);
+          PsAnalysis a;
+          if (!loadShader(name, ps) || !analyzePixelShader(ps.data(), ps.size(), a) || !a.samplers[f.sampler].read || a.samplers[f.sampler].texcoord != 1 || !a.samplers[f.sampler].reachesColor()) samplersOk = false;
+        }
+        CHECK(samplersOk, "near trees: each table shader reads its leaf texture s1 with TEXCOORD1 into the colour");
+      } else SKIP("vs_1b5224b7 / vs_01729eeb dumps not found");
+    }
     std::vector<DWORD> branch, obj;
     if (loadShader("vs_854fd850257ee36f", branch) && loadShader("vs_0ba6ddb9aa01913c", obj)) {
       CameraCard a, b;

@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-136).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-137).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -1208,6 +1208,24 @@ inline const GameFake kGameFakes[] = {
   { 0xd09db2967daf6d1full, "the game's fog over the lot" },
 };
 inline const GameFake* findGameFake(uint64_t psHash) { return findByHash(kGameFakes, psHash); }
+
+// ---- trees near the camera drawn solid (milestone 137) -------------------------------------
+// When the camera comes close the game draws a whole tree blended instead of opaque: its own pixel
+// shaders, the same textures, the alpha out the tree's opacity (c2.w, falling as the camera nears)
+// and a texkill that thins the leaves as it falls (run 240: 594 blended draws against 152 opaque at
+// close range). The runtime took them for translucent -- unshaded and see-through. The user's
+// choice: a tree near the camera stays a solid tree. Blending off, and its leaves cut where the
+// opaque tree's are -- alpha at least the tree's fade, which the vertex shader hands over in
+// fadeInput (semantic * 4 + component, as PsAnalysis::fadeInput): VS 1b5224b7 writes c2.y to
+// TEXCOORD1.w and 01729eeb to COLOR0.w, as their opaque counterparts 799a26fa and 854fd850 do.
+// sampler: the leaf texture the cut reads, which must be the draw's albedo.
+struct SolidFade { uint64_t hash; const char* name; int8_t sampler; int8_t fadeInput; };   // hash: the pixel shader's
+inline const SolidFade kSolidFades[] = {
+  { 0x714d5dae31da4378ull, "a tree's leaves near the camera (VS 1b5224b7)", 1, 1 * 4 + 3 },
+  { 0xd3759d8d17c63b92ull, "a tree's branches near the camera (VS 01729eeb)", 1, kSemColor0 * 4 + 3 },
+  { 0xca3faba5c3d2dbc2ull, "a tree's fronds near the camera (VS 01729eeb)", 1, kSemColor0 * 4 + 3 },
+};
+inline const SolidFade* findSolidFade(uint64_t psHash) { return findByHash(kSolidFades, psHash); }
 // The mode a vertex shader carries from its table entry: 0 captured, 1 never captured, 2 not
 // captured when alpha blending is on.
 inline uint8_t neverCaptureMode(const NeverCapture* n) { return n ? (n->blendedOnly ? 2 : 1) : 0; }

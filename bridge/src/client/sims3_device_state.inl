@@ -285,6 +285,7 @@ struct Sims3Hook {
   uint32_t effectsLeftOut = 0;      // effect draws left out of the ray tracing (milestone 114, sims3cam::leftOutPs)
   uint32_t alphaCutDraws = 0;       // captured draws given their shader's cut-out as an alpha test (milestones 67-68)
   uint32_t fadeTestDraws = 0;       // captured draws whose "fade - alpha" test was turned onto the alpha (milestone 135)
+  uint32_t solidFadeDraws = 0, solidFadeLeft = 0, solidFadeLogged = 0; uint64_t solidFadeLoggedPs[4] = {};   // trees near the camera drawn solid / left as the game's (milestone 137)
   // The low-detail lots' ground plates as terrain (milestone 69): per model draw (by the buffers'
   // content and the draw range) the house's and the plate's own index buffers.
   struct PlateEntry { uint64_t key = 0; IDirect3DIndexBuffer9* house = nullptr; IDirect3DIndexBuffer9* plate = nullptr; IDirect3DIndexBuffer9* glow = nullptr; IDirect3DVertexBuffer9* glowVb = nullptr; uint32_t houseMin = 0, houseNum = 0, housePrims = 0, plateMin = 0, plateNum = 0, platePrims = 0, glowMin = 0, glowNum = 0, glowPrims = 0, glowStride = 0, lastFrame = 0; bool ok = false; };

@@ -481,6 +481,33 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
     }
     // the vertex shader variant for the draw: the promoted coordinate and/or the world normal as a
     // NORMAL output, and on a hardware-instanced draw (split per instance) a read of c255 for the tag
+    // a tree near the camera drawn solid (milestone 137): blending off, its leaves cut at the tree's
+    // fade as the opaque tree's are (the game's LESS 1 on "fade - alpha", turned onto the alpha)
+    if (const sims3cam::SolidFade* sf = sims3cam::findSolidFade(h.psHash)) {
+      const int fc = h.vsConstOut ? h.vsConstOut->c[sf->fadeInput] : -1;
+      float v[4] = {};
+      if (fc >= 0) dev->GetVertexShaderConstantF((UINT) (fc >> 2), v, 1);
+      const float fade = fc >= 0 ? v[fc & 3] : 0.f;
+      uint32_t ref = 0;
+      const uint32_t func = (fc >= 0 && k == sf->sampler && !h.atOurs && !h.blendOurs) ? sims3cam::fadeAlphaTest(D3DCMP_LESS, 1, fade, ref) : 0u;
+      if (func) {
+        dev->GetRenderState(D3DRS_ALPHATESTENABLE, &h.atSaved[0]); dev->GetRenderState(D3DRS_ALPHAFUNC, &h.atSaved[1]); dev->GetRenderState(D3DRS_ALPHAREF, &h.atSaved[2]);
+        h.atOurs = true; h.blendSaved = rs[D3DRS_ALPHABLENDENABLE]; h.blendOurs = true;
+        h.ourState = true;
+        dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+        dev->SetRenderState(D3DRS_ALPHATESTENABLE, TRUE); dev->SetRenderState(D3DRS_ALPHAFUNC, func); dev->SetRenderState(D3DRS_ALPHAREF, ref);
+        h.ourState = false;
+        ++h.solidFadeDraws;
+      } else ++h.solidFadeLeft;
+      bool seen = false; for (uint32_t i = 0; i < h.solidFadeLogged; ++i) if (h.solidFadeLoggedPs[i] == h.psHash) seen = true;
+      if (!seen && h.solidFadeLogged < 4) {
+        h.solidFadeLoggedPs[h.solidFadeLogged++] = h.psHash; char msg[288];
+        snprintf(msg, sizeof msg, "Sims 3 camera hook: %s, PS %016llx (VS %016llx): albedo s%d, fade c%d = %.4f -> %s %u",
+                 sf->name, (unsigned long long) h.psHash, (unsigned long long) h.vsHash, k, fc >> 2, fade,
+                 func ? "drawn solid, blending off, alpha test >=" : fc < 0 ? "no fade from the vertex shader: left as the game's" : "not the leaf texture's albedo: left as the game's", ref);
+        Logger::info(msg);
+      }
+    }
     // leaves turned to the camera (milestone 136): faced outward from their tree when the shader's
     // three constants are the frame camera's axes
     bool outward = false;
