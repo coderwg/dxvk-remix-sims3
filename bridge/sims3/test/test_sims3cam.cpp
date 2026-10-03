@@ -190,6 +190,42 @@ int main() {
     sims[80] = 1115.16f; sims[81] = 66.70f; sims[82] = 1020.54f; sims[83] = 1.f;
     Camera Cs = {}; const Kind ks = classify(sims, 24, Cs);
     CHECK(ks == Kind::Main && near3(Cs.pos, 1115.16f, 66.70f, 1020.54f), "a block with the fused matrix eight registers in, the eye twelve further: %s", kindName(ks));
+    CHECK(!Cw.continued && !Cs.continued, "  both verified by their eye, not continued");
+  }
+  if (kM == Kind::Main) {
+    // milestone 123: the lot terrain's block (VS 976b73db): fused matrix c0..c3, World c4..c6, c7..c10 its own, no eye
+    float lot[11*4] = {};
+    toBlock(WVP, lot);
+    for (int i = 0; i < 12; ++i) lot[16+i] = Wrows[i];
+    const float own[16] = { 0,0,0.5f,0.5f,  0.01f,0.01f,0,0,  0.02f,0.02f,0,0,  1100,0,1000,1 };
+    for (int i = 0; i < 16; ++i) lot[28+i] = own[i];
+    Camera L0 = {}; const Kind kl0 = classify(lot, 11, L0);
+    CHECK(kl0 == Kind::None, "the lot terrain's block without its eye, no reference: %s", kindName(kl0));
+    Camera L1 = {}; const Kind kl1 = classify(lot, 11, L1, &Mn);
+    CHECK(kl1 == Kind::Main && L1.continued && near3(L1.pos, 1115.16f, 66.70f, 1020.54f), "  continuing the last camera verified by its eye: %s (continued %d) at the true eye", kindName(kl1), (int) L1.continued);
+    Camera away = Mn; away.pos[0] += 60.f;
+    Camera L2 = {}; const Kind kl2 = classify(lot, 11, L2, &away);
+    CHECK(kl2 == Kind::None, "  the reference 60 units away: %s", kindName(kl2));
+    Camera wide = Mn; wide.fovY += 0.01f;
+    Camera L3 = {}; const Kind kl3 = classify(lot, 11, L3, &wide);
+    CHECK(kl3 == Kind::None, "  another lens: %s", kindName(kl3));
+    // the water's reflection camera in the same block: mirrored, never the play camera continued
+    float lotR[11*4]; for (int i = 0; i < 44; ++i) lotR[i] = lot[i];
+    M4 WVPr2; mul(VPr, W, WVPr2); toBlock(WVPr2, lotR);
+    Camera L4 = {}; const Kind kl4 = classify(lotR, 11, L4, &Mn);
+    CHECK(kl4 == Kind::None, "  the water's reflection camera without its eye: %s", kindName(kl4));
+    // run 70's sky-dome phantom: the play camera's lens, the view's translation stripped, a rotation as its World
+    float dome[11*4] = {};
+    M4 VPo = VP; for (int r = 0; r < 4; ++r) VPo.m[r][3] = 0.f;
+    M4 WVPo; mul(VPo, W, WVPo); toBlock(WVPo, dome);
+    for (int i = 0; i < 12; ++i) dome[16+i] = Wrows[i];
+    for (int i = 0; i < 3; ++i) dome[16 + i*4 + 3] = 0.f;                                      // a rotation only
+    Camera L5 = {}; const Kind kl5 = classify(dome, 11, L5, &Mn);
+    CHECK(kl5 == Kind::None, "  the sky dome's camera at the world origin: %s", kindName(kl5));
+    // an object-space fused matrix with no World after it is never continued
+    float objs[11*4] = {}; toBlock(WVP, objs);
+    Camera L6 = {}; const Kind kl6 = classify(objs, 11, L6, &Mn);
+    CHECK(kl6 == Kind::None, "  an object-space fused matrix without its World: %s", kindName(kl6));
   }
 
   Camera U = {}; const Kind kU = classify(kUi, 5, U);

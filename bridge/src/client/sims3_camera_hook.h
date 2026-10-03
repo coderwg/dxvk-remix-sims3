@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-122).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-123).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -21,7 +21,9 @@
  * still a perfectly valid-looking camera, just in object space. The only way to tell
  * View*Projection from View*Projection*World is a world-space anchor, and the game
  * provides one: the eye position it uploads for specular lighting. A candidate is
- * accepted only if the camera position it implies equals a float4 in the same upload.
+ * accepted only if the camera position it implies equals a float4 in the same upload --
+ * or, for blocks the game sends without the eye (the lot terrain's), with its World
+ * un-multiplied and as the play camera continued (see continuesCamera).
  *
  * Classification of an upload:
  *   Main       - verified camera with a proper basis (det +1): the play camera, whichever
@@ -106,6 +108,7 @@ struct Camera {
   float pos[3] = {};        // camera position in the space the matrix maps from
   float fwd[3] = {};        // direction of increasing clip w, i.e. what the camera looks along
   bool mirrored = false;    // the basis is improper (det -1): the play camera reflected across a plane, i.e. a reflection pass
+  bool continued = false;   // taken without its eye in the upload, as the play camera continued (milestone 123)
 };
 
 // Decompose a column-vector ViewProjection into View and Projection and validate it as a
@@ -201,33 +204,61 @@ inline bool similarMatrix(const D3DMATRIX& a, const D3DMATRIX& b, float eps) {
 // tracer renders reflections itself; the reflection passes' draws are dropped (sims3ApplyForDraw).
 inline Kind kindOfVerified(const Camera& cam) { return cam.mirrored ? Kind::Reflection : Kind::Main; }
 
+// Candidate A at `m`: the fused matrix with the World in the three registers after it, un-multiplied
+// (VP = WVP * W^-1).
+inline bool unWorld(const float* m, M4& VP) {
+  M4 WVP, Winv;
+  float w[3][4];
+  for (int r = 0; r < 4; ++r) for (int col = 0; col < 4; ++col) WVP.m[r][col] = m[r*4 + col];
+  for (int r = 0; r < 3; ++r) for (int col = 0; col < 4; ++col) w[r][col] = m[16 + r*4 + col];
+  if (!invAffine(w, Winv)) return false;
+  mul(WVP, Winv, VP);
+  return true;
+}
+
 // The fused matrix at register `base` of an upload: candidate A with the World in the three registers
 // after it, candidate B with an identity World. Either is a camera only if its eye is a float4
 // further on in the same upload.
 inline Kind classifyAt(const float* c, unsigned count, unsigned base, Camera& cam) {
   const float* m = c + base*4;
+  M4 VP;
+  if (base + 7 <= count && unWorld(m, VP) && decompose(VP, cam) && eyePresent(c, count, cam.pos, base + 4)) return kindOfVerified(cam);
   M4 WVP;
   for (int r = 0; r < 4; ++r) for (int col = 0; col < 4; ++col) WVP.m[r][col] = m[r*4 + col];
-  if (base + 7 <= count) {                                         // candidate A: VP = WVP * W^-1
-    float w[3][4];
-    for (int r = 0; r < 3; ++r) for (int col = 0; col < 4; ++col) w[r][col] = m[16 + r*4 + col];
-    M4 Winv, VP;
-    if (invAffine(w, Winv)) {
-      mul(WVP, Winv, VP);
-      if (decompose(VP, cam) && eyePresent(c, count, cam.pos, base + 4)) return kindOfVerified(cam);
-    }
-  }
   if (decompose(WVP, cam) && eyePresent(c, count, cam.pos, base + 4)) return kindOfVerified(cam);   // candidate B
   return Kind::None;
 }
 
+// A camera without its eye in the upload (milestone 123). Run 226: the lot terrain's block (VS
+// 976b73db, c0..c10) carries the fused matrix and the World but no eye, and was drawn first after
+// the water's reflection pass. Such a camera is taken only with its World un-multiplied (candidate
+// A: not an object-space camera) and only as the play camera continued: a proper basis, the lens of
+// the last camera verified by its eye, its eye within a frame's travel of that one's and looking
+// the same way. Run 70's sky-dome phantom (candidate A, the play camera's lens, its eye at the
+// world origin) fails the distance. In the in-world trace every candidate-A camera that passes the
+// lens tests, with or without its eye, is the play camera or a reflection.
+inline bool continuesCamera(const Camera& cam, const Camera& last) {
+  const float d[3] = { cam.pos[0] - last.pos[0], cam.pos[1] - last.pos[1], cam.pos[2] - last.pos[2] };
+  return !cam.mirrored && std::fabs(cam.fovY - last.fovY) < 1e-3f && std::fabs(cam.aspect - last.aspect) < 1e-3f
+      && len3(d) < 50.f && dot3(cam.fwd, last.fwd) > 0.9f;
+}
+
 // c = the constant floats of one upload; count = its number of float4 registers. The fused matrix
 // is tried at every fourth register (milestone 122): run 225's stale draws were walls drawn first
-// after the water's reflection pass, their matrix at c4, which the c0-only reading never saw.
-inline Kind classify(const float* c, unsigned count, Camera& cam) {
+// after the water's reflection pass, their matrix at c4, which the c0-only reading never saw. Only
+// when no place verifies by its eye, a candidate A continuing `last` (the last camera verified by
+// its eye) is taken as the main camera (milestone 123).
+inline Kind classify(const float* c, unsigned count, Camera& cam, const Camera* last = nullptr) {
+  cam.continued = false;
   for (unsigned base = 0; base + 4 <= count; base += 4) {
     const Kind k = classifyAt(c, count, base, cam);
     if (k != Kind::None) return k;
+  }
+  if (last) {
+    for (unsigned base = 0; base + 7 <= count; base += 4) {
+      M4 VP;
+      if (unWorld(c + base*4, VP) && decompose(VP, cam) && continuesCamera(cam, *last)) { cam.continued = true; return Kind::Main; }
+    }
   }
   return Kind::None;
 }

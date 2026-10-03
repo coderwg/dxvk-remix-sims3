@@ -294,6 +294,8 @@ struct Sims3Hook {
   uint32_t mergedDraws = 0, mergePaintPieces = 0, mergeFallbackPieces = 0, mergeBuilds = 0, mergeBuildFailed = 0, mergeLogged = 0, mergeEvicted = 0, mergeSkipped = 0;
   bool drawIndexed = false; D3DPRIMITIVETYPE drawType = D3DPT_TRIANGLELIST; INT drawBase = 0; UINT drawStart = 0, drawPrims = 0;   // the indexed draw call's arguments, for the squares
   bool frameCamSet = false;   // the frame's first main camera is in cam; it holds for the frame (milestone 121)
+  // the last main camera verified by its eye: the reference for one the game sends without it (milestone 123)
+  sims3cam::Camera eyeCam; bool eyeCamSet = false; uint32_t continuedUploads = 0;
   uint32_t transformSends = 0;
   // a measure (milestones 120-121): captured draws before the frame's main camera upload (placed with the
   // previous frame's camera) and the frames they fell in

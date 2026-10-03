@@ -3074,9 +3074,12 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetVertexShaderConstantF(UINT StartRe
       // (sims3ApplyForDraw), where the depth-test state and vertex layout are known.
       auto& h = g_sims3;
       sims3cam::Camera cam;
-      const sims3cam::Kind kind = sims3cam::classify(pConstantData, Vector4fCount, cam);
+      const sims3cam::Kind kind = sims3cam::classify(pConstantData, Vector4fCount, cam, h.eyeCamSet ? &h.eyeCam : nullptr);
       char msg[256];
       if (kind == sims3cam::Kind::Main) {
+        // the reference for a camera sent without its eye is only ever one verified by its eye (milestone 123)
+        if (cam.continued) ++h.continuedUploads;
+        else { h.eyeCam = cam; h.eyeCamSet = true; }
         // the play camera does not move within a frame: the frame's first main camera holds for the whole
         // frame (milestone 121). Later uploads re-derive it from other objects' fused matrices and differ
         // only by the game's single-precision rounding of the depth term (run 224: near 0.2500 / 0.2501 /
