@@ -470,6 +470,17 @@ int main() {
       PsAnalysis a;
       CHECK(analyzePixelShader(vin.data(), vin.size(), a) && a.cutSampler == -1, "cut: PS 03d26432 discards by a vertex value: no cut-out");
     } else SKIP("ps_03d264329cbfcf64 dump not found");
+    // milestone 141: the hedges' PS 783b8225 cuts by texkill on s2's alpha and outputs an alpha s2's alpha does not feed
+    std::vector<DWORD> hedge;
+    if (loadShader("ps_783b82250ef7c14d", hedge)) {
+      PsAnalysis a;
+      const bool ok = analyzePixelShader(hedge.data(), hedge.size(), a);
+      auto get = [](uint32_t reg, uint32_t comp) -> float { return (reg == 2 && comp == 3) ? 1.f : (reg == 9 && comp == 0) ? 128.f : 0.f; };
+      uint32_t r = 0;
+      const uint32_t f = ok ? cutAlphaTest(cutEval(a.cutA, get), cutEval(a.cutB, get), r) : 0u;
+      CHECK(ok && a.cutSampler == 2 && !(a.alphaOutTaint & (1ull << (2 * 4 + 3))) && a.alphaOutTaint != 0 && f == D3DCMP_GREATEREQUAL && r == 128,
+            "cut: the hedges' PS 783b8225 -> 255 * c2.w * alpha(s2) - c9.x (c2.w 1, c9.x 128: alpha test >= %u); its alpha output is fed by other samplers, not s2's alpha", r);
+    } else SKIP("ps_783b82250ef7c14d dump not found");
   }
 
   // --- the trees' fade (milestone 135): "fade - alpha" under the game's LESS 1, turned onto the alpha

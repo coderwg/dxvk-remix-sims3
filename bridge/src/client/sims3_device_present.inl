@@ -78,12 +78,12 @@ static void sims3LogStats(bool withTable) {
     Logger::info(msg);
     snprintf(msg, sizeof msg, "Sims 3 camera hook:   the neighbourhood view's lot picture (milestone 63): %u draws left out", h.lotPictureDropped);
     Logger::info(msg);
-    snprintf(msg, sizeof msg, "Sims 3 camera hook:   cut-outs (milestones 67-68): %u pixel shaders read with a cut-out on a sampler's alpha; %u captured draws given it as an alpha test; "
+    snprintf(msg, sizeof msg, "Sims 3 camera hook:   cut-outs (milestones 67-68): %u pixel shaders read with a cut-out on a sampler's alpha; %u captured draws given it as an alpha test, %u in place of the game's own test on another value (milestone 141); "
              "fades (milestone 135): %u pixel shaders with alpha = fade - a sampler's alpha; %u captured draws given the test on the alpha; "
              "leaf cards (milestone 136): %u draws faced outward from their tree, %u whose constants were not the camera's axes; "
              "trees near the camera (milestone 137): %u draws solid, %u left as the game's; "
              "plants cut apart (milestone 139): %u draws sent as %u, %u not split (not an indexed draw)",
-             h.cutShaders, h.alphaCutDraws, h.fadeShaders, h.fadeTestDraws, h.cardDraws, h.cardNotCamera, h.solidFadeDraws, h.solidFadeLeft,
+             h.cutShaders, h.alphaCutDraws, h.alphaCutReplaced, h.fadeShaders, h.fadeTestDraws, h.cardDraws, h.cardNotCamera, h.solidFadeDraws, h.solidFadeLeft,
              h.fadeSplitDraws, h.fadeSplitParts, h.fadeSplitUnused);
     Logger::info(msg);
     snprintf(msg, sizeof msg, "Sims 3 camera hook:   glass, mirrors and water (milestones 80-114): %u glass draws, %u car glass, %u plumbob, %u mirror; water draws: %u pool, %u pond, %u sea, %u object water; %u wave maps looked at; %u effect draws left out",
@@ -170,7 +170,7 @@ void sims3OnPresent(Sims3Hook& h, Dev* dev) {
   sims3TerrainBlockEnd(h, dev);   // the frame is over: the game's sampler states back (milestone 18g)
   {
     const bool f9 = ((GetAsyncKeyState(VK_F9) | GetAsyncKeyState(sims3cam::markKey()) | GetAsyncKeyState(VK_OEM_3)) & 0x8000) != 0;   // F9, the configured key (sims3hook.txt markKey) or backtick
-    if (f9 && !h.f9Down) { h.markDump = 2; h.markGlassCount = 0; h.markDrawsLogged = 0; }   // the lit lamps and the fog, logged once; the frame's glass (milestone 113); its draws (140, a diagnostic)
+    if (f9 && !h.f9Down) { h.markDump = 2; h.markGlassCount = 0; }   // the lit lamps and the fog, logged once; the frame's glass (milestone 113)
     else if (h.markDump) --h.markDump;
     h.f9Down = f9;
   }

@@ -62,7 +62,7 @@ namespace {
 // Around every draw of the game (the hook's own restore quad is left alone). A reflection pass's
 // draw returns here, never sent (nothing was changed on the device for it).
 #define SIMS3_BEGIN_DRAW() \
-  if (sims3cam::enabled() && !g_sims3.ourDraw) { sims3BeginDraw(g_sims3, this, m_state.renderStates.data(), m_state.streamFreqs[0]); if (g_sims3.markDump == 2) sims3MarkDraw(g_sims3, m_state.renderStates.data()); if (g_sims3.drawGlass && g_sims3.waveDumped < 32u && sims3cam::isWaterPs(g_sims3.psHash)) sims3DumpWaveMaps(g_sims3); if (g_sims3.drawDropped) return D3D_OK; }
+  if (sims3cam::enabled() && !g_sims3.ourDraw) { sims3BeginDraw(g_sims3, this, m_state.renderStates.data(), m_state.streamFreqs[0]); if (g_sims3.drawGlass && g_sims3.waveDumped < 32u && sims3cam::isWaterPs(g_sims3.psHash)) sims3DumpWaveMaps(g_sims3); if (g_sims3.drawDropped) return D3D_OK; }
 #define SIMS3_END_DRAW() if (sims3cam::enabled() && !g_sims3.ourDraw) sims3EndDraw(g_sims3, this)
 #include "d3d9_vertexbuffer.h"
 #include "d3d9_vertexdeclaration.h"

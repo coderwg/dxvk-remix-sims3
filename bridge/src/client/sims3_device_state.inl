@@ -81,7 +81,6 @@ struct Sims3Hook {
   sims3cam::GameClock clock = {}; bool clockSaid = false, clockNight = false; uint32_t clockLogged = 0, lampsWorldDark = 0;
   float worldFade = 0.f;   // the street lamps' fade, 0..1: the game's night switch (milestones 54, 55, 128)
   uint32_t markDump = 0;               // frames left to log after the mark key
-  int markStage = -1; uint32_t markDrawsLogged = 0;   // milestone 140, a diagnostic: the draw's albedo stage; the marked frame's lines
   sims3cam::Lamps lamps;               // the game's own lamps, forwarded as Remix API lights
   uint32_t lampEvents = 0;             // API light creations and destructions made for lamps
   // night from the sun (milestone 20d): the sun's luminance smoothed, the day reference, what was sent
@@ -285,13 +284,14 @@ struct Sims3Hook {
   uint32_t lotPictureDropped = 0;   // the neighbourhood view's lot picture draws left out (milestone 63)
   uint32_t effectsLeftOut = 0;      // effect draws left out of the ray tracing (milestone 114, sims3cam::leftOutPs)
   uint32_t alphaCutDraws = 0;       // captured draws given their shader's cut-out as an alpha test (milestones 67-68)
+  uint32_t alphaCutReplaced = 0;    // ...of them, or with no test, in place of the game's own test on another value (milestone 141)
   uint32_t fadeTestDraws = 0;       // captured draws whose "fade - alpha" test was turned onto the alpha (milestone 135)
   uint32_t solidFadeDraws = 0, solidFadeLeft = 0, solidFadeLogged = 0; uint64_t solidFadeLoggedPs[4] = {};   // trees near the camera drawn solid / left as the game's (milestone 137)
   // Each plant its own cut (milestone 139): the registers of the block the game last uploaded at c0
   // (SpeedTree's plants, three each), the draw's plants grouped by their cut, the first plant's fade
   // register, and whether the draw goes out once per group (drawn in DrawIndexedPrimitive)
   uint32_t instBlockRegs = 0, fadeReg = 0, fadePlants = 0; float fade0 = 0.f;
-  sims3cam::FadeGroups fadeG; bool fadeSplit = false, fadeDraw = false;
+  sims3cam::FadeGroups fadeG; bool fadeSplit = false;
   uint32_t fadeSplitDraws = 0, fadeSplitParts = 0, fadeSplitUnused = 0, fadeSplitLogged = 0;
   // The low-detail lots' ground plates as terrain (milestone 69): per model draw (by the buffers'
   // content and the draw range) the house's and the plate's own index buffers.

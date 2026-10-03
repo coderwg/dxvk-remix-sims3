@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-139).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-141).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -1954,6 +1954,11 @@ struct PsAnalysis {
   // shader hands over (VsConstantOutputs). fadeSampler: that sampler, or -1; fadeInput: the
   // interpolated component, semantic * 4 + component as in VsConstantOutputs.
   int8_t fadeSampler = -1, fadeInput = -1;
+  // What feeds the alpha output (milestone 141): bit sampler * 4 + channel, as the taint pass reads it. The
+  // game's alpha test is on that value; when the cut-out's sampler's alpha is not in it, the game tests
+  // something else (the hedges' PS 783b8225: the lit colour's luminance) and the runtime, which tests the
+  // albedo's alpha, needs the cut-out's test instead.
+  uint64_t alphaOutTaint = 0;
   bool valid = false;
 };
 
@@ -2154,6 +2159,7 @@ inline bool analyzePixelShader(const DWORD* tokens, size_t count, PsAnalysis& ou
     out.samplers[s].colorChannels = n;
   }
   if (out.maskSampler >= 0 && !out.maskKill && (colorTaint[0][3] & bit((uint32_t) out.maskSampler, 0))) out.maskAlpha = true;
+  out.alphaOutTaint = colorTaint[0][3];
   if (kills == 1 && killOk && killed.s >= 0 && killed.s < 16 && !out.samplers[killed.s].cube) { out.cutSampler = killed.s; out.cutA = killed.a; out.cutB = killed.b; }
   // the fade (milestone 135): oC0.w = an interpolated component - alpha(s), nothing else
   if (!flow && alphaOut.known && alphaOut.s >= 0 && alphaOut.s < 16 && !out.samplers[alphaOut.s].cube && alphaOut.in >= 0
