@@ -306,16 +306,25 @@ void sims3GlassOneSide(Sims3Hook& h, Dev* dev) {
 
 // Milestone 140, a diagnostic: the marked frame, one line per ray-traced draw -- its shaders, primitives, the albedo
 // stage and its texture, the alpha test, blending, depth writes and culling as sent, the vertex shader variant, and
-// the fade test's plants and groups (a hedge with a grey shell around it, run 243). Removed once answered.
+// the fade test's plants and groups (a hedge with a grey shell around it, run 243), and the albedo's runtime texture
+// hash (M140b: the user reads the shell's in the Remix menu, run 244). Removed once answered.
 inline void sims3MarkDraw(Sims3Hook& h, const DWORD* rs) {
   if (h.drawDropped || !h.drawCaptured || h.markDrawsLogged >= 1500u) return;
   ++h.markDrawsLogged;
   const int k = h.markStage;
   char fb[16] = "-";
   const char* fmt = (k >= 0 && k < 16 && h.boundTex[k]) ? sims3FormatName(h.boundFmt[k], fb, sizeof fb) : "none";
-  Logger::info(format_string("Sims 3 camera hook: mark frame %u draw %u: VS %016llx PS %016llx, %u primitives, albedo s%d %s %ux%u, alpha test %lu %lu/%lu, blend %lu %lu/%lu, z write %lu, cull %lu, variant %d, fade %s %u plants %u groups%s",
+  uint64_t texHash = 0;   // the runtime's texture hash of the albedo: level 0's bytes (the Remix menu shows it)
+#if SIMS3_HAVE_XXHASH
+  if (k >= 0 && k < 16 && h.boundTex[k] && h.boundKind[k] == 1) {
+    auto* tex = bridge_cast<Direct3DTexture9_LSS*>(h.boundTex[k]);
+    const uint8_t* data = tex ? tex->sims3Level0Data() : nullptr;
+    if (data) { const D3DSURFACE_DESC d = tex->getLevelDesc(0); texHash = (uint64_t) XXH3_64bits(data, bridge_util::calcTotalSizeOfRect(d.Width, d.Height, d.Format)); }
+  }
+#endif
+  Logger::info(format_string("Sims 3 camera hook: mark frame %u draw %u: VS %016llx PS %016llx, %u primitives, albedo s%d %s %ux%u texture %016llX, alpha test %lu %lu/%lu, blend %lu %lu/%lu, z write %lu, cull %lu, variant %d, fade %s %u plants %u groups%s",
                              h.frames + 1, h.markDrawsLogged, (unsigned long long) h.vsHash, (unsigned long long) h.psHash, h.drawIndexed ? h.drawPrims : 0u,
-                             k, fmt, (k >= 0 && k < 16) ? (unsigned) h.boundW[k] : 0u, (k >= 0 && k < 16) ? (unsigned) h.boundH[k] : 0u,
+                             k, fmt, (k >= 0 && k < 16) ? (unsigned) h.boundW[k] : 0u, (k >= 0 && k < 16) ? (unsigned) h.boundH[k] : 0u, (unsigned long long) texHash,
                              (unsigned long) rs[D3DRS_ALPHATESTENABLE], (unsigned long) rs[D3DRS_ALPHAFUNC], (unsigned long) rs[D3DRS_ALPHAREF],
                              (unsigned long) rs[D3DRS_ALPHABLENDENABLE], (unsigned long) rs[D3DRS_SRCBLEND], (unsigned long) rs[D3DRS_DESTBLEND],
                              (unsigned long) rs[D3DRS_ZWRITEENABLE], (unsigned long) rs[D3DRS_CULLMODE], h.autoVsRestore ? 1 : 0,
