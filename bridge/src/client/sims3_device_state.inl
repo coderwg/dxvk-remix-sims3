@@ -79,6 +79,9 @@ struct Sims3Hook {
   sims3cam::GameClock clock = {}; bool clockSaid = false, clockNight = false; uint32_t clockLogged = 0, lampsWorldDark = 0;
   float worldFade = 0.f;   // the street lamps' fade, 0..1: the game's night switch (milestones 54, 55, 128)
   uint32_t markDump = 0;               // frames left to log after the mark key
+  // milestone 132, a diagnostic: the marked frame draw by draw -- the camera the uploads since the previous draw carried
+  // (-1 no upload, 0 none found, 1 a main camera by its eye, 2 the main camera continued, 3 a reflection), their number, lines
+  int markUpKind = -1; float markUpEye[3] = {}; float markUpFov = 0.f; uint32_t markUploads = 0, markDrawsLogged = 0;
   sims3cam::Lamps lamps;               // the game's own lamps, forwarded as Remix API lights
   uint32_t lampEvents = 0;             // API light creations and destructions made for lamps
   // night from the sun (milestone 20d): the sun's luminance smoothed, the day reference, what was sent

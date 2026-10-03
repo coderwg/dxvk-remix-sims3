@@ -62,7 +62,7 @@ namespace {
 // Around every draw of the game (the hook's own restore quad is left alone). A reflection pass's
 // draw returns here, never sent (nothing was changed on the device for it).
 #define SIMS3_BEGIN_DRAW() \
-  if (sims3cam::enabled() && !g_sims3.ourDraw) { sims3BeginDraw(g_sims3, this, m_state.renderStates.data(), m_state.streamFreqs[0]); if (g_sims3.drawGlass && g_sims3.waveDumped < 32u && sims3cam::isWaterPs(g_sims3.psHash)) sims3DumpWaveMaps(g_sims3); if (g_sims3.drawDropped) return D3D_OK; }
+  if (sims3cam::enabled() && !g_sims3.ourDraw) { sims3BeginDraw(g_sims3, this, m_state.renderStates.data(), m_state.streamFreqs[0]); if (g_sims3.markDump == 2) sims3MarkDraw(g_sims3, this, m_state.renderStates.data()); if (g_sims3.drawGlass && g_sims3.waveDumped < 32u && sims3cam::isWaterPs(g_sims3.psHash)) sims3DumpWaveMaps(g_sims3); if (g_sims3.drawDropped) return D3D_OK; }
 #define SIMS3_END_DRAW() if (sims3cam::enabled() && !g_sims3.ourDraw) sims3EndDraw(g_sims3, this)
 #include "d3d9_vertexbuffer.h"
 #include "d3d9_vertexdeclaration.h"
@@ -3071,6 +3071,14 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetVertexShaderConstantF(UINT StartRe
       sims3cam::Camera cam;
       const sims3cam::Kind kind = sims3cam::classify(pConstantData, Vector4fCount, cam, h.eyeCamSet ? &h.eyeCam : nullptr);
       char msg[256];
+      if (h.markDump == 2) {   // milestone 132, a diagnostic: the camera this draw's own uploads carry
+        ++h.markUploads;
+        if (kind != sims3cam::Kind::None) {
+          h.markUpKind = kind == sims3cam::Kind::Reflection ? 3 : (cam.continued ? 2 : 1);
+          for (int q = 0; q < 3; ++q) h.markUpEye[q] = cam.pos[q];
+          h.markUpFov = cam.fovY;
+        } else if (h.markUpKind < 0) h.markUpKind = 0;
+      }
       if (kind == sims3cam::Kind::Main) {
         // the reference for a camera sent without its eye is only ever one verified by its eye (milestone 123)
         if (cam.continued) ++h.continuedUploads;
