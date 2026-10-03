@@ -1348,31 +1348,6 @@ int main() {
         CHECK(sheetOk && d2 == 0 && d3 == 0 && d4 == 0 && keep.size() == 1 && keep[0],
               "glass (M104): a sheet's back side on the other diagonal is left out (%u of 4), a pane 2 cm thick keeps both sides (%u), coplanar sheets facing one way are kept (%u), a degenerate triangle is kept (%u)", d1, d2, d3, d4);
       }
-      // milestone 110: the glass survey -- distinct colours, none a material marker's, every entry glass (named or cube-only),
-      // the known objects (the shower door, the cars' windows, the mirrors) left out
-      {
-        bool surveyOk = true; int surveyRead = 0;
-        const size_t n = sizeof kGlassSurvey / sizeof kGlassSurvey[0];
-        for (size_t i = 0; i < n; ++i) {
-          const GlassSurvey& e = kGlassSurvey[i];
-          for (size_t j = 0; j < i; ++j) if (kGlassSurvey[j].hash == e.hash) surveyOk = false;
-          if (e.colour != 0xFFFF80C0u) surveyOk = false;   // all pink (milestone 118)
-          if (e.colour == kMirrorMarkerColour) surveyOk = false;
-          for (int m = 0; m < kGlassMaterials; ++m) if (e.colour == kGlassMaterial[m].colour) surveyOk = false;
-          for (int m = 0; m < kWaterMaterials; ++m) if (e.colour == kWaterMaterial[m].colour) surveyOk = false;
-          if (!namedGlass(e.hash)) {
-            char nm[32]; snprintf(nm, sizeof nm, "ps_%016llx", (unsigned long long) e.hash);
-            std::vector<DWORD> st; PsAnalysis sa2;
-            if (!loadShader(nm, st) || !analyzePixelShader(st.data(), st.size(), sa2) || !isGlassShader(sa2)) surveyOk = false; else ++surveyRead;
-          }
-        }
-        bool knownOut = true;
-        for (uint64_t known : { 0x572773cfbd618a3aull, 0x45c7a7cd511b5233ull /* the hair outdoors */, 0x66516d5db94ab307ull, 0x86dad57d0dc73989ull, 0x3197bfdef2330503ull,
-                                0x98e23f47d947eb22ull, 0x85e9c3381d5bf054ull, 0xefdac7f048e21b1full, 0x910a56f24813e248ull, 0xac4184cee232ed04ull,
-                                0x2b1da1b45f51d3f9ull, 0xa9336d35a25143aeull, 0xdb28eb0c60fdb2fbull, 0x29c6b22234617c1aull }) if (glassSurvey(known)) knownOut = false;
-        CHECK(surveyOk && n == 4 && knownOut,
-              "glass survey (M110-M118): 4 unidentified glass shaders, all pink, no material marker's colour; the unnamed ones cube-only glass (%d dumps read); the door, the cars' windows, the mirrors and runs 218-221's ten finds not surveyed", surveyRead);
-      }
       // milestones 82, 101: the reflective sheet's PS 86dad57d reads only a cube; under the stencil test it is a mirror's face
       std::vector<DWORD> mp; PsAnalysis ma;
       const bool mirrorCube = !loadShader("ps_86dad57d0dc73989", mp) || (analyzePixelShader(mp.data(), mp.size(), ma) && isGlassShader(ma));

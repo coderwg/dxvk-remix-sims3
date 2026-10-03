@@ -351,21 +351,6 @@ bool sims3EnsureGlassMarker(Sims3Hook& h, Dev* dev, int m) {
 }
 template<typename Dev>
 bool sims3EnsureMirrorMarker(Sims3Hook& h, Dev* dev) { return sims3EnsureMarker(dev, h.mirrorMarker, h.mirrorMarkerFailed, sims3cam::kMirrorMarkerColour, sims3cam::kMirrorMarkerHash, "mirror"); }
-// The glass survey's marker for the bound pixel shader (milestone 110; one run), or nullptr when it is
-// not surveyed; made on its first draw, the log naming its colour, shader and frame.
-template<typename Dev>
-IDirect3DTexture9* sims3SurveyMarker(Sims3Hook& h, Dev* dev) {
-  const sims3cam::GlassSurvey* s = sims3cam::glassSurvey(h.psHash);
-  if (!s) return nullptr;
-  const size_t i = (size_t) (s - sims3cam::kGlassSurvey);
-  if (!h.surveyMarkers[i] && !h.surveyFailed[i]) {
-    char what[160];
-    snprintf(what, sizeof what, "glass survey: %s = PS %016llx (first drawn at frame %u, VS %016llx);", s->colourName, (unsigned long long) h.psHash, h.frames + 1, (unsigned long long) h.vsHash);
-    sims3EnsureMarker(dev, h.surveyMarkers[i], h.surveyFailed[i], s->colour, 0, what);
-  }
-  if (h.surveyMarkers[i]) ++h.surveyDraws;
-  return h.surveyMarkers[i];
-}
 template<typename Dev>
 bool sims3EnsureWaterMarker(Sims3Hook& h, Dev* dev, int m) {
   const sims3cam::WaterMaterial& w = sims3cam::kWaterMaterial[m];

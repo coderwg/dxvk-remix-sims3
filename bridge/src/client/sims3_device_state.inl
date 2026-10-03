@@ -215,10 +215,7 @@ struct Sims3Hook {
   // version), the hashes the Sims3GlassBumps mod has a material for (read once), the ones seen without
   std::unordered_map<uint64_t, uint64_t> bumpHashes; std::unordered_set<uint64_t> bumpMaterials, bumpWritten;
   bool bumpModRead = false; uint32_t bumpDraws = 0, bumpPending = 0;
-  // the glass survey (milestone 110; one run): a flat marker per sims3cam::kGlassSurvey entry
-  IDirect3DTexture9* surveyMarkers[sims3cam::kGlassSurveyMax] = {};
-  bool surveyFailed[sims3cam::kGlassSurveyMax] = {}; uint32_t surveyDraws = 0;
-  uint64_t markGlassPs[32] = {}; uint32_t markGlassCount = 0;   // the glass shaders named at the mark (milestone 113, with the survey)
+  uint64_t markGlassPs[32] = {}; uint32_t markGlassCount = 0;   // the glass shaders named at the mark (milestone 113)
   uint32_t waveDumpedIds[32] = {}; uint32_t waveDumped = 0;   // the game's wave maps looked at (milestone 93): the mod's ripple maps' source
   // a zero-thickness wall's back side (milestone 97): each wall piece's triangle keys (cached by buffers,
   // versions and range), and this frame's kept wall triangles per vertex buffer

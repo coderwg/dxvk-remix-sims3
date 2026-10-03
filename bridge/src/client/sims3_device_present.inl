@@ -91,8 +91,6 @@ static void sims3LogStats(bool withTable) {
     snprintf(msg, sizeof msg, "Sims 3 camera hook:   bumpy glass (milestone 109): %u draws with their own bump map (%u materials in Sims3GlassBumps%s), %u as the clear glass while their bump map has none (%u bump maps seen without one)",
              h.bumpDraws, (unsigned) h.bumpMaterials.size(), h.bumpModRead ? "" : ", not read yet", h.bumpPending, (unsigned) h.bumpWritten.size());
     Logger::info(msg);
-    snprintf(msg, sizeof msg, "Sims 3 camera hook:   glass survey (milestone 110, one run): %u draws in their survey colour", h.surveyDraws);
-    Logger::info(msg);
     snprintf(msg, sizeof msg, "Sims 3 camera hook:   glass with its object's place (milestone 119): %u draws sent with a WORLD transform following the object, %u not placed (their reasons logged)",
              h.worldDraws, h.worldFailed);
     Logger::info(msg);

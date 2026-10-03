@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-145).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-146).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -2289,36 +2289,11 @@ inline const LeftOutPs kLeftOutPs[] = {
   { 0xa9336d35a25143aeull, "the sound waves from speakers: ps_2_0, signed bump map s2 at TEXCOORD4, the scene behind s1, colour s3 (VS 648e326d)" },
 };
 inline const LeftOutPs* leftOutPs(uint64_t hash) { return findByHash(kLeftOutPs, hash); }
-// ---- the glass survey (milestone 110; one run, goes once answered) --------------------------------
-// The user: "can you also color code all the unknown glass so i could identify where they all are?"
-// Every glass shader whose objects are not known yet -- all but the shower door, the cars' windows
-// and the mirrors -- goes out in a flat colour of its own, no material (the runtime shows the marker
-// as an opaque albedo); the hook's log names each colour's shader as it first appears. Run 218 found six,
-// now out of the survey (the user: "remove the survey colors from the known ones - and use the more
-// obvious colors on the unknown ones"): 3197bfde a window's side facing a room, 98e23f47 its side facing
-// outdoors, 85e9c338 a decorative object on a table, efdac7f0 glass furniture, 910a56f2 an unplayable
-// lot's windows, ac4184ce its dome; run 219 three more: 2b1da1b4 the plumbob over the active Sim,
-// a9336d35 the sound waves from speakers (an effect, not glass), db28eb0c an unplayable lot's windows;
-// run 221 one more: 29c6b222 the skill progress pill over a Sim's head (cooking) -- not glass since
-// milestone 117 (the user: "like the game, its own colours"): out of the glass table, it goes out as
-// any object, its texture as the albedo, blended as the game draws it. The oil bottle the user
-// suspected is no glass at all (run 220's marks: an ordinary object).
-// At the mark the log names every glass shader drawn in that frame (milestone 113, goes with the
-// survey). Since milestone 118 every glass still unidentified is pink, until the user comes across it
-// (the user: "lets mark them all pink for now until i eventually come across them"); the mark's log
-// line names the shader. A window's two sides are two draws: the side facing
-// a room is 3197bfde, the side facing outdoors 98e23f47 -- a window on an indoor wall is 3197bfde on
-// both sides, one on a free-standing outdoor wall 98e23f47 on both (the user, run 218).
-struct GlassSurvey { uint64_t hash; uint32_t colour; const char* colourName; };
-inline constexpr size_t kGlassSurveyMax = 16;
-inline const GlassSurvey kGlassSurvey[] = {   // all pink since milestone 118: the mark names which
-  { 0x8fe3ce7c5fbc6234ull, 0xFFFF80C0u, "PINK" },   // bumpy glass, its colour s3 x c10 (VS c96f1465 in run 219, as an unplayable lot's windows)
-  { 0x8ff495765d26a6fdull, 0xFFFF80C0u, "PINK" },   // clear, the scene behind, as the table ornament (VS d251510d; at home after loading)
-  { 0xd03ebab11453bca1ull, 0xFFFF80C0u, "PINK" },   // a small glass on a car's atlas (first drawn with a parked car's windows, run 220)
-  { 0x7eeb349a23cbefefull, 0xFFFF80C0u, "PINK" },   // clear, the scene behind, a colour texture over the reflection (VS 6b921b44)
-};
-static_assert(sizeof kGlassSurvey / sizeof kGlassSurvey[0] <= kGlassSurveyMax, "the hook keeps 16 survey markers");
-inline const GlassSurvey* glassSurvey(uint64_t hash) { return findByHash(kGlassSurvey, hash); }
+// (The glass survey, milestones 110 to 118, showed every glass shader not yet identified in a flat colour
+// of its own -- pink at the end -- until the user came across it (runs 218-221 named ten). Retired in
+// milestone 146: the four left, 8fe3ce7c, 8ff49576, d03ebab1 and 7eeb349a, go out as their named glass.
+// A window's two sides are two draws: 3197bfde facing a room, 98e23f47 facing outdoors -- a window on an
+// indoor wall is 3197bfde on both sides, one on a free-standing outdoor wall 98e23f47 on both, run 218.)
 // The material hashes a Remix mod names (def Material "mat_<16 hex>"): which of the game's bump maps
 // the Sims3GlassBumps mod has a bumpy glass for (milestone 109).
 inline std::vector<uint64_t> modMaterialHashes(const std::string& usda) {
