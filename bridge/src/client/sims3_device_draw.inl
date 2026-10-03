@@ -332,10 +332,6 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
   if (sims3cam::leftOutPs(h.psHash)) { h.drawDropped = true; h.drawCaptured = false; h.dropWhy = "effect left out"; ++h.effectsLeftOut; return false; }
   // a mirror's face (milestone 101, sims3cam::isReflectiveSheet): the mirror material below
   h.reflectiveSheet = h.psAuto && h.psAuto->valid && sims3cam::isReflectiveSheet(*h.psAuto, rs[D3DRS_STENCILENABLE]);
-  // a glass the game draws twice, unblended then blended (milestone 104, NamedGlass::blendedPassOnly): the unblended pass left out
-  if (const sims3cam::NamedGlass* g = sims3cam::namedGlass(h.psHash)) if (g->blendedPassOnly && !rs[D3DRS_ALPHABLENDENABLE]) {
-    h.drawDropped = true; h.drawCaptured = false; h.dropWhy = "glass's unblended pass"; ++h.glassPassDropped; return false;
-  }
   // a zero-thickness wall's back side (milestone 97, sims3cam::isWallBackSide): left out
   if (h.drawIndexed && h.drawType == D3DPT_TRIANGLELIST && h.wallLayout.valid && h.vsWall && h.vsWall->valid && sims3WallBackSide(h, dev)) {
     h.drawDropped = true; h.drawCaptured = false; h.dropWhy = "wall back side"; ++h.wallBackDropped; return false;

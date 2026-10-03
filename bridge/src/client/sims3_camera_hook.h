@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-133).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-134).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -927,12 +927,15 @@ inline const NeverCapture kNeverCapture[] = {
   // until milestone 131: their pixel shaders are the game's own fakes now, kGameFakes.)
   // The Sims' hair soft-edge pass (milestones 131, 133; found in run 171): each Sim's hair is drawn
   // twice -- alpha-tested and opaque, then the same mesh blended (SRCALPHA / INVSRCALPHA, no depth
-  // write) for its soft edges. The vertex shader differs from Sim to Sim (e12c352d, a4ca9554: the
-  // skinning and morph variants -- M131 keyed it by one of them); the PIXEL shader is the hair's.
-  // Captured, the second copy was see-through, and the runtime gives see-through surfaces no motion:
-  // it trailed behind a walking Sim, a second head (run 237). The opaque pass is the hair.
+  // write) for its soft edges. The vertex shader differs from Sim to Sim (e12c352d, a4ca9554, a77613ea:
+  // the skinning and morph variants -- M131 keyed it by one of them); the PIXEL shader is the hair's:
+  // 57a5a049 and 00e85de9 indoors, 45c7a7cd outdoors (the same shader with the sun's shadow map s5 and
+  // the fog; run 238 -- until milestone 134 it was taken for a parked car's windows, M102, and its
+  // hair went out as car glass). Captured, the second copy was see-through, and the runtime gives
+  // see-through surfaces no motion: it trailed behind a walking Sim (run 237). The opaque pass is the hair.
   { 0x57a5a049ffa47770ull, "the Sims' hair soft-edge pass (pixel shader; the blended copy of the alpha-tested hair)", true },
   { 0x00e85de9a42890fbull, "the Sims' hair soft-edge pass (pixel shader; the blended copy of the alpha-tested hair)", true },
+  { 0x45c7a7cd511b5233ull, "the Sims' hair soft-edge pass outdoors (pixel shader with the sun's shadow map; the blended copy)", true },
   // The lot overlays drawn right after each lot ground patch (milestone 18c, run 109): three
   // families with NO texture at all (alpha-blended, depth write off), one draw per lot patch --
   // the game's shading / fade quads over the lot -- and their textured sibling that draws the
@@ -2009,11 +2012,10 @@ inline const GlassMaterial kGlassMaterial[kGlassMaterials] = {
   { "car glass", 0xFFA0B4ACu, 0x8A5EDD7D16D8E741ull },   // grey-green: thin, tinted (0.72, 0.78, 0.75)
   { "plumbob", 0xFF40E060u, 0x55B2C95B88DA3E67ull },     // green: thin green glass (milestone 116; a solid gem trailed the Sim)
 };
-// blendedPassOnly: the game draws the glass twice a frame, the same mesh unblended with depth writes,
-// then blended (a parked car's windows, run 215); only the blended pass goes out (milestone 104),
-// or the windows are two sheets in one place. bumpStage: the sampler of a bumpy glass's bump map;
-// bumpScaleReg: the pixel shader constant whose x scales its slopes (-1: none).
-struct NamedGlass { uint64_t hash; const char* name; uint8_t material; bool blendedPassOnly = false; int8_t bumpStage = -1; int8_t bumpScaleReg = -1; };
+// bumpStage: the sampler of a bumpy glass's bump map; bumpScaleReg: the pixel shader constant whose x
+// scales its slopes (-1: none). (A blendedPassOnly flag for "the parked car's windows", 45c7a7cd, went in
+// milestone 134: that shader is the Sims' hair outdoors.)
+struct NamedGlass { uint64_t hash; const char* name; uint8_t material; int8_t bumpStage = -1; int8_t bumpScaleReg = -1; };
 inline const NamedGlass kNamedGlass[] = {
   // form 2, clear: the scene behind, no normal map
   { 0x2b1da1b45f51d3f9ull, "the plumbob over the active Sim (run 219), ps_2_0: reflection, highlights, Fresnel, the scene behind (s1) x c10 "
@@ -2027,12 +2029,10 @@ inline const NamedGlass kNamedGlass[] = {
   // form 2, bumpy: a normal map bends the scene behind -- its x in alpha, its y in blue, at TEXCOORD5,
   // the slopes scaled by c14.x, z rebuilt (n = s x T - s y B + z N, B = N x T times the tangent's w)
   { 0x572773cfbd618a3aull, "bumpy glass, a shower door: bump map s2, the scene behind (s1) read through it, colour s3 over the reflection "
-                           "(VS b51f1577, skinned: the door swings; runs 192-217)", kClearGlass, false, 2, 14 },
-  { 0x8fe3ce7c5fbc6234ull, "bumpy glass: as 572773cf, its colour s3 x c10 tinting the scene behind (16 runs)", kClearGlass, false, 2, 14 },
+                           "(VS b51f1577, skinned: the door swings; runs 192-217)", kClearGlass, 2, 14 },
+  { 0x8fe3ce7c5fbc6234ull, "bumpy glass: as 572773cf, its colour s3 x c10 tinting the scene behind (16 runs)", kClearGlass, 2, 14 },
   // form 3
   { 0xac4184cee232ed04ull, "glass: colour texture s2 x c10, gloss s3, irradiance cube s1 (VS d7fede81; an unplayable lot's dome, runs 212, 218)", kClearGlass },
-  { 0x45c7a7cd511b5233ull, "car glass, a parked car's windows: the car's paint shader blended, colour atlas s2 with its alpha, normal map s3, "
-                           "reflection cube s6 (VS a77613ea; run 213)", kCarGlass, true },
   { 0xd03ebab11453bca1ull, "car glass, a distant car's windows: ps_2_0 reflection, Fresnel, highlights, the car's atlas s1 at a decoded UV, "
                            "constant alpha c6.w (VS 4e9298de; runs 159, 205)", kCarGlass },
   // form 1, named for its material

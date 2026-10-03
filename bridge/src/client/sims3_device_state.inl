@@ -234,7 +234,7 @@ struct Sims3Hook {
   struct GlassSide { IDirect3DIndexBuffer9* ib = nullptr; uint32_t prims = 0, dropped = 0; };
   std::unordered_map<uint64_t, GlassSide> glassSides;
   IDirect3DIndexBuffer9* glassIb = nullptr; uint32_t glassPrims = 0;
-  uint32_t glassSideDraws = 0, glassSideSkipped = 0, glassSideLogged = 0, glassPassDropped = 0; uint64_t glassSideTris = 0;
+  uint32_t glassSideDraws = 0, glassSideSkipped = 0, glassSideLogged = 0; uint64_t glassSideTris = 0;
   const D3DVERTEXELEMENT9* declElems = nullptr;   // the bound declaration's elements (its POSITION, for the back side; its inputs, for the place)
   // glass carries its object's place (milestone 119, sims3GlassWorld): the vertex shaders' bytecode by
   // hash, whether this draw has the hook's WORLD transform, counts

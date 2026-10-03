@@ -1147,16 +1147,17 @@ int main() {
             "glass (M81, M87, M100, M109, M117): named glass ac4184ce clear, the shower door 572773cf bumpy; the skill pill 29c6b222 not glass (its own colours), the hair pass 57a5a049, the light-beam card 7304aaea and the cube-only pane 3197bfde are not named");
       // milestones 102, 105, 107: the named forms 2 and 3 are not cube-only, so the name is what makes them glass
       bool farOk = true;
-      for (uint64_t hsh : { 0x85e9c3381d5bf054ull, 0x45c7a7cd511b5233ull, 0xd03ebab11453bca1ull, 0x2b1da1b45f51d3f9ull, 0x8ff495765d26a6fdull,
+      for (uint64_t hsh : { 0x85e9c3381d5bf054ull, 0xd03ebab11453bca1ull, 0x2b1da1b45f51d3f9ull, 0x8ff495765d26a6fdull,
                             0x7eeb349a23cbefefull, 0x8fe3ce7c5fbc6234ull, 0x910a56f24813e248ull }) {
         char n[32]; snprintf(n, sizeof n, "ps_%016llx", (unsigned long long) hsh);
         std::vector<DWORD> sb; PsAnalysis sa;
         if (loadShader(n, sb) && (!analyzePixelShader(sb.data(), sb.size(), sa) || isGlassShader(sa))) farOk = false;
       }
-      const NamedGlass* doorKin = namedGlass(0x85e9c3381d5bf054ull); const NamedGlass* car = namedGlass(0x45c7a7cd511b5233ull); const NamedGlass* carFar = namedGlass(0xd03ebab11453bca1ull);
-      const NamedGlass* passing = namedGlass(0x66516d5db94ab307ull);
-      CHECK(farOk && doorKin && doorKin->material == kClearGlass && car && car->material == kCarGlass && carFar && carFar->material == kCarGlass && passing && passing->material == kCarGlass && !namedGlass(0x0c2df3be933b2117ull),
-            "glass (M102, M105): 85e9c338 clear glass; car glass: a passing car's 66516d5d, a parked car's 45c7a7cd, a distant car's d03ebab1; the car body 0c2df3be not named; 85e9c338 / 45c7a7cd / d03ebab1 not cube-only");
+      const NamedGlass* doorKin = namedGlass(0x85e9c3381d5bf054ull); const NamedGlass* carFar = namedGlass(0xd03ebab11453bca1ull);
+      const NamedGlass* passing = namedGlass(0x66516d5db94ab307ull); const NeverCapture* hairOut = findNeverCapture(0x45c7a7cd511b5233ull);
+      CHECK(farOk && doorKin && doorKin->material == kClearGlass && carFar && carFar->material == kCarGlass && passing && passing->material == kCarGlass && !namedGlass(0x0c2df3be933b2117ull)
+            && !namedGlass(0x45c7a7cd511b5233ull) && hairOut && hairOut->blendedOnly,
+            "glass (M102, M105, M134): 85e9c338 clear glass; car glass: a passing car's 66516d5d, a distant car's d03ebab1; 0c2df3be not named; 45c7a7cd is the Sims' hair outdoors, not glass (its blended copy never sent); 85e9c338 / d03ebab1 not cube-only");
       // milestones 107, 109: the survey's glass -- clear; bumpy with a normal map; objects fading in are not glass
       auto glassMat = [](uint64_t hsh) { const NamedGlass* g = namedGlass(hsh); return g ? (int) g->material : -1; };
       CHECK(farOk && glassMat(0x2b1da1b45f51d3f9ull) == kPlumbob && glassMat(0x8ff495765d26a6fdull) == kClearGlass && glassMat(0x7eeb349a23cbefefull) == kClearGlass
@@ -1202,9 +1203,8 @@ int main() {
         std::vector<float> flat;   // a degenerate triangle has no plane and is kept
         tri(flat, { 0,0,0, 1,0,0, 2,0,0 });
         const uint32_t d4 = glassFrontTriangles(flat.data(), 1, keep);
-        const NamedGlass* carPass = namedGlass(0x45c7a7cd511b5233ull);
-        CHECK(sheetOk && d2 == 0 && d3 == 0 && d4 == 0 && keep.size() == 1 && keep[0] && carPass && carPass->blendedPassOnly && !namedGlass(0x572773cfbd618a3aull)->blendedPassOnly,
-              "glass (M104): a sheet's back side on the other diagonal is left out (%u of 4), a pane 2 cm thick keeps both sides (%u), coplanar sheets facing one way are kept (%u), a degenerate triangle is kept (%u); the parked cars' 45c7a7cd is glass on its blended pass only", d1, d2, d3, d4);
+        CHECK(sheetOk && d2 == 0 && d3 == 0 && d4 == 0 && keep.size() == 1 && keep[0],
+              "glass (M104): a sheet's back side on the other diagonal is left out (%u of 4), a pane 2 cm thick keeps both sides (%u), coplanar sheets facing one way are kept (%u), a degenerate triangle is kept (%u)", d1, d2, d3, d4);
       }
       // milestone 110: the glass survey -- distinct colours, none a material marker's, every entry glass (named or cube-only),
       // the known objects (the shower door, the cars' windows, the mirrors) left out
@@ -1225,7 +1225,7 @@ int main() {
           }
         }
         bool knownOut = true;
-        for (uint64_t known : { 0x572773cfbd618a3aull, 0x45c7a7cd511b5233ull, 0x66516d5db94ab307ull, 0x86dad57d0dc73989ull, 0x3197bfdef2330503ull,
+        for (uint64_t known : { 0x572773cfbd618a3aull, 0x45c7a7cd511b5233ull /* the hair outdoors */, 0x66516d5db94ab307ull, 0x86dad57d0dc73989ull, 0x3197bfdef2330503ull,
                                 0x98e23f47d947eb22ull, 0x85e9c3381d5bf054ull, 0xefdac7f048e21b1full, 0x910a56f24813e248ull, 0xac4184cee232ed04ull,
                                 0x2b1da1b45f51d3f9ull, 0xa9336d35a25143aeull, 0xdb28eb0c60fdb2fbull, 0x29c6b22234617c1aull }) if (glassSurvey(known)) knownOut = false;
         CHECK(surveyOk && n == 4 && knownOut,
