@@ -482,6 +482,18 @@ int main() {
     CHECK(fadeAlphaTest(D3DCMP_GREATER, 0, 0.5f, ref) == D3DCMP_LESSEQUAL && ref == 127, "fade: 0.5 - alpha > 0 keeps alpha <= 127 (ref %u)", ref);
     CHECK(fadeAlphaTest(D3DCMP_LESS, 0, 0.f, ref) == D3DCMP_GREATEREQUAL && ref == 1, "fade: 0 - alpha < 0 keeps alpha above 0, >= 1 (ref %u)", ref);
     CHECK(fadeAlphaTest(D3DCMP_EQUAL, 1, 0.33f, ref) == 0u && fadeAlphaTest(D3DCMP_ALWAYS, 1, 0.33f, ref) == 0u, "fade: other comparisons left as the game's");
+    // milestone 139: each plant its own cut -- traced batches (native2 trace) grouped
+    {
+      const float whole[4] = { 0.3313726f, 0.3313726f, 0.3313726f, 0.3313726f }, mixed[3] = { 0.3432f, 0.4654f, 0.4725f }, pair[3] = { 0.6031f, 0.4204f, 0.4204f }, gone[2] = { 0.3313726f, 1.2f }, allGone[2] = { 1.2f, 1.5f };
+      const FadeGroups a = groupFades(D3DCMP_LESS, 1, whole, 4), b = groupFades(D3DCMP_LESS, 1, mixed, 3), c = groupFades(D3DCMP_LESS, 1, pair, 3);
+      const FadeGroups d = groupFades(D3DCMP_LESS, 1, gone, 2), e = groupFades(D3DCMP_LESS, 1, allGone, 2), f = groupFades(D3DCMP_EQUAL, 1, whole, 4);
+      CHECK(a.func == D3DCMP_GREATEREQUAL && a.count == 1 && a.ref[0] == 84 && a.members[0] == 0x0F && !a.split(), "plants: four whole plants are one group, >= 84, one draw");
+      CHECK(b.count == 3 && b.ref[0] == 87 && b.ref[1] == 118 && b.ref[2] == 120 && b.split(), "plants: fades 0.3432 / 0.4654 / 0.4725 are three cuts (>= %u, %u, %u)", b.ref[0], b.ref[1], b.ref[2]);
+      CHECK(c.count == 2 && c.members[0] == 0x01 && c.members[1] == 0x06 && c.split(), "plants: 0.6031 / 0.4204 / 0.4204 are two groups, the last two together");
+      CHECK(d.count == 1 && d.out == 0x02 && d.members[0] == 0x01 && d.split(), "plants: a plant faded out entirely belongs to no group, and the draw is split to leave it out");
+      CHECK(e.func == D3DCMP_NEVER && e.count == 0 && !e.split(), "plants: every plant faded out -> never drawn");
+      CHECK(f.func == 0u && f.count == 0, "plants: a test that cannot be turned groups nothing");
+    }
     std::vector<DWORD> leafPs, branchPs, leafVs, branchVs, lodPs, objPs;
     if (loadShader("ps_7e48acce64547cd0", leafPs) && loadShader("ps_2746661ff9d95c1d", branchPs) && loadShader("vs_799a26fa907d36d7", leafVs) && loadShader("vs_854fd850257ee36f", branchVs)) {
       PsAnalysis a, b;
@@ -490,8 +502,8 @@ int main() {
       CHECK(analyzePixelShader(branchPs.data(), branchPs.size(), b) && b.fadeSampler == 1 && b.fadeInput == kSemColor0 * 4 + 3 && b.cutSampler == -1,
             "fade: branches PS 2746661f -> alpha = COLOR0.w - alpha(s1) (sampler %d, input %d)", b.fadeSampler, b.fadeInput);
       VsConstantOutputs lv, bv;
-      CHECK(analyzeVertexConstantOutputs(leafVs.data(), leafVs.size(), lv) && lv.c[1 * 4 + 3] == 2 * 4 + 1 && lv.c[1 * 4 + 2] == -1,
-            "fade: leaves VS 799a26fa hands c2.y (the first instance's fade) over in TEXCOORD1.w (c%d), its z computed", lv.c[7]);
+      CHECK(analyzeVertexConstantOutputs(leafVs.data(), leafVs.size(), lv) && lv.c[1 * 4 + 3] == 2 * 4 + 1 && lv.rel[1 * 4 + 3] && lv.c[1 * 4 + 2] == -1,
+            "fade: leaves VS 799a26fa hands c2[a0].y (the first instance's fade, read relatively) over in TEXCOORD1.w (c%d), its z computed", lv.c[7]);
       CHECK(analyzeVertexConstantOutputs(branchVs.data(), branchVs.size(), bv) && bv.c[kSemColor0 * 4 + 3] == 2 * 4 + 1,
             "fade: branches VS 854fd850 hands c2.y over in COLOR0.w (c%d)", bv.c[kSemColor0 * 4 + 3]);
     } else SKIP("SpeedTree shader dumps (ps_7e48acce / ps_2746661f / vs_799a26fa / vs_854fd850) not found");
@@ -570,7 +582,8 @@ int main() {
         VsConstantOutputs lv, bv;
         const SolidFade* leavesNear = findSolidFade(0x714d5dae31da4378ull); const SolidFade* branchesNear = findSolidFade(0xd3759d8d17c63b92ull); const SolidFade* frondsNear = findSolidFade(0xca3faba5c3d2dbc2ull);
         CHECK(leavesNear && branchesNear && frondsNear && analyzeVertexConstantOutputs(leafFadeVs.data(), leafFadeVs.size(), lv) && analyzeVertexConstantOutputs(branchFadeVs.data(), branchFadeVs.size(), bv)
-              && lv.c[leavesNear->fadeInput] == 2 * 4 + 1 && bv.c[branchesNear->fadeInput] == 2 * 4 + 1 && bv.c[frondsNear->fadeInput] == 2 * 4 + 1 && !findSolidFade(0x7e48acce64547cd0ull),
+              && lv.c[leavesNear->fadeInput] == 2 * 4 + 1 && bv.c[branchesNear->fadeInput] == 2 * 4 + 1 && bv.c[frondsNear->fadeInput] == 2 * 4 + 1 && !findSolidFade(0x7e48acce64547cd0ull)
+              && lv.c[kSemColor0 * 4] == 126 * 4 && !lv.rel[kSemColor0 * 4] && lv.rel[leavesNear->fadeInput],
               "near trees: VS 1b5224b7 hands c2.y over in TEXCOORD1.w, 01729eeb in COLOR0.w -- the fade the table reads; the opaque leaves' PS is not in the table");
         bool samplersOk = true;
         for (const SolidFade& f : kSolidFades) {

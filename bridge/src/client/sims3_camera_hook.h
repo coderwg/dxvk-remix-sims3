@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-138).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-139).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -827,9 +827,10 @@ inline bool appendConstantRead(std::vector<DWORD>& t, uint32_t reg) {
 // Per interpolated component (semantic * 4 + component: TEXCOORD0-15 0-63, COLOR0-1 64-71), the
 // float constant the vertex shader copies into it with a plain MOV, register * 4 + component, or
 // -1. A relatively addressed copy (c2[a0.w].y: shader instancing, three registers per instance)
-// names its base register -- the first instance's. SpeedTree hands each tree's fade over this way.
+// names its base register -- the first instance's -- and is marked rel. SpeedTree hands each
+// tree's fade over this way.
 inline constexpr int kSemColor0 = 16;
-struct VsConstantOutputs { int16_t c[72]; VsConstantOutputs() { for (int16_t& v : c) v = -1; } };
+struct VsConstantOutputs { int16_t c[72]; bool rel[72]; VsConstantOutputs() { for (int16_t& v : c) v = -1; for (bool& r : rel) r = false; } };
 
 inline bool analyzeVertexConstantOutputs(const DWORD* tokens, size_t count, VsConstantOutputs& out) {
   out = VsConstantOutputs();
@@ -855,8 +856,10 @@ inline bool analyzeVertexConstantOutputs(const DWORD* tokens, size_t count, VsCo
     if (s < 0) return true;
     const uint32_t src = len >= 2 ? tokens[pos + 2] : 0u;
     const bool copy = op == 0x01u && len >= 2 && dxsoRegType(src) == 2u && ((src >> 24) & 0xFu) == 0u && ((dest >> 20) & 0xFu) == 0u;   // MOV o, c: no source or result modifier
-    for (uint32_t c = 0; c < 4; ++c) if (mask & (1u << c))
+    for (uint32_t c = 0; c < 4; ++c) if (mask & (1u << c)) {
       out.c[s * 4 + c] = copy ? (int16_t) (dxsoRegNum(src) * 4 + ((src >> (16 + 2 * c)) & 3u)) : (int16_t) -1;
+      out.rel[s * 4 + c] = copy && (src & (1u << 13)) != 0u;
+    }
     return true;
   });
   if (flow) out = VsConstantOutputs();
@@ -2205,6 +2208,34 @@ inline uint32_t fadeAlphaTest(uint32_t func, uint32_t ref, float fade, uint32_t&
   if (r < 0.f) return (uint32_t) D3DCMP_NEVER;
   outRef = r >= 255.f ? 255u : (uint32_t) r;
   return (uint32_t) D3DCMP_LESSEQUAL;
+}
+
+// The plants of a SpeedTree draw grouped by their cut (milestone 139). SpeedTree draws up to eight
+// plants at once, each with its own fade (shader instancing); each plant's fade turned into the
+// runtime's test (fadeAlphaTest), plants with the same reference form a group, and a plant faded
+// out entirely (D3DCMP_NEVER) belongs to none (out). func: the comparison of every group -- 0 when
+// the game's test cannot be turned, D3DCMP_NEVER when every plant is faded out.
+struct FadeGroups {
+  static constexpr uint32_t kPlants = 8;
+  uint32_t func = 0, count = 0, ref[kPlants] = {};
+  uint8_t members[kPlants] = {}, out = 0;
+  bool split() const { return count > 1 || (count == 1 && out != 0); }   // the draw goes out once per group
+};
+inline FadeGroups groupFades(uint32_t gameFunc, uint32_t gameRef, const float* fades, uint32_t n) {
+  FadeGroups g;
+  for (uint32_t i = 0; i < n && i < FadeGroups::kPlants; ++i) {
+    uint32_t r = 0;
+    const uint32_t f = fadeAlphaTest(gameFunc, gameRef, fades[i], r);
+    if (!f) return FadeGroups();
+    if (f == (uint32_t) D3DCMP_NEVER) { g.out |= (uint8_t) (1u << i); continue; }
+    g.func = f;
+    uint32_t j = 0;
+    while (j < g.count && g.ref[j] != r) ++j;
+    if (j == g.count) g.ref[g.count++] = r;
+    g.members[j] |= (uint8_t) (1u << i);
+  }
+  if (!g.func && g.out) g.func = (uint32_t) D3DCMP_NEVER;
+  return g;
 }
 
 // The albedo for a draw of an untabled pixel shader: among the samplers that reach the colour

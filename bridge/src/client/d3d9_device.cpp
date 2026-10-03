@@ -2651,6 +2651,28 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
         g_sims3.glassIb = nullptr;
         wallDone_ = true;
       }
+      if (!wallDone_ && sims3cam::enabled() && g_sims3.fadeSplit) {
+        // The Sims 3 camera hook: a SpeedTree draw whose plants are cut at different fades (milestone
+        // 139) goes out once per group: the other plants at scale 0 (collapsed onto their own place),
+        // the group's reference; the game's constants come back afterwards (the reference with the
+        // rest of its alpha test, sims3EndDraw).
+        auto& h = g_sims3;
+        const UINT regs_ = h.fadePlants * 3u;
+        float saved_[sims3cam::FadeGroups::kPlants * 3 * 4], block_[sims3cam::FadeGroups::kPlants * 3 * 4];
+        memcpy(saved_, &m_state.vertexConstants.fConsts[0], regs_ * 4 * sizeof(float));
+        for (uint32_t g_ = 0; g_ < h.fadeG.count; ++g_) {
+          memcpy(block_, saved_, regs_ * 4 * sizeof(float));
+          for (uint32_t i_ = 0; i_ < h.fadePlants; ++i_) if (!(h.fadeG.members[g_] & (1u << i_))) block_[(h.fadeReg + 3u * i_) * 4u] = 0.f;
+          h.ourConsts = true; SetVertexShaderConstantF(0, block_, regs_); h.ourConsts = false;
+          h.ourState = true; SetRenderState(D3DRS_ALPHAREF, h.fadeG.ref[g_]); h.ourState = false;
+          ClientMessage c(Commands::IDirect3DDevice9Ex_DrawIndexedPrimitive, getId());
+          currentUID = c.get_uid();
+          c.send_many(Type, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount);
+        }
+        h.ourConsts = true; SetVertexShaderConstantF(0, saved_, regs_); h.ourConsts = false;
+        h.fadeSplit = false; ++h.fadeSplitDraws; h.fadeSplitParts += h.fadeG.count;
+        wallDone_ = true;
+      }
       if (!wallDone_ && sims3cam::enabled() && g_sims3.splitDraw && Type == D3DPT_TRIANGLELIST && primCount >= 2) {
         // The Sims 3 camera hook: a lot's re-submission as two half draws (milestone 17r), each its
         // own geometry to the runtime's draw tracker; together they bake the same triangles.
@@ -3028,6 +3050,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetVertexShaderConstantF(UINT StartRe
   // The Sims 3 camera hook: the World rows c4..c6 as the device holds them, for the lot terrain's
   // per-frame copy key (milestone 16); an upload may cover them partly.
   if (sims3cam::enabled() && !g_sims3.ourConsts && !m_stateRecording) {
+    if (StartRegister == 0) g_sims3.instBlockRegs = Vector4fCount;   // SpeedTree's plants, three registers each (milestone 139)
     const UINT first = StartRegister > 4 ? StartRegister : 4, last = (StartRegister + Vector4fCount < 7) ? StartRegister + Vector4fCount : 7;
     for (UINT r = first; r < last; ++r) memcpy(g_sims3.rows4to6 + (r - 4) * 4, pConstantData + (r - StartRegister) * 4, 4 * sizeof(float));
   }

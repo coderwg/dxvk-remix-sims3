@@ -41,6 +41,7 @@ inline void sims3OnReset(Sims3Hook& h) {
   h.markerFailed = false; h.markersConfigSent = false; h.terrainFreeStage = -1; h.tblockActive = false; h.tblockStage = -1; h.tblockSet = 0; h.tblockSrgb = 0; h.ourSampler = false; h.psBound = nullptr; h.vsTerrain = nullptr; h.lotFurtherCopy = false; h.swappingPs = false;
   h.cwOurs = false; h.atOurs = false; h.fogOurs = false;
   h.compositePass = 0; h.extraActive = false; h.splitDraw = false; h.ourConsts = false; h.reissue = false; h.reissueKind = 0; h.compositeSecond = false;
+  h.fadeSplit = false; h.instBlockRegs = 0;
   for (int i = 0; i < 2; ++i) { if (h.extraRestore[i]) h.extraRestore[i]->Release(); h.extraRestore[i] = nullptr; }
   h.remapActive = false; h.maskEmu = 0; h.viewportOurs = false; h.vsSkyDome = false;
   h.vsBound = nullptr; h.vsTabled = false; h.vsNormal = nullptr; h.vsConstOut = nullptr; h.vsCard = nullptr; h.pendingPromote = 0; h.vsHash = 0;
@@ -303,6 +304,49 @@ void sims3GlassOneSide(Sims3Hook& h, Dev* dev) {
   if (it->second.ib) { h.glassIb = it->second.ib; h.glassPrims = it->second.prims; ++h.glassSideDraws; h.glassSideTris += it->second.dropped; }
 }
 
+// The fade test of a SpeedTree draw (milestones 135, 137, 139). The draw holds up to eight plants --
+// shader instancing, three registers each from c0, the block the game last uploaded there: position,
+// rotation, (scale, fade, 1, 1) -- each with its own fade; the vertex shader hands over the first
+// one's (fc, read relatively: rel). The plants grouped by their cut (groupFades); the alpha test of
+// the first group set here -- with blending off for a tree near the camera (blendOff, milestone
+// 137) -- and a draw with more than one group, or with a plant faded out entirely, marked to go out
+// once per group (h.fadeSplit; DrawIndexedPrimitive, the other plants at scale 0). Returns the
+// comparison set (0: the game's test left as it is).
+template<typename Dev>
+uint32_t sims3FadeTest(Sims3Hook& h, Dev* dev, int fc, bool rel, DWORD gameFunc, DWORD gameRef, bool blendOff, const DWORD* rs) {
+  h.fadeSplit = false;
+  const uint32_t reg0 = (uint32_t) fc >> 2, comp = (uint32_t) fc & 3u;
+  float fades[sims3cam::FadeGroups::kPlants] = {}, v[4] = {};
+  dev->GetVertexShaderConstantF(reg0, v, 1);
+  fades[0] = v[comp];
+  uint32_t n = 1;
+  const uint32_t plants = h.instBlockRegs / 3u;
+  if (rel && reg0 < 3u && h.instBlockRegs % 3u == 0u && plants >= 2u && plants <= sims3cam::FadeGroups::kPlants) {
+    n = plants;
+    for (uint32_t i = 1; i < n; ++i) { dev->GetVertexShaderConstantF(reg0 + 3u * i, v, 1); fades[i] = v[comp]; }
+  }
+  h.fade0 = fades[0]; h.fadeReg = reg0; h.fadePlants = n;
+  h.fadeG = sims3cam::groupFades(gameFunc, gameRef, fades, n);
+  if (!h.fadeG.func) return 0u;
+  dev->GetRenderState(D3DRS_ALPHATESTENABLE, &h.atSaved[0]); dev->GetRenderState(D3DRS_ALPHAFUNC, &h.atSaved[1]); dev->GetRenderState(D3DRS_ALPHAREF, &h.atSaved[2]);
+  h.atOurs = true;
+  if (blendOff) { h.blendSaved = rs[D3DRS_ALPHABLENDENABLE]; h.blendOurs = true; }
+  h.ourState = true;
+  if (blendOff) dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+  dev->SetRenderState(D3DRS_ALPHATESTENABLE, TRUE); dev->SetRenderState(D3DRS_ALPHAFUNC, h.fadeG.func); dev->SetRenderState(D3DRS_ALPHAREF, h.fadeG.count ? h.fadeG.ref[0] : 0u);
+  h.ourState = false;
+  h.fadeSplit = h.fadeG.split();
+  if (h.fadeSplit && h.fadeSplitLogged < 6) {
+    ++h.fadeSplitLogged; char list[96] = {}; int ln = 0;
+    for (uint32_t i = 0; i < n && ln < (int) sizeof list - 8; ++i) ln += snprintf(list + ln, sizeof list - ln, "%s%.3f", i ? " " : "", fades[i]);
+    char msg[288];
+    snprintf(msg, sizeof msg, "Sims 3 camera hook: plants cut apart at frame %u -> PS %016llx (VS %016llx): %u plants, fades %s -> %u groups (first ref %u), faded out %02x",
+             h.frames + 1, (unsigned long long) h.psHash, (unsigned long long) h.vsHash, n, list, h.fadeG.count, h.fadeG.count ? h.fadeG.ref[0] : 0u, (unsigned) h.fadeG.out);
+    Logger::info(msg);
+  }
+  return h.fadeG.func;
+}
+
 // Before every draw of the game (not the hook's own restore quad). A captured draw -- the main
 // camera held, see sims3ApplyForDraw -- gets: its albedo presented as stage 0 when the game bound
 // a cube map / render target there (Remix would drop the draw), the vertex shader variant for
@@ -451,60 +495,38 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
         Logger::info(msg);
       }
     }
-    // the fade (milestone 135): SpeedTree's "fade - alpha" under the game's alpha test, turned onto
-    // the alpha the runtime tests -- a texel shows where its alpha reaches the tree's fade, the first
-    // instance's, read from the constant the vertex shader hands over
+    // the fade (milestones 135, 139): SpeedTree's "fade - alpha" under the game's alpha test, turned
+    // onto the alpha the runtime tests -- a texel shows where its alpha reaches its plant's fade
     if (k >= 0 && h.psAuto && h.psAuto->valid && h.psAuto->fadeSampler == k && rs[D3DRS_ALPHATESTENABLE] && !h.atOurs && h.vsConstOut) {
-      const int fc = h.vsConstOut->c[h.psAuto->fadeInput];
+      const int in = h.psAuto->fadeInput, fc = h.vsConstOut->c[in];
       const DWORD gameFunc = rs[D3DRS_ALPHAFUNC], gameRef = rs[D3DRS_ALPHAREF];
-      float v[4] = {};
-      if (fc >= 0) dev->GetVertexShaderConstantF((UINT) (fc >> 2), v, 1);
-      const float fade = fc >= 0 ? v[fc & 3] : 0.f;
-      uint32_t ref = 0; const uint32_t func = fc >= 0 ? sims3cam::fadeAlphaTest(gameFunc, gameRef, fade, ref) : 0u;
-      if (func) {
-        dev->GetRenderState(D3DRS_ALPHATESTENABLE, &h.atSaved[0]); dev->GetRenderState(D3DRS_ALPHAFUNC, &h.atSaved[1]); dev->GetRenderState(D3DRS_ALPHAREF, &h.atSaved[2]);
-        h.atOurs = true; h.ourState = true;
-        dev->SetRenderState(D3DRS_ALPHAFUNC, func); dev->SetRenderState(D3DRS_ALPHAREF, ref);
-        h.ourState = false;
-        ++h.fadeTestDraws;
-      }
+      const uint32_t func = fc >= 0 ? sims3FadeTest(h, dev, fc, h.vsConstOut->rel[in], gameFunc, gameRef, false, rs) : 0u;
+      if (func) ++h.fadeTestDraws;
       bool seen = false; for (uint32_t i = 0; i < h.fadeLogged; ++i) if (h.fadeLoggedPs[i] == h.psHash) seen = true;
       if (!seen && h.fadeLogged < 16) {
         h.fadeLoggedPs[h.fadeLogged++] = h.psHash; char msg[320];
-        const int in = h.psAuto->fadeInput, sem = in >> 2;
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: fade of PS %016llx (VS %016llx): alpha = %s%d.%c - alpha(s%d); the vertex shader's c%d.%c = %.4f there; the game's test (func %u, ref %u) -> %s %u",
+        const int sem = in >> 2;
+        snprintf(msg, sizeof msg, "Sims 3 camera hook: fade of PS %016llx (VS %016llx): alpha = %s%d.%c - alpha(s%d); the vertex shader's c%d.%c%s = %.4f there (%u plants); the game's test (func %u, ref %u) -> %s %u",
                  (unsigned long long) h.psHash, (unsigned long long) h.vsHash, sem >= sims3cam::kSemColor0 ? "COLOR" : "TEXCOORD", sem >= sims3cam::kSemColor0 ? sem - sims3cam::kSemColor0 : sem, "xyzw"[in & 3], k,
-                 fc >> 2, fc >= 0 ? "xyzw"[fc & 3] : '?', fade, (unsigned) gameFunc, (unsigned) gameRef,
-                 fc < 0 ? "no constant: left as the game's" : func == D3DCMP_GREATEREQUAL ? "alpha test >=" : func == D3DCMP_LESSEQUAL ? "alpha test <=" : func == D3DCMP_NEVER ? "never drawn" : "left as the game's", ref);
+                 fc >> 2, fc >= 0 ? "xyzw"[fc & 3] : '?', fc >= 0 && h.vsConstOut->rel[in] ? "[a0]" : "", func ? h.fade0 : 0.f, func ? h.fadePlants : 0u, (unsigned) gameFunc, (unsigned) gameRef,
+                 fc < 0 ? "no constant: left as the game's" : func == D3DCMP_GREATEREQUAL ? "alpha test >=" : func == D3DCMP_LESSEQUAL ? "alpha test <=" : func == D3DCMP_NEVER ? "never drawn" : "left as the game's",
+                 func && h.fadeG.count ? h.fadeG.ref[0] : 0u);
         Logger::info(msg);
       }
     }
-    // the vertex shader variant for the draw: the promoted coordinate and/or the world normal as a
-    // NORMAL output, and on a hardware-instanced draw (split per instance) a read of c255 for the tag
-    // a tree near the camera drawn solid (milestone 137): blending off, its leaves cut at the tree's
-    // fade as the opaque tree's are (the game's LESS 1 on "fade - alpha", turned onto the alpha)
+    // a tree near the camera drawn solid (milestones 137, 139): blending off, its leaves cut at its
+    // plant's fade as the opaque tree's are (the game's LESS 1 on "fade - alpha", turned onto the alpha)
     if (const sims3cam::SolidFade* sf = sims3cam::findSolidFade(h.psHash)) {
       const int fc = h.vsConstOut ? h.vsConstOut->c[sf->fadeInput] : -1;
-      float v[4] = {};
-      if (fc >= 0) dev->GetVertexShaderConstantF((UINT) (fc >> 2), v, 1);
-      const float fade = fc >= 0 ? v[fc & 3] : 0.f;
-      uint32_t ref = 0;
-      const uint32_t func = (fc >= 0 && k == sf->sampler && !h.atOurs && !h.blendOurs) ? sims3cam::fadeAlphaTest(D3DCMP_LESS, 1, fade, ref) : 0u;
-      if (func) {
-        dev->GetRenderState(D3DRS_ALPHATESTENABLE, &h.atSaved[0]); dev->GetRenderState(D3DRS_ALPHAFUNC, &h.atSaved[1]); dev->GetRenderState(D3DRS_ALPHAREF, &h.atSaved[2]);
-        h.atOurs = true; h.blendSaved = rs[D3DRS_ALPHABLENDENABLE]; h.blendOurs = true;
-        h.ourState = true;
-        dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
-        dev->SetRenderState(D3DRS_ALPHATESTENABLE, TRUE); dev->SetRenderState(D3DRS_ALPHAFUNC, func); dev->SetRenderState(D3DRS_ALPHAREF, ref);
-        h.ourState = false;
-        ++h.solidFadeDraws;
-      } else ++h.solidFadeLeft;
+      const uint32_t func = (fc >= 0 && k == sf->sampler && !h.atOurs && !h.blendOurs) ? sims3FadeTest(h, dev, fc, h.vsConstOut->rel[sf->fadeInput], D3DCMP_LESS, 1, true, rs) : 0u;
+      if (func) ++h.solidFadeDraws; else ++h.solidFadeLeft;
       bool seen = false; for (uint32_t i = 0; i < h.solidFadeLogged; ++i) if (h.solidFadeLoggedPs[i] == h.psHash) seen = true;
       if (!seen && h.solidFadeLogged < 4) {
         h.solidFadeLoggedPs[h.solidFadeLogged++] = h.psHash; char msg[288];
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: %s, PS %016llx (VS %016llx): albedo s%d, fade c%d = %.4f -> %s %u",
-                 sf->name, (unsigned long long) h.psHash, (unsigned long long) h.vsHash, k, fc >> 2, fade,
-                 func ? "drawn solid, blending off, alpha test >=" : fc < 0 ? "no fade from the vertex shader: left as the game's" : "not the leaf texture's albedo: left as the game's", ref);
+        snprintf(msg, sizeof msg, "Sims 3 camera hook: %s, PS %016llx (VS %016llx): albedo s%d, fade c%d = %.4f (%u plants) -> %s %u",
+                 sf->name, (unsigned long long) h.psHash, (unsigned long long) h.vsHash, k, fc >> 2, func ? h.fade0 : 0.f, func ? h.fadePlants : 0u,
+                 func ? "drawn solid, blending off, alpha test >=" : fc < 0 ? "no fade from the vertex shader: left as the game's" : "not the leaf texture's albedo: left as the game's",
+                 func && h.fadeG.count ? h.fadeG.ref[0] : 0u);
         Logger::info(msg);
       }
     }
@@ -526,6 +548,9 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
         Logger::info(msg);
       }
     }
+    // the vertex shader variant for the draw: the promoted coordinate and/or the world normal as a
+    // NORMAL output, on a hardware-instanced draw (split per instance) a read of c255 for the tag,
+    // and leaf cards faced outward
     sims3BindVariant(h, dev, h.pendingPromote, sims3NormalChoice(h), (freq0 & D3DSTREAMSOURCE_INDEXEDDATA) && (freq0 & 0x3FFFFFFFu) > 1u, outward);
   }
   if (k >= 0 && k < 16) ++h.remapCount[k];
@@ -602,6 +627,7 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
 // the masked-write emulation undone.
 template<typename Dev>
 void sims3EndDraw(Sims3Hook& h, Dev* dev) {
+  if (h.fadeSplit) { h.fadeSplit = false; ++h.fadeSplitUnused; }   // a per-plant split not drawn (not an indexed draw)
   if (h.fogOurs) { h.fogOurs = false; h.ourState = true; for (int i = 0; i < 5; ++i) dev->SetRenderState(kSims3FogRs[i], h.fogSaved[i]); h.ourState = false; }
   if (h.viewportOurs) { h.viewportOurs = false; h.ourState = true; dev->SetViewport(&h.gameViewport); h.ourState = false; }
   // a terrain draw's pixel shader variant, moved texture and sampler states (milestone 17)
