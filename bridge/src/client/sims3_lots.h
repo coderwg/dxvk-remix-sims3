@@ -35,8 +35,7 @@ inline constexpr uint64_t kLotImpostorVs = 0x074cd28fc5260474ull;
 // there. The plate's top goes to the runtime's terrain baker (the visible terrain marker at stage 0 and
 // the hook's own pixel shader: the plate's colour from EA's linear atlas, encoded to sRGB as the bake
 // expects), so it takes the terrain's material and light; the rest of the model (the house, the
-// plate's sides) is drawn as before. terrainLotPlate 0 = the model as one object, as before.
-inline bool terrainLotPlate() { static int s = -1; if (s < 0) s = hookOption("terrainLotPlate", 1) != 0 ? 1 : 0; return s == 1; }
+// plate's sides) is drawn as before.
 struct PlateSplitStats { uint32_t in = 0, plate = 0, house = 0, outside = 0; };
 // pos: x, y, z per vertex (model space, y up); cls: the class byte per vertex; idx: triangles as
 // vertex numbers. A triangle is the plate's top when its three corners are class 1 (255) and it lies
@@ -65,11 +64,9 @@ inline void splitLotPlate(const std::vector<float>& pos, const std::vector<uint8
 // glow atlas on the same coordinates, stored linear -- times c3.x, the game's switch (0 by day, 1 at
 // night). The hook draws the model's glowing triangles once more with s3 at stage 0, blended ONE / ONE
 // (the runtime's emissive blend: s3 times the texture factor as light) and the factor set to c3.x.
-// lotGlow 0 = no glow pass.
 inline constexpr uint64_t kLotImpostorPs = 0x9c84a6b7017f33fcull;
 inline constexpr int kLotGlowStage = 3, kLotGlowScaleReg = 3;
 inline constexpr uint8_t kLotGlowThreshold = 40;   // a texel glows above 40 / 255 (run 176: 14% of the house texels, mean 174, 165, 125)
-inline bool lotGlow() { static int s = -1; if (s < 0) s = hookOption("lotGlow", 1) != 0 ? 1 : 0; return s == 1; }
 // Every level-0 texel as A8R8G8B8 (DXT1, DXT3 / DXT5 colour blocks with alpha 255, A8R8G8B8, X8R8G8B8).
 inline bool decodeColour(uint32_t format, const uint8_t* data, size_t size, uint32_t w, uint32_t hgt, std::vector<uint32_t>& out) {
   if (!data || w == 0 || hgt == 0 || w > 4096 || hgt > 4096) return false;

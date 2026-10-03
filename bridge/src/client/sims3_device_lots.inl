@@ -164,10 +164,10 @@ bool sims3LotModelDraw(Sims3Hook& h, Dev* dev, const St& st, INT base, UINT minI
   auto* ib = bridge_cast<Direct3DIndexBuffer9_LSS*>(*st.indices);
   auto* decl = bridge_cast<Direct3DVertexDeclaration9_LSS*>(*st.vertexDecl);
   const int gs = sims3cam::kLotGlowStage;
-  Direct3DTexture9_LSS* glowTex = (sims3cam::lotGlow() && h.psHash == sims3cam::kLotImpostorPs && h.boundTex[gs] && (h.boundKind[gs] & 0x7F) == 1) ? bridge_cast<Direct3DTexture9_LSS*>(h.boundTex[gs]) : nullptr;
+  Direct3DTexture9_LSS* glowTex = (h.psHash == sims3cam::kLotImpostorPs && h.boundTex[gs] && (h.boundKind[gs] & 0x7F) == 1) ? bridge_cast<Direct3DTexture9_LSS*>(h.boundTex[gs]) : nullptr;
   Sims3Hook::PlateEntry* e = sims3LotPlateEntry(h, dev, vb0, st.streamOffsets[0], st.streamStrides[0], ib, decl ? decl->sims3Elements() : nullptr, base, start, prims, glowTex);
   if (!e) return false;
-  const bool wantSplit = e->platePrims && sims3cam::terrainLotPlate();
+  const bool wantSplit = e->platePrims != 0;
   if (wantSplit && !h.platePs && !h.platePsFailed) {
     IDirect3DPixelShader9* ps = nullptr;
     if (FAILED(dev->CreatePixelShader(sims3cam::kLotPlatePs, &ps)) || !ps) { h.platePsFailed = true; Logger::info("Sims 3 camera hook: the plate's pixel shader could not be created; low-detail lots drawn as one object"); }

@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-144).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-145).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -1286,26 +1286,15 @@ inline int hookOption(const char* key, int def) {
   return def;
 }
 
-// markKey (milestone 17y): the virtual-key code of the mark key, which logs the lit lamps and the
-// fog once (F9 and the backtick key always work too); default 220 = backslash.
+// markKey (milestone 17y): the virtual-key code of the mark key, which logs the lit lamps, the fog
+// and the frame's glass once; default 220 = backslash.
 inline int markKey() { static int s = -1; if (s < 0) { s = hookOption("markKey", 220); if (s < 1 || s > 254) s = 220; } return s; }
-// The exposure from the lights of the sky (milestones 20d, 52, 54): exposureFromLight = 1 keeps the
-// runtime's sky brightness at 1 (the sky the game draws lights the scene as it is) and drives the
-// ceiling of its auto-exposure (rtx.autoExposure.evMaxValue) from the luminance of the sun and the
-// moon as sent, relative to the game's full daylight (1), through the Remix API (the server loads
-// the runtime's API only with exposeRemixApi = True in .trex\bridge.conf). dayEvMax / nightEvMax =
-// the exposure ceiling in hundredths of an EV at full day and at no light (the runtime's default
-// is 5.0).
-inline int exposureFromLight() { static int s = -1; if (s < 0) s = hookOption("exposureFromLight", 1) != 0; return s; }
-// The game's fog (milestone 56): fogFromGame = 1 hands the game's own fog (its colour and range, read
-// beside its light record) to the runtime as D3D9 linear fog, which the runtime lays over the
-// ray-traced picture (its composite fog, used while rtx.volumetrics.enable is off); fogColourScale =
+// The game's fog (milestone 56): the game's own fog (its colour and range, read beside its light
+// record) goes to the runtime as D3D9 linear fog, which the runtime lays over the ray-traced
+// picture (its composite fog, used while rtx.volumetrics.enable is off); fogColourScale =
 // the fog's brightness in thousandths (1000: the game's fog colour as bright as the sky the game
 // draws, lit as the scene is lit, milestone 57), sent as rtx.fogColorScale through the Remix API.
-inline int fogFromGame() { static int s = -1; if (s < 0) s = hookOption("fogFromGame", 1) != 0; return s; }
 inline float fogColourScale() { static float s = -1.f; if (s < 0.f) { int v = hookOption("fogColourScale", 1000); if (v < 0) v = 0; if (v > 10000) v = 10000; s = (float) v / 1000.f; } return s; }
-inline float dayEvMax() { static float s = -99.f; if (s < -98.f) { int v = hookOption("dayEvMax", 500); if (v < -1000) v = -1000; if (v > 1000) v = 1000; s = (float) v / 100.f; } return s; }
-inline float nightEvMax() { static float s = -99.f; if (s < -98.f) { int v = hookOption("nightEvMax", 0); if (v < -1000) v = -1000; if (v > 1000) v = 1000; s = (float) v / 100.f; } return s; }
 // The lights go to the runtime through the Remix API (milestones 20b, 23): the sun as a distant
 // light, the lamps as sphere lights, with explicit radiance and size. The API needs
 // exposeRemixApi = True in .trex\bridge.conf; without it there are no lights and one warning.
@@ -1325,17 +1314,14 @@ inline float duskHours() { static float s = -1.f; if (s < 0.f) { int v = hookOpt
 inline float duskLevel() { static float s = -1.f; if (s < 0.f) { int v = hookOption("duskLevel", 100); if (v < 1) v = 1; if (v > 1000) v = 1000; s = (float) v / 1000.f; } return s; }
 inline float sunRadiance() { static float s = -1.f; if (s < 0.f) { int v = hookOption("sunRadiance", 1000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
 inline float lampRadius() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampRadius", 150); if (v < 20) v = 20; s = (float) v / 1000.f; } return s; }
-// lampMax = the most lamps lit at once (the nearest to the camera's target first); lampWorldLights =
-// 1 to light the world lights too (a street lamp's, faded in and out by the game's own night
-// switch), 0 to leave them dark.
+// lampMax = the most lamps lit at once (the nearest to the camera's target first); the world lights
+// (a street lamp's) are lit too, faded in and out by the game's own night switch.
 inline uint32_t lampMax() { static int s = -1; if (s < 0) { s = hookOption("lampMax", 96); if (s < 1) s = 1; if (s > 96) s = 96; } return (uint32_t) s; }
-inline bool lampWorldLights() { static int s = -1; if (s < 0) s = hookOption("lampWorldLights", 1) != 0 ? 1 : 0; return s == 1; }
 inline float lampRadiance() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampRadiance", 40000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
 // The lamps' shapes from the game's definitions (milestone 32): cones for spots and lamp shades, a
-// shade's glow, a cylinder for a tube. lampShapes 0 = plain spheres as before; lampConeScale scales
+// shade's glow, a cylinder for a tube. lampConeScale scales
 // every cone angle (thousandths; the definitions' angles are taken as half angles); lampConeSoftness
 // the cone edge's softness (thousandths, 0..1000); lampShadeGlow scales the light through the shade.
-inline bool lampShapes() { static int s = -1; if (s < 0) s = hookOption("lampShapes", 1) != 0 ? 1 : 0; return s == 1; }
 inline float lampConeScale() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampConeScale", 1000); if (v < 100) v = 100; s = (float) v / 1000.f; } return s; }
 inline float lampConeSoftness() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampConeSoftness", 300); if (v < 0) v = 0; if (v > 1000) v = 1000; s = (float) v / 1000.f; } return s; }
 // ---- the lamps' own word and the game's clock (milestones 36, 39, 40) --------------------
@@ -2498,22 +2484,12 @@ struct LiteModel { uint64_t inst; uint8_t n; LiteLight lights[4]; };
 struct LiteTable {
   std::vector<LiteModel> models;
   std::unordered_map<uint64_t, uint32_t> byModel;   // a model's instance -> its place in models
-  std::unordered_map<uint64_t, uint64_t> objects;   // an object's instance -> its model's
   bool loaded = false; uint32_t lines = 0; int format = 0;
+  // A lamp's definition by the catalog model key the reporter gives for it (milestone 39; the
+  // object lines of the table -- an object naming its model -- never found one, milestone 145).
   const LiteModel* model(uint64_t inst) const {
     const auto it = byModel.find(inst);
     return it == byModel.end() ? nullptr : &models[it->second];
-  }
-  // A lamp's definition by the keys the reporter gives for it. how: 1 its catalog model key names
-  // the model; 2 its resource key names the object that names the model; 3 its catalog model
-  // key names that object; 0 none.
-  const LiteModel* find(uint64_t modelKey, uint64_t objectKey, int* how = nullptr) const {
-    int h = 0; const LiteModel* m = model(modelKey);
-    if (m) h = 1;
-    if (!m) { const auto it = objects.find(objectKey); if (it != objects.end() && (m = model(it->second)) != nullptr) h = 2; }
-    if (!m) { const auto it = objects.find(modelKey); if (it != objects.end() && (m = model(it->second)) != nullptr) h = 3; }
-    if (how) *how = h;
-    return m;
   }
 };
 // One line of sims3lights.txt. True when it gave the table something.
@@ -2537,11 +2513,6 @@ inline bool liteParseLine(LiteTable& t, const char* line) {
     }
     if (!m.n) return false;
     t.byModel[m.inst] = (uint32_t) t.models.size(); t.models.push_back(m);
-    return true;
-  }
-  if (!strncmp(line, "object ", 7)) {
-    const uint64_t o = strtoull(line + 7, &e, 16); const uint64_t m = strtoull(e, &e, 16);
-    t.objects[o] = m;
     return true;
   }
   return false;

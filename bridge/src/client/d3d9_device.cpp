@@ -2626,7 +2626,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
         wallDone_ = wallDraw_();
       }
       // The Sims 3 camera hook: a low-detail lot model (milestones 69-71), drawn by the hook in its parts.
-      if (!wallDone_ && sims3cam::enabled() && (sims3cam::terrainLotPlate() || sims3cam::lotGlow()) && g_sims3.drawCaptured
+      if (!wallDone_ && sims3cam::enabled() && g_sims3.drawCaptured
           && g_sims3.vsHash == sims3cam::kLotImpostorVs && Type == D3DPT_TRIANGLELIST)
         wallDone_ = sims3LotModelDraw(g_sims3, this, m_state, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount, currentUID);
       if (!wallDone_ && sims3cam::enabled() && g_sims3.glassIb && Type == D3DPT_TRIANGLELIST) {

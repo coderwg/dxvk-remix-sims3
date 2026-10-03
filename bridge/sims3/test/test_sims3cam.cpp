@@ -801,7 +801,7 @@ int main() {
       } else SKIP("auto: ps_ff72720db4324926 not found");
     }
     {
-      // the light table (format 3): the lights per model, and the objects naming the models
+      // the light table (format 3): the lights per model
       LiteTable table;
       CHECK(!liteParseLine(table, "model 0000000000f29289 1 5 0 1.51 0 1 0.975 0.85 60 0 1 0 30 3 50 0.2327 0.2327 0.2327\n") && table.models.empty(), "light table: nothing is taken before the format line (an older table names no lamp)");
       liteParseLine(table, "# a comment\n");
@@ -809,16 +809,14 @@ int main() {
       const bool m1 = liteParseLine(table, "model 0000000000f29289 1 5 0.0000 1.5100 0.0000 1.0000 0.9750 0.8500 60.0000 0.0000 1.0000 0.0000 30.0000 3.0000 50.0000 0.2327 0.2327 0.2327\n");
       const bool m2 = liteParseLine(table, "model 000000000005a335 2 11 0 1.69 0.33 1 1 1 97 0 0 0 0 0 0 0 0 0 11 0 3.69 0.0111 0.8 0.8 0.76 40 0 1 0 35 2.2 20 0.2327 0.2327 0.2327\n");
       const bool m3 = liteParseLine(table, "model 0000000000000777 1 7 0 0 0 1 1 1 1 0 0 1 1 0 0 0 0 0\n");   // a window: no lamp
-      const bool o1 = liteParseLine(table, "object 0000000000000604 0000000000f29289\n");
-      CHECK(m1 && m2 && !m3 && o1 && table.models.size() == 2 && table.objects.size() == 1, "light table: two models with lamp lights and one object read; a model of windows alone is left out");
+      const bool o1 = liteParseLine(table, "object 0000000000000604 0000000000f29289\n");   // an object line of an older tool: ignored (milestone 145)
+      CHECK(m1 && m2 && !m3 && !o1 && table.models.size() == 2, "light table: two models with lamp lights read; a model of windows alone and an object line are left out");
       const LiteModel* stand = table.model(0xf29289ull);
       CHECK(stand && stand->n == 1 && stand->lights[0].type == 5 && nearf(stand->lights[0].pos[1], 1.51f) && nearf(stand->lights[0].intensity, 60.f) && nearf(stand->lights[0].at[1], 1.f) && nearf(stand->lights[0].d[0], 30.f) && nearf(stand->lights[0].d[2], 50.f) && nearf(stand->lights[0].d[3], 0.2327f),
             "light table: the standing lamp's lamp shade with its direction, cone, bottom cone and shade");
       const LiteModel* street = table.model(0x5a335ull);
       CHECK(street && street->n == 2 && street->lights[0].type == 11 && street->lights[1].type == 11 && nearf(street->lights[1].pos[1], 3.69f) && nearf(street->lights[1].d[0], 35.f), "light table: a street lamp's two world lights");
-      int how = -1;
-      CHECK(table.find(0xf29289ull, 0x604ull, &how) == stand && how == 1 && table.find(0x123ull, 0x604ull, &how) == stand && how == 2 && table.find(0x604ull, 0x999ull, &how) == stand && how == 3 && table.find(0x123ull, 0x999ull, &how) == nullptr && how == 0,
-            "light table: a lamp's definition by its model's key, by its object's key, by either in the other's place; none for a stranger");
+      CHECK(table.model(0xf29289ull) == stand && table.model(0x604ull) == nullptr && table.model(0x123ull) == nullptr, "light table: a lamp's definition by its catalog model key; none by an object's key or a stranger's");
       // the book of lit lights
       int h1 = 1, h2 = 2, h3 = 3;
       Lamps ls; bool fresh = false;

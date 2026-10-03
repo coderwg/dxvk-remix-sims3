@@ -4,10 +4,10 @@
 
 Reads every package under the game's folders and the user's Mods folder. A lamp in the game is
 an object (its key resource, OBJK) that names a model (its visual proxy, VPXY), and the model
-names a light definition (LITE). The table carries both steps:
+names a light definition (LITE). The reporter names each lamp by its model's key, so the table
+carries the models (an object -> model step was written until milestone 145; it never found a lamp):
 
     model  <model instance> <count> [<type> x y z r g b intensity ax ay az d0 d1 d2 d3 d4 d5]...
-    object <object instance> <model instance>
 
 type 3 point, 4 spot, 5 lamp shade, 6 tube, 11 world light (a street lamp's); windows and area
 lights are left out (daylight openings, not lamps). a = the definition's direction, which
@@ -146,26 +146,18 @@ def main():
                 for L in lite_lights(store.get_best(T_LITE, li) or b''):
                     if L[0] in LAMP_TYPES and L not in lights: lights.append(L)
         if lights: models[inst] = lights
-    objects = {}  # object instance -> model instance
-    for (t, inst) in [k for k in store.res if k[0] == T_OBJK]:
-        for ob in store.get_all(T_OBJK, inst):
-            for (tt, mi) in keys_in(ob, store, (T_VPXY,)):
-                if mi in models: objects[inst] = mi
     byType = {}
     for lights in models.values():
         for L in lights: byType[L[0]] = byType.get(L[0], 0) + 1
     with open(outPath, 'w') as out:
         out.write('# The Sims 3 camera hook: the game\'s lamp lights per model, written by sims3/tools/lite_table.py.\n')
         out.write('# model <model instance> <count> [<type> x y z r g b intensity ax ay az d0 d1 d2 d3 d4 d5]...  type 3 point, 4 spot, 5 lamp shade, 6 tube, 11 world light\n')
-        out.write('# object <object instance> <model instance>: the object key of a lamp names its model\n')
         out.write('# a = the definition\'s direction (from the lit side back to the light); d by type: spot = cone angle, blur; lamp shade, world light = cone angle, shade multiplier, bottom angle, shade r g b; tube = length, blur\n')
         out.write('format 3\n')
         for inst in sorted(models):
             lights = models[inst][:4]
             out.write('model %016x %d %s\n' % (inst, len(lights), ' '.join(('%d' + ' %.4f' * 16) % ((LAMP_TYPES[L[0]],) + L[1:17]) for L in lights)))
-        for inst in sorted(objects):
-            out.write('object %016x %016x\n' % (inst, objects[inst]))
-    print('%d models with lamp lights (%s), %d objects naming them; written to %s in %.1f s' % (len(models), ', '.join('%s %d' % kv for kv in sorted(byType.items())), len(objects), outPath, time.time() - t0))
+    print('%d models with lamp lights (%s); written to %s in %.1f s' % (len(models), ', '.join('%s %d' % kv for kv in sorted(byType.items())), outPath, time.time() - t0))
     return 0
 
 if __name__ == '__main__': sys.exit(main())

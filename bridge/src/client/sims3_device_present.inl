@@ -36,9 +36,6 @@ static void sims3LogStats(bool withTable) {
     }
     g_sims3.statsTick = nowTick; g_sims3.statsFrame = h.frames;
   }
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   exposure: the light of the sky %.3f, exposure ceiling %.2f EV sent %u times; sky brightness %s%s",
-           h.skyLevel, h.evMaxSent, h.skySends, h.skyBrightnessSent == 1.f ? "1 (the game's own sky)" : "not set", GlobalOptions::getExposeRemixApi() ? "" : " (Remix API off: nothing sent)");
-  Logger::info(msg);
   uint32_t lampHandles = 0;
   for (uint32_t k = 0; k < h.lamps.n; ++k) { const sims3cam::Lamp& Lh = h.lamps.lamps[k]; lampHandles += (Lh.api ? 1u : 0u) + (Lh.api2 ? 1u : 0u) + (Lh.api3 ? 1u : 0u); }
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   clock: %s %.2f h, sunrise %.2f, sunset %.2f; the street lamps at %.3f by the game's night switch; %u lit lamps of world lights alone left dark",
@@ -48,7 +45,7 @@ static void sims3LogStats(bool withTable) {
            h.lightRec ? format_string("at %p, through its pointers", (const void*) h.lightRec).c_str() : "not reached", h.framesFromGame);
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   fog: %s; the runtime's fog hue %u %u %u of 255 at brightness %.6f (the colour's %.4f x the light sent over the game's %.3f; %u sends) from %.0f to %.0f (the game's curve %.2f), on %u terrain draws; %u captured draws carried a fog state of the game's own",
-           !sims3cam::fogFromGame() ? "off (fogFromGame 0)" : (!GlobalOptions::getExposeRemixApi() ? "OFF: the Remix API is off" : (h.fogReady ? "the game's own, from beside its light record" : "waiting for the game's light record")),
+           !GlobalOptions::getExposeRemixApi() ? "OFF: the Remix API is off" : (h.fogReady ? "the game's own, from beside its light record" : "waiting for the game's light record"),
            (unsigned) ((h.fogColour >> 16) & 0xFFu), (unsigned) ((h.fogColour >> 8) & 0xFFu), (unsigned) (h.fogColour & 0xFFu), h.fogScaleNow, h.fogBright, h.fogShare, h.fogScaleSends, h.fogStart, h.fogEnd, h.fogCurve, h.fogDraws, h.gameFogDraws);
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   lamp reporter: %s; %u lamps reported, %u lit, %u of those without a definition in the light table, %u beyond the budget of %u; %u readings (%u while it was writing), %u searches (the last through %u regions, %u MB)",
@@ -57,7 +54,7 @@ static void sims3LogStats(bool withTable) {
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   api lights: %s; %u calls, sun %s, %u lamp handles; the game's light table: %s",
            GlobalOptions::getExposeRemixApi() ? "on" : "off (no lights: exposeRemixApi is not set)", h.apiLightCalls, (h.sunApi || h.moonApi) ? (h.sunApi && h.moonApi ? "and moon live" : "or moon live") : "and moon none", lampHandles,
-           !sims3cam::liteTable().models.empty() ? format_string("%u models and %u objects read from sims3lights.txt", (unsigned) sims3cam::liteTable().models.size(), (unsigned) sims3cam::liteTable().objects.size()).c_str()
+           !sims3cam::liteTable().models.empty() ? format_string("%u models read from sims3lights.txt", (unsigned) sims3cam::liteTable().models.size()).c_str()
              : (sims3cam::liteTable().lines ? "sims3lights.txt is of an older format (no lamps; run sims3/tools/lite_table.py)" : "no sims3lights.txt next to the DLL (no lamps; run sims3/tools/lite_table.py)"));
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   walls: %u draws, openings cut in %u (%u triangles cut, %u removed, %u hidden dropped; %u geometries built, %u evicted, %u build failures, %u refused; %u without an opening test, %u skipped with no client copy; %u masks decoded)",
@@ -106,10 +103,10 @@ static void sims3LogStats(bool withTable) {
              h.remapSamplerDraws, h.remapSrgbDraws);
     Logger::info(msg);
     snprintf(msg, sizeof msg, "Sims 3 camera hook:   low-detail lots' ground (milestone 69): %s; %u model draws split (%u plate triangles baked as terrain), %u models split, %u with no plate, %u could not be read",
-             sims3cam::terrainLotPlate() ? "the plate's top as terrain (terrainLotPlate 1)" : "one object (terrainLotPlate 0)", h.plateDraws, h.plateTriangles, h.plateBuilds - h.plateNone - h.plateFailed, h.plateNone, h.plateFailed);
+             "the plate's top as terrain", h.plateDraws, h.plateTriangles, h.plateBuilds - h.plateNone - h.plateFailed, h.plateNone, h.plateFailed);
     Logger::info(msg);
     snprintf(msg, sizeof msg, "Sims 3 camera hook:   low-detail lots' window glow (milestones 70-71): %s; %u glow passes (%u triangles, %.0f cm out from the wall), %u models with glowing windows, %u window-only glow textures (%u could not be made)",
-             sims3cam::lotGlow() ? "on (lotGlow 1)" : "off (lotGlow 0)", h.glowDraws, h.glowTriangles, sims3cam::kLotGlowLift * 100.f, h.glowModels, h.glowTexMade, h.glowTexFailed);
+             "on", h.glowDraws, h.glowTriangles, sims3cam::kLotGlowLift * 100.f, h.glowModels, h.glowTexMade, h.glowTexFailed);
     Logger::info(msg);
   }
   MEMORYSTATUSEX ms = {}; ms.dwLength = sizeof ms; GlobalMemoryStatusEx(&ms);
@@ -169,10 +166,10 @@ void sims3OnPresent(Sims3Hook& h, Dev* dev) {
   sims3SquaresFrameEnd(h, dev);   // the squares' shapes for the next frame (milestone 60)
   sims3TerrainBlockEnd(h, dev);   // the frame is over: the game's sampler states back (milestone 18g)
   {
-    const bool f9 = ((GetAsyncKeyState(VK_F9) | GetAsyncKeyState(sims3cam::markKey()) | GetAsyncKeyState(VK_OEM_3)) & 0x8000) != 0;   // F9, the configured key (sims3hook.txt markKey) or backtick
-    h.markFrame = f9 && !h.f9Down;   // the frame after the key: the lit lamps and the fog, logged once; the frame's glass (milestone 113)
+    const bool down = (GetAsyncKeyState(sims3cam::markKey()) & 0x8000) != 0;   // the mark key (sims3hook.txt markKey)
+    h.markFrame = down && !h.markDown;   // the frame after the key: the lit lamps and the fog, logged once; the frame's glass (milestone 113)
     if (h.markFrame) h.markGlassCount = 0;
-    h.f9Down = f9;
+    h.markDown = down;
   }
   sims3PresentLamps(h);
   sims3PresentSky(h);

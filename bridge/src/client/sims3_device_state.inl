@@ -55,7 +55,7 @@ struct Sims3Hook {
   sims3cam::Sun gameLight = {};        // the game's light as last handed over
   // the game's light record this frame, through its own pointers (milestones 127, 128), and the frames it lit the sky
   const float* lightRec = nullptr; uint32_t lightRecLogged = 0, framesFromGame = 0;
-  void* moonApi = nullptr; uint32_t twilightLogged = 0; float skyLoggedB = -1.f;
+  void* moonApi = nullptr; uint32_t twilightLogged = 0;
   uint64_t statsTick = 0; uint32_t statsFrame = 0;   // the last statistics, for the frame rate
   uint32_t sunChanges = 0, sunLogged = 0, sunLogFrame = 0; float sunLogLum = -1.f, sunLogDir[3] = {};   // the sun trace (milestone 19d)
   bool rsSet[256] = {};                              // render states the game has set at least once (the array's initial values are not trusted)
@@ -74,7 +74,7 @@ struct Sims3Hook {
   // the lamp reporter's block (milestones 36, 39): this frame's records, as read
   std::vector<float> lampRecords, lampRecordsNext; std::vector<int32_t> lampInts, lampIntsNext;
   uint32_t lampReported = 0, lampReportReads = 0, lampReportStale = 0, lampReportFails = 0, lampReportScanFrame = 0, lampWordsLogged = 0;
-  uint32_t lampsOn = 0, lampsUndefined = 0, lampsBeyondBudget = 0, lampKeyHow = 0;   // this frame: reported lit, of those without a definition, of those beyond lampMax; the ways a definition was found so far
+  uint32_t lampsOn = 0, lampsUndefined = 0, lampsBeyondBudget = 0;   // this frame: reported lit, of those without a definition, of those beyond lampMax; the ways a definition was found so far
   uint64_t lampUndefinedKeys[64] = {}; uint32_t lampUndefinedCount = 0;   // the models without a definition the log has named
   bool lampReportLive = false, lampReportWorld = false, lampReportAnnounced = false;
   // the game's clock (milestone 40), and the world lights it keeps dark by day
@@ -84,7 +84,6 @@ struct Sims3Hook {
   sims3cam::Lamps lamps;               // the game's own lamps, forwarded as Remix API lights
   uint32_t lampEvents = 0;             // API light creations and destructions made for lamps
   // night from the sun (milestone 20d): the sun's luminance smoothed, the day reference, what was sent
-  float skyLevel = -1.f, skyBrightnessSent = -1.f, evMaxSent = -99.f; uint32_t skySends = 0, skySendFrame = 0, skyBrightLogged = 0; bool skyApiWarned = false;
   // lights through the Remix API (milestone 20b): the handles of the sun and of each lamp slot (remixapi_LightHandle, declared later in this file)
   void* sunApi = nullptr; uint32_t apiLightCalls = 0; bool loggedApiLights = false, apiLightsWarned = false;   // the lamps' handles live in the solver's lamps
   // untabled pixel shaders (milestone 7): the albedo chosen from the bytecode at draw time,
@@ -255,7 +254,7 @@ struct Sims3Hook {
   // The hook's own re-issue of a draw (the paint composite's second pass, milestone 19), and the
   // terrain kind it is given.
   bool reissue = false; uint8_t reissueKind = 0;
-  bool f9Down = false;                            // the mark key held (milestone 17y)
+  bool markDown = false;                          // the mark key held (milestone 17y)
   bool ourConsts = false;                         // our own SetVertexShaderConstantF calls: no camera classification, no tracking
   struct PsVariant { IDirect3DPixelShader9* base; uint64_t hash; uint8_t alphaMode; uint8_t forced; IDirect3DPixelShader9* variant; uint8_t freeStage; };
   static constexpr uint32_t kPsVariants = 64;
