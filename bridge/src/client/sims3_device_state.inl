@@ -53,6 +53,7 @@ struct Sims3Hook {
   sims3cam::Sun gameLight = {};        // the game's light as last handed over
   // the game's light record this frame, through its own pointers (milestones 127, 128), and the frames it lit the sky
   const float* lightRec = nullptr; uint32_t lightRecLogged = 0, framesFromGame = 0;
+  uint32_t lightChainMask = 0, lightChainLogged = 0;   // milestone 129, a diagnostic: the chains that led to the record, as last logged
   void* moonApi = nullptr; uint32_t twilightLogged = 0; float skyLoggedB = -1.f;
   uint64_t statsTick = 0; uint32_t statsFrame = 0;   // the last statistics, for the frame rate
   uint32_t sunChanges = 0, sunLogged = 0, sunLogFrame = 0; float sunLogLum = -1.f, sunLogDir[3] = {};   // the sun trace (milestone 19d)
@@ -68,6 +69,11 @@ struct Sims3Hook {
   static constexpr int kShaderStats = 96;
   ShaderStat shaderStats[kShaderStats] = {};   // captured draws per (vertex shader, pixel shader) since the last table (further pairs are not recorded)
   int shaderStatCount = 0;
+  // milestone 129, a diagnostic for one run: the game's draws that reach the runtime without being captured, per
+  // shader pair, target and the states that tell a pass apart (whole session)
+  struct UncapturedStat { uint64_t vs, ps; uint16_t w, h, s0w, s0h; uint8_t primary, z, blend, src, dst, cw, s0kind; uint32_t draws, frames, lastFrame, indexedPrims; };
+  static constexpr int kUncapturedStats = 128;
+  UncapturedStat uncaptured[kUncapturedStats] = {}; int uncapturedN = 0; uint32_t uncapturedOver = 0;
   uint32_t loggedShapes = 0;   // light kinds whose first shaped lamp has been logged (milestone 32)
   // the lamp reporter's block (milestones 36, 39): this frame's records, as read
   std::vector<float> lampRecords, lampRecordsNext; std::vector<int32_t> lampInts, lampIntsNext;

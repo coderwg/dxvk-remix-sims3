@@ -142,6 +142,23 @@ static void sims3LogStats(bool withTable) {
     Logger::info(msg);
   }
   g_sims3.shaderStatCount = 0;
+  // milestone 129, a diagnostic: what reaches the runtime uncaptured (the whole session, the most drawn first)
+  {
+    int order[Sims3Hook::kUncapturedStats];
+    for (int i = 0; i < h.uncapturedN; ++i) order[i] = i;
+    std::sort(order, order + h.uncapturedN, [&h](int a, int b) { return h.uncaptured[a].draws > h.uncaptured[b].draws; });
+    snprintf(msg, sizeof msg, "Sims 3 camera hook:   draws reaching the runtime uncaptured (milestone 129, a diagnostic; the whole session, %d kinds%s):", h.uncapturedN, h.uncapturedOver ? ", table full" : "");
+    Logger::info(msg);
+    for (int k = 0; k < h.uncapturedN; ++k) {
+      const Sims3Hook::UncapturedStat& u = h.uncaptured[order[k]];
+      const int kind = u.s0kind & 0x7f;
+      snprintf(msg, sizeof msg, "Sims 3 camera hook:   %7u draws in %6u frames  VS %016llx PS %016llx  target %ux%u%s  z %u blend %u %u/%u cw %x  s0 %s%s %ux%u  %u indexed primitives",
+               u.draws, u.frames, (unsigned long long) u.vs, (unsigned long long) u.ps, (unsigned) u.w, (unsigned) u.h, u.primary ? " (screen)" : "",
+               (unsigned) u.z, (unsigned) u.blend, (unsigned) u.src, (unsigned) u.dst, (unsigned) u.cw,
+               kind == 1 ? "2D" : kind == 2 ? "CUBE" : kind == 3 ? "VOLUME" : "none", (u.s0kind & 0x80) ? "(RT)" : "", (unsigned) u.s0w, (unsigned) u.s0h, u.indexedPrims);
+      Logger::info(msg);
+    }
+  }
 }
 
 // Called from the client's shutdown path (d3d9_lss.cpp) so the last stretch of the session is reported.

@@ -74,10 +74,10 @@ static void sims3DescribeAddress(const void* p, char* out, size_t cap) {
 static bool sims3ReadWord(uintptr_t at, uint32_t& out) {
   __try { out = *(const uint32_t*) at; return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
-static const float* sims3LightByChains(int& votes) {
+static const float* sims3LightByChains(int& votes, uintptr_t* at) {
   const uintptr_t img = (uintptr_t) GetModuleHandleA(nullptr);
-  uintptr_t at[sims3cam::kLightChainCount] = {};
   for (int k = 0; k < sims3cam::kLightChainCount; ++k) {
+    at[k] = 0;
     const sims3cam::LightChain& c = sims3cam::kLightChains[k];
     uint32_t obj = 0, ptr = 0; sims3cam::Sun s;
     if (sims3ReadWord(img + c.base, obj) && obj && sims3ReadWord((uintptr_t) obj + c.member, ptr) && ptr && sims3ReadGameLight((const float*) ((uintptr_t) ptr + c.offset), s))
@@ -88,8 +88,22 @@ static const float* sims3LightByChains(int& votes) {
 // The game's light record this frame (milestone 128): through its pointers while a world is live,
 // else none. Logged when it is first reached, when it moves (a world loaded anew) and when it is lost.
 static void sims3UpdateLightRecord(Sims3Hook& h) {
-  int votes = 0;
-  const float* rec = h.lampReportLive ? sims3LightByChains(votes) : nullptr;
+  int votes = 0; uintptr_t at[sims3cam::kLightChainCount] = {};
+  const float* rec = h.lampReportLive ? sims3LightByChains(votes, at) : nullptr;
+  // milestone 129, a diagnostic: which chains lead to the record, logged whenever that changes
+  if (rec) {
+    uint32_t mask = 0;
+    for (int k = 0; k < sims3cam::kLightChainCount; ++k) if (at[k] == (uintptr_t) rec) mask |= 1u << k;
+    if (mask != h.lightChainMask && h.lightChainLogged < 40u) {
+      ++h.lightChainLogged; h.lightChainMask = mask;
+      std::string line = format_string("Sims 3 camera hook: the game's light chains at frame %u (milestone 129, a diagnostic):", h.frames);
+      for (int k = 0; k < sims3cam::kLightChainCount; ++k) {
+        const sims3cam::LightChain& c = sims3cam::kLightChains[k];
+        line += format_string(" [TS3.exe+%x]+%x+%x %s;", c.base, c.member, c.offset, at[k] == (uintptr_t) rec ? "AGREES" : (at[k] ? "a record elsewhere" : "no record"));
+      }
+      Logger::info(line);
+    }
+  }
   if (rec != h.lightRec && h.lightRecLogged < 40u) {
     ++h.lightRecLogged;
     char msg[300];
