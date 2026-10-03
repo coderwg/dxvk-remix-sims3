@@ -114,8 +114,8 @@ static void sims3LogStats(bool withTable) {
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   cameras: transforms sent to the runtime %u times; sky dome draws presented as the sky %u; %u main camera uploads without their eye taken as the camera continued",
            h.transformSends, h.skyDraws, h.continuedUploads);
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   passes Remix never shows (milestone 124): %u shadow map draws, %u sky cube draws, %u water reflection draws dropped; the game's own fakes (milestone 130: shadows, fog, glow, tone curve): %u draws dropped",
-           h.unshownDrops[sims3cam::kShadowMapPass], h.unshownDrops[sims3cam::kSkyCubePass], h.unshownDrops[sims3cam::kWaterReflectionPass], h.fakeDrops);
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   passes Remix never shows (milestone 124): %u shadow map draws, %u sky cube draws, %u water reflection draws dropped; the game's own fakes (milestone 130: shadows, fog, glow, tone curve): %u draws dropped; never-captured 3D draws not sent (milestone 131): %u",
+           h.unshownDrops[sims3cam::kShadowMapPass], h.unshownDrops[sims3cam::kSkyCubePass], h.unshownDrops[sims3cam::kWaterReflectionPass], h.fakeDrops, h.neverSentDrops);
   Logger::info(msg);
   if (!withTable) return;
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   captured draws per shader pair since the last table (%d pairs%s; textures as first seen, render states as last seen):", h.shaderStatCount, h.shaderStatCount >= Sims3Hook::kShaderStats ? ", table full" : "");

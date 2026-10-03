@@ -577,8 +577,11 @@ int main() {
     const AlbedoStage* ao = findAlbedoStage(0x0c19795eb80e2e96ull); const AlbedoStage* af = findAlbedoStage(0x17eabad58f650687ull);
     CHECK(ao && ao->stage == 3 && af && af->stage == 2 && findAlbedoStage(0x1234ull) == nullptr, "albedo stage: object PS -> 3, floor PS -> 2, unknown -> none");
     CHECK(findTexcoordPromote(0x0ba6ddb9aa01913cull) && findTexcoordPromote(0x0ba6ddb9aa01913cull)->texcoordIndex == 2 && findTexcoordPromote(0x55c99586fb17cd1cull) == nullptr, "promotions: objects promote 2; the terrain paint no longer promotes");
-    CHECK(findNeverCapture(0xc79615c0181b5ef1ull) && findNeverCapture(0x5a2deada1e077b44ull), "never-capture: the drop-shadow decals and the grass sprites are left to the rasterizer");
-    CHECK(findNeverCapture(0xab38a73070378739ull) != nullptr, "never-capture: the Sim black overlay pass (pixel shader 11227d6d outputs black) is left to the rasterizer");
+    CHECK(findNeverCapture(0xc79615c0181b5ef1ull) && findNeverCapture(0x5a2deada1e077b44ull), "never-capture: the drop-shadow decals and the grass sprites are never sent");
+    CHECK(!findNeverCapture(0xab38a73070378739ull) && findGameFake(0x11227d6d7bba5802ull), "never-capture: the Sim black overlay pass is not listed: its pixel shader 11227d6d is a game fake (milestone 131)");
+    const NeverCapture* hair = findNeverCapture(0xe12c352d135375f2ull);
+    CHECK(hair && hair->blendedOnly && neverCaptureDraw(neverCaptureMode(hair), TRUE) && !neverCaptureDraw(neverCaptureMode(hair), FALSE),
+          "never-capture (M131): the Sims' hair -- its blended soft-edge copy never sent, its alpha-tested opaque pass captured");
     CHECK(findNeverCapture(0x41a25ab37bb2622cull) == nullptr, "never-capture: the sky dome is not in the table (it is presented as the runtime's sky instead)");
     {
       // the sky dome recognised from its bytecode: a position input, and the position's z pinned to w
@@ -1231,9 +1234,9 @@ int main() {
       std::vector<DWORD> mp; PsAnalysis ma;
       const bool mirrorCube = !loadShader("ps_86dad57d0dc73989", mp) || (analyzePixelShader(mp.data(), mp.size(), ma) && isGlassShader(ma));
       CHECK(mirrorCube && (!ma.valid || (isReflectiveSheet(ma, TRUE) && !isReflectiveSheet(ma, FALSE))), "mirror (M82, M101): the reflective sheet PS 86dad57d reads only a cube; with the stencil test on it is a mirror's face");
-      // milestone 84: the Sims' soft shadow blob is never captured
-      const NeverCapture* blob = findNeverCapture(0xb7d550c6421e14f4ull);
-      CHECK(blob && !blob->blendedOnly, "never-capture (M84): the Sims' soft shadow blob VS b7d550c6");
+      // milestones 84, 131: the Sims' soft shadow blob -- dropped by its pixel shaders (game fakes), no longer listed by its VS
+      CHECK(!findNeverCapture(0xb7d550c6421e14f4ull) && findGameFake(0x6cc68b13e65b5a73ull) && findGameFake(0x92a300ed9b662005ull),
+            "the Sims' soft shadow blob VS b7d550c6: its pixel shaders are game fakes, the VS no longer listed (M131)");
       // milestones 97, 97c: a zero-thickness wall's back side -- the same square in the plane x = 512, the back
       // cut along the other diagonal (run 209); a wall with a thickness has its other side on another plane
       {

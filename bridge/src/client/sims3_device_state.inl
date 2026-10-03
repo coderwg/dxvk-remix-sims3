@@ -11,7 +11,7 @@ struct Sims3Hook {
   bool cameraValid = false;            // false until verified, and after a reflection-pass camera
   bool declIs3D = false;               // bound vertex layout has a 3-component POSITION
   const sims3cam::ShaderPatch* patch = nullptr;   // constant patch rule of the bound vertex shader
-  uint8_t vsNeverCapture = 0;          // bound vertex shader's draws left to rasterization: 1 all of them, 2 the alpha-blended ones (neverCaptureMode)
+  uint8_t vsNeverCapture = 0;          // bound vertex shader's 3D draws never sent: 1 all of them, 2 the alpha-blended ones (neverCaptureMode, milestone 131)
   // The sky dome (runs 70-72): its draws are captured with a depth-1 viewport, which the runtime
   // takes as "this draw is the sky", and its first 2D texture presented at stage 0 (the cube map
   // there has no hash and would drop the draw).
@@ -138,6 +138,7 @@ struct Sims3Hook {
   // reflection camera drew into; the draws of the passes Remix never shows, dropped (sims3cam::UnshownPass)
   size_t rt0Id = 0, reflectionRtId = 0; bool rtCubeFace = false; uint32_t unshownDrops[sims3cam::kUnshownPasses] = {};
   uint32_t fakeDrops = 0;   // the game's own fakes dropped (milestone 130, sims3cam::kGameFakes)
+  uint32_t neverSentDrops = 0;   // 3D draws the ray tracer must not have, not sent (milestone 131, sims3cam::kNeverCapture)
   uint8_t copyMask = 0; int copyScratch = -1; uint32_t maskEmuC = 0, maskEmuCopyLogged = 0, copyFailed = 0;
   // Wall openings (milestone 13): the windows and doors the wall pixel shaders cut with a mask
   // are cut into the triangles on the client (sims3_walls.h) and the cut geometry, in the

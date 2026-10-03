@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-130).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-131).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -38,9 +38,13 @@
  * 3D draws are dropped on the client (recognised by the mirrored camera, or by the stencil
  * mirror's render states for draws whose own constants never reach the classifier). The
  * passes whose result Remix never shows -- the shadow map, the sky's environment cube, the
- * water's reflection target -- are dropped whole (milestone 124, unshownPass). Any
- * other draw that is not captured gets the identity transforms, i.e. plain rasterization, so
- * it looks exactly as it did without the hook.
+ * water's reflection target -- are dropped whole (milestone 124, unshownPass), and so are the
+ * game's own fakes (milestone 130, kGameFakes) and the 3D draws the ray tracer must not have
+ * (milestone 131, kNeverCapture). Any other draw that is not captured gets the identity
+ * transforms: into another target, or after the interface, the runtime rasterizes it as the
+ * game drew it. (A 3D draw on the screen before the interface the runtime does NOT rasterize:
+ * it traces it with an unknown camera, rtx.skipObjectsWithUnknownCamera being off -- junk at the
+ * world origin -- which is why such draws are not sent at all.)
  *
  * Toggle with the SIMS3_CAMERA_HOOK environment variable (unset/1 = on; 0, f or n = off).
  */
@@ -902,29 +906,27 @@ inline uint32_t packTint(const float* rgb) {
 }
 
 // ---- draws never to capture (milestone 2c; populated in 2f; blended-only entries in 16) ----
-// Draws of the listed vertex shaders are left to rasterization (absent from the ray-traced
-// image): passes the ray tracer cannot represent. An entry marked blendedOnly leaves only the
-// shader's alpha-blended draws to rasterization and captures its opaque ones.
+// The 3D draws of the listed vertex shaders are never sent to the runtime (milestone 131; until
+// then they went out with the identity transforms, which the runtime traced at the world origin):
+// passes the ray tracer cannot represent. An entry marked blendedOnly drops only the shader's
+// alpha-blended draws and captures its opaque ones.
 struct NeverCapture { uint64_t hash; const char* name; bool blendedOnly; };
 
 inline const NeverCapture kNeverCapture[] = {
   // from the run-15 shader dump
   { 0xc79615c0181b5ef1ull, "drop-shadow decals (instanced quads multiplied over the ground)", false },
-  // The Sims' soft shadow blob (milestone 84): a ground decal lifted 5 mm, its texture a 64x64 render
-  // target of the Sims' shadows (the channel picked by vertex colour), multiplied over the ground
-  // (ZERO / INVSRCALPHA). Captured, the runtime took the render target as an albedo; the ray tracer
-  // casts the Sims' shadows itself.
-  { 0xb7d550c6421e14f4ull, "the Sims' soft shadow blob (a 64x64 render target multiplied over the ground)", false },
   // Close-range grass and flower sprites: camera-relative, faded by distance (hidden
   // instances collapse to the origin), one of four axis orientations per instance, two
   // wind-animated frames blended, alpha cut by texkill. Whole quads under capture -- the
   // "green walls" that pop up as the camera comes close.
   { 0x5a2deada1e077b44ull, "grass/flower detail sprites (distance-faded, wind-animated, alpha-cut)", false },
-  // A skinned Sim pass whose pixel shader (11227d6d) writes pure black with the composite's
-  // alpha times a constant: a darkening overlay coincident with the body. Under capture it is a
-  // second surface on the body (black in the raw albedo view once culling favours it, run 57);
-  // the ray tracer shades the body itself, so the overlay stays with the rasterizer.
-  { 0xab38a73070378739ull, "Sim black overlay pass (skinned, pixel shader outputs black x composite alpha)", false },
+  // (The Sims' soft shadow blob, VS b7d550c6, and their black overlay pass, VS ab38a730, were listed here
+  // until milestone 131: their pixel shaders are the game's own fakes now, kGameFakes.)
+  // The Sims' hair soft-edge pass (milestone 131; found in run 171, parked with the Sims until then):
+  // VS e12c352d, a skinned Sim mesh with morph targets, draws the hair twice -- alpha-tested and
+  // opaque, then the same mesh blended (SRCALPHA / INVSRCALPHA, no depth write) for its soft edges.
+  // Captured, the second copy was a see-through layer on the hair; the opaque pass is the hair.
+  { 0xe12c352d135375f2ull, "the Sims' hair soft-edge pass (the blended copy of the alpha-tested hair)", true },
   // The lot overlays drawn right after each lot ground patch (milestone 18c, run 109): three
   // families with NO texture at all (alpha-blended, depth write off), one draw per lot patch --
   // the game's shading / fade quads over the lot -- and their textured sibling that draws the
@@ -980,7 +982,7 @@ inline const GameFake kGameFakes[] = {
   { 0x596c432012619e82ull, "the game's glow (blur)" },
   { 0x353ed3fb56cf16f1ull, "the game's glow (blur; added onto the screen)" },
   // the Sims' soft shadows: each Sim's silhouette in a channel of a 512x512 target, blurred down to
-  // 64x64 and back, laid over the ground as blobs (VS b7d550c6 in kNeverCapture)
+  // 64x64 and back, laid over the ground as blobs (VS b7d550c6)
   { 0x06640070ab99ca77ull, "the Sims' shadow silhouettes" },
   { 0x4e0b4fe50a3af4eaull, "the Sims' shadows (blur)" },
   { 0x2db6dcdb34d42a11ull, "the Sims' shadows (box filter)" },

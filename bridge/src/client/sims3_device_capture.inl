@@ -33,7 +33,8 @@ bool sims3LotTerrainCopy(Sims3Hook& h, Dev* dev, bool is3D) {
 }
 
 // Returns whether this draw is captured with the main camera, and holds the runtime's transforms
-// accordingly: the main camera for a captured draw, else the identity (plain rasterization).
+// accordingly: the main camera for a captured draw, else the identity (a draw the runtime
+// rasterizes: into another target, or after the interface).
 template<typename Dev>
 bool sims3ApplyForDraw(Sims3Hook& h, Dev* dev, const DWORD* rs) {
   static const D3DMATRIX kIdentity = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
@@ -70,7 +71,13 @@ bool sims3ApplyForDraw(Sims3Hook& h, Dev* dev, const DWORD* rs) {
   }
   const bool is3D = sims3cam::drawIs3D(h.cameraValid, h.declIs3D, zEnable, h.rtIsPrimary);
   if (sims3LotTerrainCopy(h, dev, is3D)) return false;   // a lot chunk copy without the baker's markers: dropped (milestone 16)
-  const bool want = is3D && !sims3cam::neverCaptureDraw(h.vsNeverCapture, rs[D3DRS_ALPHABLENDENABLE]);
+  // a 3D draw the ray tracer must not have (kNeverCapture): never sent (milestone 131) -- with the
+  // identity transforms the runtime would trace it with an unknown camera, at the world origin
+  if (is3D && sims3cam::neverCaptureDraw(h.vsNeverCapture, rs[D3DRS_ALPHABLENDENABLE])) {
+    h.drawDropped = true; h.dropWhy = "never captured"; ++h.neverSentDrops;
+    return false;
+  }
+  const bool want = is3D;
   if (want) {
     if (h.held.kind != sims3cam::Kind::Main || !sims3cam::similarMatrix(h.held.view, h.cam.view, 1e-5f) || !sims3cam::similarMatrix(h.held.proj, h.cam.proj, 1e-5f)) {
       h.held.kind = sims3cam::Kind::Main; h.held.view = h.cam.view; h.held.proj = h.cam.proj;
@@ -82,7 +89,8 @@ bool sims3ApplyForDraw(Sims3Hook& h, Dev* dev, const DWORD* rs) {
       h.ourState = false;
     }
   } else if (h.held.kind != sims3cam::Kind::None) {
-    // back to the identity transforms: plain rasterization (the game sets no transforms of its own)
+    // back to the identity transforms (the game sets no transforms of its own): a draw the runtime
+    // rasterizes, into another target or after the interface
     h.held.kind = sims3cam::Kind::None;
     if (!h.loggedDraw2D) {
       h.loggedDraw2D = true;
