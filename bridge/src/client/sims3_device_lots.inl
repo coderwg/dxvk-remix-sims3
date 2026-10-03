@@ -164,7 +164,9 @@ bool sims3LotModelDraw(Sims3Hook& h, Dev* dev, const St& st, INT base, UINT minI
   const bool wantSplit = e->platePrims != 0;
   if (wantSplit && !h.platePs && !h.platePsFailed) {
     IDirect3DPixelShader9* ps = nullptr;
-    if (FAILED(dev->CreatePixelShader(sims3cam::kLotPlatePs, &ps)) || !ps) { h.platePsFailed = true; Logger::info("Sims 3 camera hook: the plate's pixel shader could not be created; low-detail lots drawn as one object"); }
+    HRESULT hr;
+    { sims3cam::OwnCall ownCall(h.calls); hr = dev->CreatePixelShader(sims3cam::kLotPlatePs, &ps); }
+    if (FAILED(hr) || !ps) { h.platePsFailed = true; Logger::info("Sims 3 camera hook: the plate's pixel shader could not be created; low-detail lots drawn as one object"); }
     else h.platePs = ps;
   }
   const bool split = wantSplit && h.platePs && sims3EnsureMarkers(h, dev);
@@ -181,41 +183,30 @@ bool sims3LotModelDraw(Sims3Hook& h, Dev* dev, const St& st, INT base, UINT minI
   if (!split) send(base, minIndex, numVertices, start, prims);   // the model as the game draws it, then its glow
   if (split) {
     if (e->housePrims) { dev->SetIndices(e->house); send(base, e->houseMin, e->houseNum, 0u, e->housePrims); }
-    IDirect3DBaseTexture9* t0 = nullptr; dev->GetTexture(0, &t0);
-    IDirect3DPixelShader9* ps0 = nullptr; dev->GetPixelShader(&ps0);
-    const DWORD at = st.renderStates[D3DRS_ALPHATESTENABLE];
-    h.inRemap = true; dev->SetTexture(0, h.marker[0]); h.inRemap = false;
-    h.swappingPs = true; dev->SetPixelShader(h.platePs); h.swappingPs = false;
-    if (at) { h.ourState = true; dev->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE); h.ourState = false; }
+    const sims3cam::HookCalls::Scope scope = h.calls.open();   // the plate's states, put back right after it
+    h.calls.holdTexture(dev, 0, h.marker[0]); h.calls.holdPs(dev, h.platePs); h.calls.holdRs(dev, D3DRS_ALPHATESTENABLE, FALSE);
     dev->SetIndices(e->plate);
     send(base, e->plateMin, e->plateNum, 0u, e->platePrims);
-    if (at) { h.ourState = true; dev->SetRenderState(D3DRS_ALPHATESTENABLE, at); h.ourState = false; }
-    h.swappingPs = true; dev->SetPixelShader(ps0); h.swappingPs = false; if (ps0) ps0->Release();
-    h.inRemap = true; dev->SetTexture(0, t0); h.inRemap = false; if (t0) t0->Release();
+    h.calls.close(dev, scope);
     ++h.plateDraws; h.plateTriangles += e->platePrims;
   }
   if (glowOn) {
-    IDirect3DBaseTexture9* t0 = nullptr; dev->GetTexture(0, &t0);
+    const sims3cam::HookCalls::Scope scope = h.calls.open();   // the glow's states, put back right after it
     IDirect3DTexture9* own = sims3LotGlowTexture(h, dev, glowTex);   // the windows only, one level (milestone 71)
-    h.inRemap = true; dev->SetTexture(0, own ? (IDirect3DBaseTexture9*) own : h.boundTex[gs]); h.inRemap = false;
-    DWORD sSaved[Sims3Hook::kSamplerCopies] = {};
-    const uint8_t sSet = sims3SamplerStatesTo0(h, dev, (DWORD) gs, sSaved);
+    h.calls.holdTexture(dev, 0, own ? (IDirect3DBaseTexture9*) own : h.boundTex[gs]);
+    sims3SamplerStatesTo0(h, dev, (DWORD) gs);
     const float g = glowScale > 1.f ? 1.f : glowScale;
     const DWORD grey = (DWORD) (g * 255.f + 0.5f);
     static constexpr D3DRENDERSTATETYPE kGlowRs[7] = { D3DRS_ALPHABLENDENABLE, D3DRS_SRCBLEND, D3DRS_DESTBLEND, D3DRS_BLENDOP, D3DRS_ALPHATESTENABLE, D3DRS_ZWRITEENABLE, D3DRS_TEXTUREFACTOR };
     const DWORD ours[7] = { TRUE, D3DBLEND_ONE, D3DBLEND_ONE, D3DBLENDOP_ADD, FALSE, FALSE, 0xFF000000u | (grey << 16) | (grey << 8) | grey };
-    DWORD rsSaved[7];
-    for (int i = 0; i < 7; ++i) rsSaved[i] = st.renderStates[kGlowRs[i]];
-    h.ourState = true; for (int i = 0; i < 7; ++i) dev->SetRenderState(kGlowRs[i], ours[i]); h.ourState = false;
+    for (int i = 0; i < 7; ++i) h.calls.holdRs(dev, kGlowRs[i], ours[i]);
     IDirect3DVertexBuffer9* gvb0 = (IDirect3DVertexBuffer9*) vb0; gvb0->AddRef();
     const UINT off0 = st.streamOffsets[0], st0 = st.streamStrides[0];
     dev->SetStreamSource(0, e->glowVb, 0, e->glowStride);
     dev->SetIndices(e->glow);
     send(0, e->glowMin, e->glowNum, 0u, e->glowPrims);
     dev->SetStreamSource(0, gvb0, off0, st0); gvb0->Release();
-    h.ourState = true; for (int i = 0; i < 7; ++i) dev->SetRenderState(kGlowRs[i], rsSaved[i]); h.ourState = false;
-    sims3SamplerStatesBack(h, dev, sSaved, sSet);
-    h.inRemap = true; dev->SetTexture(0, t0); h.inRemap = false; if (t0) t0->Release();
+    h.calls.close(dev, scope);
     ++h.glowDraws; h.glowTriangles += e->glowPrims;
   }
   dev->SetIndices(gib); gib->Release();

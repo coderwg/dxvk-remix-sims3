@@ -225,9 +225,8 @@ void sims3BindVariant(Sims3Hook& h, Dev* dev, uint8_t tc, uint8_t normalOut, boo
           if (good && constRead) good = sims3cam::appendConstantRead(t, 255);
           if (good) {
             IDirect3DVertexShader9* shader = nullptr;
-            h.creatingVariant = true;
-            const HRESULT hr = dev->CreateVertexShader(t.data(), &shader);
-            h.creatingVariant = false;
+            HRESULT hr;
+            { sims3cam::OwnCall ownCall(h.calls); hr = dev->CreateVertexShader(t.data(), &shader); }
             if (SUCCEEDED(hr) && shader) {
               v->variant = shader; ++h.autoVariantsMade;
               if (made != 0xFEu || hidden) ++h.normalVariantsMade;
@@ -238,8 +237,7 @@ void sims3BindVariant(Sims3Hook& h, Dev* dev, uint8_t tc, uint8_t normalOut, boo
     }
   }
   if (v && v->variant) {
-    h.autoVsRestore = h.vsBound; h.autoVsRestore->AddRef();
-    h.swappingVs = true; dev->SetVertexShader(v->variant); h.swappingVs = false;
+    h.calls.holdVs(dev, v->variant);   // the game's shader back in sims3EndDraw
     if (v->normalOut < 0xFE) ++h.normalDraws; else if (v->normalOut == 0xFF) ++h.normalHiddenDraws;
   } else if (tc > 0) {
     h.autoCapturedUv = false;   // no promoted variant: the draw samples as declared
@@ -250,28 +248,13 @@ void sims3BindVariant(Sims3Hook& h, Dev* dev, uint8_t tc, uint8_t normalOut, boo
 inline constexpr D3DSAMPLERSTATETYPE kSims3SamplerCopy[Sims3Hook::kSamplerCopies] = { D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER, D3DSAMP_MIPFILTER, D3DSAMP_SRGBTEXTURE, D3DSAMP_MAXANISOTROPY };
 // A texture moved to stage 0 takes its own stage's sampler states with it (milestone 68): the runtime
 // samples stage 0's texture with stage 0's states -- the sRGB flag picks the decode, the addressing
-// and the filters the sampling. The states that differ are set on stage 0, their stage-0 values kept
-// in saved; the mask returned says which, for sims3SamplerStatesBack.
+// and the filters the sampling. Held on stage 0 in the current scope (the draw's or a section's).
 template<typename Dev>
-uint8_t sims3SamplerStatesTo0(Sims3Hook& h, Dev* dev, DWORD from, DWORD* saved) {
-  uint8_t set = 0;
-  h.ourSampler = true;
+void sims3SamplerStatesTo0(Sims3Hook& h, Dev* dev, DWORD from) {
   for (int i = 0; i < Sims3Hook::kSamplerCopies; ++i) {
-    DWORD v0 = 0, vf = 0;
-    dev->GetSamplerState(0, kSims3SamplerCopy[i], &v0); dev->GetSamplerState(from, kSims3SamplerCopy[i], &vf);
-    if (v0 == vf) continue;
-    saved[i] = v0; set |= (uint8_t) (1u << i);
-    dev->SetSamplerState(0, kSims3SamplerCopy[i], vf);
+    DWORD v = 0; dev->GetSamplerState(from, kSims3SamplerCopy[i], &v);
+    h.calls.holdSampler(dev, 0, kSims3SamplerCopy[i], v);
   }
-  h.ourSampler = false;
-  return set;
-}
-template<typename Dev>
-void sims3SamplerStatesBack(Sims3Hook& h, Dev* dev, const DWORD* saved, uint8_t set) {
-  if (!set) return;
-  h.ourSampler = true;
-  for (int i = 0; i < Sims3Hook::kSamplerCopies; ++i) if (set & (1u << i)) dev->SetSamplerState(0, kSims3SamplerCopy[i], saved[i]);
-  h.ourSampler = false;
 }
 
 // An untabled pixel shader's draw: the albedo stage from its bytecode and what is bound

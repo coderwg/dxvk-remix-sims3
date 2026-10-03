@@ -104,9 +104,8 @@ IDirect3DPixelShader9* sims3PsVariant(Sims3Hook& h, Dev* dev, IDirect3DPixelShad
   if (sims3cam::wantsUnlitPatch(hash)) unlit = sims3cam::psUnlitOutput(t);
   if (alphaOne) alpha = sims3cam::psForceAlphaOne(t);
   IDirect3DPixelShader9* ps = nullptr;
-  h.creatingVariant = true;
-  const HRESULT hr = dev->CreatePixelShader(t.data(), &ps);
-  h.creatingVariant = false;
+  HRESULT hr;
+  { sims3cam::OwnCall ownCall(h.calls); hr = dev->CreatePixelShader(t.data(), &ps); }
   if (FAILED(hr) || ps == nullptr) return nullptr;
   v.variant = ps; v.freeStage = (uint8_t) free;
   ++h.psVariantsMade; if (unlit) ++h.psVariantsUnlit; if (alpha) ++h.psVariantsAlpha;
@@ -118,9 +117,10 @@ IDirect3DPixelShader9* sims3PsVariant(Sims3Hook& h, Dev* dev, IDirect3DPixelShad
 template<typename Dev>
 void sims3TerrainStageRelease(Sims3Hook& h, Dev* dev) {
   if (h.tblockStage < 0) return;
-  h.ourSampler = true;
-  for (int i = 0; i < Sims3Hook::kSamplerCopies; ++i) if (h.tblockSet & (1u << i)) dev->SetSamplerState((DWORD) h.tblockStage, kSims3SamplerCopy[i], h.tblockSaved[i]);
-  h.ourSampler = false;
+  {
+    sims3cam::OwnCall ownCall(h.calls);
+    for (int i = 0; i < Sims3Hook::kSamplerCopies; ++i) if (h.tblockSet & (1u << i)) dev->SetSamplerState((DWORD) h.tblockStage, kSims3SamplerCopy[i], h.tblockSaved[i]);
+  }
   h.tblockStage = -1; h.tblockSet = 0;
 }
 // Ends the terrain block (milestone 18g): the game's sampler states back on the free stage and
@@ -128,24 +128,26 @@ void sims3TerrainStageRelease(Sims3Hook& h, Dev* dev) {
 template<typename Dev>
 void sims3TerrainBlockEnd(Sims3Hook& h, Dev* dev) {
   if (!h.tblockActive) return;
-  h.ourSampler = true;
-  for (DWORD s = 0; s < 16; ++s) if (h.tblockSrgb & (1u << s)) dev->SetSamplerState(s, D3DSAMP_SRGBTEXTURE, TRUE);
-  h.ourSampler = false;
+  {
+    sims3cam::OwnCall ownCall(h.calls);
+    for (DWORD s = 0; s < 16; ++s) if (h.tblockSrgb & (1u << s)) dev->SetSamplerState(s, D3DSAMP_SRGBTEXTURE, TRUE);
+  }
   sims3TerrainStageRelease(h, dev);
   h.tblockActive = false; h.tblockSrgb = 0; ++h.tblockFlushes;
 }
 // The paint composite's second pass in place (milestone 19): the game's own draw was pass 1
 // (layer 4 blacked out); the same draw goes out again as pass 2, hidden, blended ONE / ONE,
-// through the ordinary draw hooks as the hook's own re-issue.
+// through the ordinary draw hooks as the hook's own re-issue (its blend held around it; the re-issue
+// holds its own in a draw scope inside).
 template<typename Dev>
 void sims3CompositeSecondPass(Sims3Hook& h, Dev* dev, bool indexed, D3DPRIMITIVETYPE type, INT baseVertex, UINT minIndex, UINT numVertices, UINT start, UINT count) {
   h.compositeSecond = false;
-  DWORD src = 0, dst = 0; dev->GetRenderState(D3DRS_SRCBLEND, &src); dev->GetRenderState(D3DRS_DESTBLEND, &dst);
-  h.ourState = true; dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE); dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE); h.ourState = false;
+  const sims3cam::HookCalls::Scope scope = h.calls.open();
+  h.calls.holdRs(dev, D3DRS_SRCBLEND, D3DBLEND_ONE); h.calls.holdRs(dev, D3DRS_DESTBLEND, D3DBLEND_ONE);
   h.reissue = true; h.reissueKind = 2;
   if (indexed) dev->DrawIndexedPrimitive(type, baseVertex, minIndex, numVertices, start, count); else dev->DrawPrimitive(type, start, count);
   h.reissue = false; h.reissueKind = 0;
-  h.ourState = true; dev->SetRenderState(D3DRS_SRCBLEND, src); dev->SetRenderState(D3DRS_DESTBLEND, dst); h.ourState = false;
+  h.calls.close(dev, scope);
 }
 
 // Ends the block only if the draw about to go out samples a stage the block holds: an
@@ -185,18 +187,12 @@ bool sims3BeginTerrainDraw(Sims3Hook& h, Dev* dev, uint8_t kind) {
   const bool lotFamily = h.vsTerrain && h.vsTerrain->lotFamily;
   const int markerIdx = composite ? 2 : (kind == 2 || kind == 3) ? 1 : 0;   // kind 3: a square's piece that only paints (milestone 60), hidden
   // textures: the game's stage 0 moves to the free stage (with stage 0's sampler states), the marker takes stage 0
-  h.freeStageRestore = h.boundTex[freeStage]; if (h.freeStageRestore) h.freeStageRestore->AddRef();
-  h.terrainFreeStage = freeStage;
-  h.remapRestore = h.boundTex[0]; if (h.remapRestore) h.remapRestore->AddRef();
-  h.remapActive = true;
-  h.inRemap = true;
-  dev->SetTexture((DWORD) freeStage, h.boundTex[0]);
-  dev->SetTexture(0, h.marker[markerIdx]);
+  h.calls.holdTexture(dev, (DWORD) freeStage, h.boundTex[0]);
+  h.calls.holdTexture(dev, 0, h.marker[markerIdx]);
   if (pass == 2) {   // the second composite pass: layers 1 and 2 black as well, so only layer 4 x mask.w is added
-    for (int s = 0; s < 2; ++s) { h.extraRestore[s] = h.boundTex[s + 1]; if (h.extraRestore[s]) h.extraRestore[s]->AddRef(); dev->SetTexture((DWORD) (s + 1), h.marker[2]); }
-    h.extraActive = true; ++h.compositePasses;
+    for (int s = 0; s < 2; ++s) h.calls.holdTexture(dev, (DWORD) (s + 1), h.marker[2]);
+    ++h.compositePasses;
   }
-  h.inRemap = false;
   // a lot's re-submission goes out as two half draws (the draw hooks split it; milestone 18b): the
   // runtime files a draw by its index data and counts, so a half can never be taken for the lot's
   // own visible instance whatever the camera does (the same mesh, material and position otherwise).
@@ -212,7 +208,7 @@ bool sims3BeginTerrainDraw(Sims3Hook& h, Dev* dev, uint8_t kind) {
   // (milestone 18g) and only re-sent where the device's current value differs.
   if (!h.tblockActive) { h.tblockActive = true; h.tblockSrgb = 0; }
   if (h.tblockStage != freeStage) { sims3TerrainStageRelease(h, dev); h.tblockStage = freeStage; }   // another free stage: the previous one back to the game's states first
-  h.ourSampler = true;
+  sims3cam::OwnCall ownCall(h.calls);
   for (int i = 0; i < Sims3Hook::kSamplerCopies; ++i) {
     DWORD v0 = 0, vf = 0;
     dev->GetSamplerState(0, kSims3SamplerCopy[i], &v0); dev->GetSamplerState((DWORD) freeStage, kSims3SamplerCopy[i], &vf);
@@ -225,16 +221,11 @@ bool sims3BeginTerrainDraw(Sims3Hook& h, Dev* dev, uint8_t kind) {
     DWORD v = 0; dev->GetSamplerState(s, D3DSAMP_SRGBTEXTURE, &v);
     if (v) { dev->SetSamplerState(s, D3DSAMP_SRGBTEXTURE, FALSE); h.tblockSrgb |= (uint16_t) (1u << s); ++h.srgbOffs; }
   }
-  h.ourSampler = false;
   // a draw that writes alpha 1 into the bake -- a base draw, a lot's opaque chunk copies -- needs
   // the full colour mask (the game masks alpha off)
-  if (alphaMode != 0) {
-    DWORD cw = 0xF; dev->GetRenderState(D3DRS_COLORWRITEENABLE, &cw);
-    if ((cw & 0xFu) != 0xFu) { h.cwRestore = cw; h.cwOurs = true; h.ourState = true; dev->SetRenderState(D3DRS_COLORWRITEENABLE, 0xFu); h.ourState = false; }
-  }
+  if (alphaMode != 0) h.calls.holdRs(dev, D3DRS_COLORWRITEENABLE, 0xFu);
   // the pixel shader variant; the game's shader held until sims3EndDraw
-  h.psRestore = h.psBound; h.psRestore->AddRef();
-  h.swappingPs = true; dev->SetPixelShader(variant); h.swappingPs = false;
+  h.calls.holdPs(dev, variant);
   if (kind == 2) ++h.terrainLayerDraws; else if (kind != 3) ++h.terrainBaseDraws;   // kind 3 pieces: mergePaintPieces
   return true;
 }

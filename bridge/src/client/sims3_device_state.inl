@@ -12,11 +12,14 @@ struct Sims3Hook {
   bool declIs3D = false;               // bound vertex layout has a 3-component POSITION
   const sims3cam::ShaderPatch* patch = nullptr;   // constant patch rule of the bound vertex shader
   const sims3cam::DropPs* psDrop = nullptr;   // the bound pixel shader's entry in kDropPs, or null (milestone 148)
+  // the hook's own device calls (milestone 152, sims3cam::HookCalls): the guard the setters' hooks look at,
+  // and the undo log of every state the hook changes; the draw's scope in it (sims3BeginDraw to sims3EndDraw)
+  sims3cam::HookCalls calls;
+  sims3cam::HookCalls::Scope drawScope;
   // The sky dome (runs 70-72): its draws are captured with a depth-1 viewport, which the runtime
   // takes as "this draw is the sky", and its first 2D texture presented at stage 0 (the cube map
   // there has no hash and would drop the draw).
   bool vsSkyDome = false;              // the bound vertex shader is a sky dome's (isSkyDomeShader)
-  bool viewportOurs = false; D3DVIEWPORT9 gameViewport = {};   // the game's viewport while the depth-1 one is set
   uint32_t skyDraws = 0;
   uint32_t frames = 0;                 // Present count, for periodic diagnostics
   uint32_t capturedDraws = 0, overrideDraws = 0, remapCount[16] = {};   // per-stage remap statistics
@@ -26,12 +29,6 @@ struct Sims3Hook {
   uint32_t boundFmt[16] = {};          // D3DFORMAT per stage
   uint16_t boundW[16] = {}, boundH[16] = {};
   uint8_t boundKind[16] = {};          // 0 none, 1 2D, 2 cube, 3 volume; +0x80 render target
-  bool inRemap = false;                // our own SetTexture calls must not update the tracking above
-  IDirect3DBaseTexture9* remapRestore = nullptr;
-  bool remapActive = false;
-  // The albedo's own sampler states, moved to stage 0 with it (milestone 68): the runtime reads
-  // stage 0's -- the sRGB flag picks the decode, the addressing and filters the sampling.
-  DWORD remapSamplerSaved[7] = {}; uint8_t remapSamplerSet = 0;
   
   uint32_t cutShaders = 0, cutLogged = 0; uint64_t cutLoggedPs[32] = {};   // pixel shaders analysed with a cut-out; their first draws logged (milestone 68)
   uint32_t fadeShaders = 0, fadeLogged = 0; uint64_t fadeLoggedPs[16] = {};   // pixel shaders whose alpha is "fade - alpha"; their first draws logged (milestone 135)
@@ -43,7 +40,7 @@ struct Sims3Hook {
   uint8_t tssOurs = 0;                 // stage 0's COLOROP / COLORARG1 / COLORARG2 (bits 0..2) currently hold the hook's TFACTOR modulation
   uint32_t loggedTintRegs = 0;         // tint registers whose first forwarded value was logged
   uint32_t streetLogged = 0; int streetSaid = -1;   // the street lamps' state as last logged
-  bool fogReady = false, fogOurs = false, fogApiWarned = false; DWORD fogSaved[5] = {};   // the game's fog for the runtime (milestone 56)
+  bool fogReady = false, fogApiWarned = false;   // the game's fog for the runtime (milestone 56)
   float fogBright = 0.f, fogShare = 0.f, fogScaleNow = -1.f; uint32_t fogScaleFrame = 0, fogScaleSends = 0;   // its brightness, lit as the scene is lit (milestone 57)
   uint32_t fogColour = 0, fogFrameDraws = 0, fogDraws = 0;
   float fogStart = 0.f, fogEnd = 0.f, fogCurve = 1.f; // the fog's two log lines, each with its own cap (milestone 58)
@@ -107,9 +104,6 @@ struct Sims3Hook {
   // the instance data, with the frequency of stream 0 set to one instance for the duration.
   bool drawCaptured = false;                      // this draw is captured (set by sims3BeginDraw)
   uint32_t deinstancedDraws = 0, deinstancedInstances = 0;
-  bool creatingVariant = false;                   // our own CreateVertexShader / CreatePixelShader call: no tables, no dump
-  bool swappingVs = false;                        // our own SetVertexShader call: the bound-shader facts stay the game's
-  IDirect3DVertexShader9* autoVsRestore = nullptr; // the game's shader to re-bind after a swapped draw
   bool autoCapturedUv = false;                    // this draw samples with the captured TEXCOORD0 by the auto decision
   uint32_t autoDraws = 0, autoVariantsMade = 0, autoNoAlbedo = 0;
   uint32_t autoTexcoordDraws = 0;                 // tabled pixel shader on an untabled vertex shader: coordinate from the bytecode
@@ -117,7 +111,6 @@ struct Sims3Hook {
   // texture-coordinate index at 7, its colour stage rewired to TEXTURE x TFACTOR, the texture factor,
   // View/Projection forced to identity -- and the game's other draws inherited them. The game's own
   // values are tracked here and put back before any draw that is not captured.
-  bool ourState = false;                          // our own SetTextureStageState / SetRenderState / SetTransform calls
   DWORD gameTss0[4] = { D3DTOP_MODULATE, D3DTA_TEXTURE, D3DTA_CURRENT, 0 };   // stage 0: COLOROP, COLORARG1, COLORARG2, TEXCOORDINDEX (D3D defaults until the game sets them)
   DWORD gameFactor = 0xFFFFFFFFu;                 // D3DRS_TEXTUREFACTOR
   bool factorOurs = false;                        // the runtime holds our factor (else the game's)
@@ -125,12 +118,11 @@ struct Sims3Hook {
   // The compositor packs the Sim textures' channels with partial colour write masks, and the runtime
   // (with ray tracing on) drops any draw whose mask lacks R, G or B before it asks whether the target
   // is an offscreen texture; such draws are emulated with blending and a full mask.
-  uint8_t maskEmu = 0; DWORD maskSaved[10] = {}; uint16_t maskEmuBits = 0; uint32_t maskEmuA = 0, maskEmuB = 0, maskEmuSkipped = 0, maskEmuLogged = 0;
+  uint32_t maskEmuA = 0, maskEmuB = 0, maskEmuSkipped = 0, maskEmuLogged = 0;
   // Blended writes to a subset of the colour channels (the compositor's per-channel pattern masks:
   // colour write 1 / 2 / 4 with blending on, run 50) have no single-pass equivalent with a full mask,
   // so the target is copied first, the draw runs with a full mask and the game's blend, and the
   // channels the game did not write go back from the copy with a constant-factor blend.
-  bool ourDraw = false;                           // the restore quad is being drawn (the draw hooks ignore it)
   struct Scratch { uint16_t w = 0, h = 0; uint32_t fmt = 0; IDirect3DTexture9* tex = nullptr; IDirect3DSurface9* surf = nullptr; };
   static constexpr uint32_t kScratch = 4;
   Scratch scratch[kScratch]; uint32_t scratchCount = 0;
@@ -178,10 +170,6 @@ struct Sims3Hook {
   // texture at a free stage, and a pixel shader variant reading it there.
   const sims3cam::TerrainShader* vsTerrain = nullptr;   // the bound (game) vertex shader is a terrain shader
   IDirect3DPixelShader9* psBound = nullptr;       // the pixel shader the game bound (for the variant swap)
-  bool swappingPs = false;                        // our own SetPixelShader call: the bound-shader facts stay the game's
-  IDirect3DPixelShader9* psRestore = nullptr;     // the game's pixel shader to re-bind after a terrain draw
-  int terrainFreeStage = -1;                      // the stage the game's stage-0 texture was moved to for this draw, or -1
-  IDirect3DBaseTexture9* freeStageRestore = nullptr;   // ...and what that stage held
   static constexpr int kSamplerCopies = 7;
   // The terrain block (milestone 18g): the free stage's copied sampler states and the stages'
   // sRGB flags stay as the terrain draws want them across consecutive terrain draws and go back
@@ -191,7 +179,6 @@ struct Sims3Hook {
   bool tblockActive = false; int tblockStage = -1;   // the one free stage whose copied sampler states are held (released on a switch: another terrain draw may read that stage as its own layer, run 116)
   uint8_t tblockSet = 0; DWORD tblockSaved[kSamplerCopies] = {};   // the held copies and the game's values
   uint16_t tblockSrgb = 0;                            // stages whose SRGBTEXTURE the hook holds off
-  bool ourSampler = false;                            // our own SetSamplerState calls: no cancelling
   uint32_t tblockFlushes = 0, tblockCancelled = 0, tblockKept = 0;   // ...and the uncaptured draws that touched no held stage
   // The game's own paint composite draw just went out as pass 1; pass 2 follows in place (the
   // draw member re-issues it hidden, blended ONE / ONE; milestone 19).
@@ -215,7 +202,6 @@ struct Sims3Hook {
   // versions and range), and this frame's kept wall triangles per vertex buffer
   std::unordered_map<uint64_t, std::vector<uint64_t>> wallPieceTris;
   std::unordered_map<uint32_t, std::unordered_set<uint64_t>> wallFrameTris;
-  DWORD blendSaved = 0; bool blendOurs = false;
   uint32_t glassLogged = 0; uint64_t glassLoggedPs[32] = {};
   IDirect3DTexture9* mirrorMarker = nullptr; bool mirrorMarkerFailed = false; uint32_t mirrorDraws = 0;   // mirrors (milestone 101)
   bool drawGlass = false;               // this draw went out as glass
@@ -228,14 +214,10 @@ struct Sims3Hook {
   uint32_t glassSideDraws = 0, glassSideSkipped = 0; uint64_t glassSideTris = 0;
   const D3DVERTEXELEMENT9* declElems = nullptr;   // the bound declaration's elements (its POSITION, for the back side; its inputs, for the place)
   // glass carries its object's place (milestone 119, sims3GlassWorld): the vertex shaders' bytecode by
-  // hash, whether this draw has the hook's WORLD transform, counts
+  // hash, counts
   std::unordered_map<uint64_t, std::vector<DWORD>> vsTokens;
-  bool worldOurs = false;
   uint32_t worldDraws = 0, worldFailed = 0, worldLogged = 0;
-  // the lot paint composite's two passes (milestone 17l, sims3cam::lotCompositeStage): the pass
-  // being issued (0 = the game's own draw, pass 1; 2 = the hook's second pass, milestone 19), and
-  // pass 2's black marker at stages 1 and 2 (what they held, put back in sims3EndDraw)
-  IDirect3DBaseTexture9* extraRestore[2] = {}; bool extraActive = false;
+  // the lot paint composite's two passes (milestone 17l, sims3cam::lotCompositeStage): pass 2's draws
   uint32_t compositePasses = 0;
   // a lot's re-submissions issued as two half draws (milestone 17r): the runtime's draw tracker
   // files a draw by the hash of its index data and counts, so a half never shares the lot's
@@ -245,7 +227,6 @@ struct Sims3Hook {
   // terrain kind it is given.
   bool reissue = false; uint8_t reissueKind = 0;
   bool markDown = false;                          // the mark key held (milestone 17y)
-  bool ourConsts = false;                         // our own SetVertexShaderConstantF calls: no camera classification, no tracking
   struct PsVariant { IDirect3DPixelShader9* base; uint64_t hash; uint8_t alphaMode; uint8_t forced; IDirect3DPixelShader9* variant; uint8_t freeStage; };
   static constexpr uint32_t kPsVariants = 64;
   PsVariant psVariants[kPsVariants] = {}; uint32_t psVariantCount = 0;   // one per (shader, hash, alpha mode); variant null = could not be made
@@ -253,8 +234,6 @@ struct Sims3Hook {
   // base draw writes alpha 1 (terrainAlphaMode) with a full
   // colour mask; and every stage samples raw (non-sRGB) so the bake holds sRGB-encoded texels,
   // which the ray tracer gamma-corrects itself.
-  DWORD cwRestore = 0; bool cwOurs = false;      // the game's COLORWRITEENABLE while the hook's full mask is set
-  DWORD atSaved[3] = {}; bool atOurs = false;    // the game's ALPHATESTENABLE / ALPHAFUNC / ALPHAREF while the hook's alpha test is set (a cut-out, milestones 67-68)
   uint32_t terrainBaseDraws = 0, terrainLayerDraws = 0, terrainLotCopyDraws = 0, terrainNoVariant = 0, psVariantsMade = 0, psVariantsUnlit = 0, psVariantsAlpha = 0, psVariantLogged = 0, samplerCopies = 0, srgbOffs = 0;
   // the town ground's squares (milestone 60, design B): per square (one vertex buffer), the
   // opaque pieces the merged shape is made of and the shape's own index buffer

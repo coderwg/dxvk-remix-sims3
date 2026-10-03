@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-151).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-152).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -2612,5 +2612,143 @@ inline uint32_t applyPatches(const ShaderPatch* p, UINT startRegister, float* da
   }
   return n;
 }
+
+// ---- the hook's own device calls (milestone 152) ------------------------------------------------------
+// One guard and one undo log for what the hook does on the device itself. own > 0 while the hook calls
+// the device: the setters' hooks leave the game's facts alone (the bound shaders, textures and layout,
+// the stage-0 states, the terrain block's held states, the camera's constants), the shader-creation hooks
+// make no tables and the draw hooks ignore a draw (the restore quad). Every state the hook changes for a
+// draw is held in the log: the device's value saved the first time the current scope takes the state,
+// only differences sent, and everything put back newest first at the end of the scope -- the draw's
+// (sims3EndDraw), or a section's inside it (the low-detail lot's plate and glow, the restore quad) or
+// around a re-issued draw (the composite's second pass). (Until milestone 152 eight flags guarded the
+// setters, each some of them -- the restore quad's sampler calls came under none and cancelled the
+// terrain block's sRGB hold -- and every change kept a saved value and a flag of its own, put back one by
+// one in sims3EndDraw.) A full log leaves the state alone and counts it (full).
+struct HookCalls {
+  enum : uint8_t { kRs = 1, kSampler, kStage, kTexture, kPs, kVs, kViewport, kWorld };
+  struct Entry { uint8_t kind = 0, stage = 0; uint16_t type = 0; DWORD value = 0; IUnknown* object = nullptr; };
+  struct Scope { uint32_t base = 0, prev = 0; };
+  struct Guard {   // the hook's own call, for its lifetime
+    HookCalls& c;
+    explicit Guard(HookCalls& x) : c(x) { ++c.own; }
+    ~Guard() { --c.own; }
+    Guard(const Guard&) = delete; Guard& operator=(const Guard&) = delete;
+  };
+  static constexpr uint32_t kEntries = 64;
+  uint32_t own = 0;
+  Entry log[kEntries]; uint32_t count = 0, scope = 0, full = 0;
+  D3DVIEWPORT9 viewport = {}; D3DMATRIX world = {};   // the saved viewport and WORLD transform (the sky dome's, a glass draw's: one each)
+
+  bool holds(uint8_t kind, uint32_t stage, uint32_t type) const {   // whether the current scope holds the state
+    for (uint32_t i = scope; i < count; ++i) if (log[i].kind == kind && log[i].stage == stage && log[i].type == type) return true;
+    return false;
+  }
+  bool holdsRs(D3DRENDERSTATETYPE s) const { return holds(kRs, 0, (uint32_t) s); }
+  Scope open() { const Scope s = { count, scope }; scope = count; return s; }
+  template<typename Dev> void close(Dev* dev, Scope s) { undoTo(dev, s.base); scope = s.prev; }
+  // a device reset: the saved objects released, nothing set (the device is back to its defaults)
+  void forget() {
+    for (uint32_t i = 0; i < count; ++i) { if (log[i].object) log[i].object->Release(); log[i] = Entry(); }
+    count = scope = 0; own = 0;
+  }
+
+  template<typename Dev> void holdRs(Dev* dev, D3DRENDERSTATETYPE s, DWORD v) {
+    Guard g(*this);
+    DWORD now = 0; dev->GetRenderState(s, &now);
+    if (take(kRs, 0, (uint32_t) s, now, nullptr) && now != v) dev->SetRenderState(s, v);
+  }
+  template<typename Dev> void holdSampler(Dev* dev, DWORD stage, D3DSAMPLERSTATETYPE t, DWORD v) {
+    Guard g(*this);
+    DWORD now = 0; dev->GetSamplerState(stage, t, &now);
+    if (take(kSampler, stage, (uint32_t) t, now, nullptr) && now != v) dev->SetSamplerState(stage, t, v);
+  }
+  template<typename Dev> void holdStage(Dev* dev, DWORD stage, D3DTEXTURESTAGESTATETYPE t, DWORD v) {
+    Guard g(*this);
+    DWORD now = 0; dev->GetTextureStageState(stage, t, &now);
+    if (take(kStage, stage, (uint32_t) t, now, nullptr) && now != v) dev->SetTextureStageState(stage, t, v);
+  }
+  template<typename Dev> void holdTexture(Dev* dev, DWORD stage, IDirect3DBaseTexture9* t) {
+    Guard g(*this);
+    IDirect3DBaseTexture9* now = nullptr; dev->GetTexture(stage, &now);   // a reference, the entry's (or released by take)
+    const bool same = now == t;
+    if (take(kTexture, stage, 0, 0, now) && !same) dev->SetTexture(stage, t);
+  }
+  template<typename Dev> void holdPs(Dev* dev, IDirect3DPixelShader9* ps) {
+    Guard g(*this);
+    IDirect3DPixelShader9* now = nullptr; dev->GetPixelShader(&now);
+    const bool same = now == ps;
+    if (take(kPs, 0, 0, 0, now) && !same) dev->SetPixelShader(ps);
+  }
+  template<typename Dev> void holdVs(Dev* dev, IDirect3DVertexShader9* vs) {
+    Guard g(*this);
+    IDirect3DVertexShader9* now = nullptr; dev->GetVertexShader(&now);
+    const bool same = now == vs;
+    if (take(kVs, 0, 0, 0, now) && !same) dev->SetVertexShader(vs);
+  }
+  template<typename Dev> void holdViewport(Dev* dev, const D3DVIEWPORT9& vp) {
+    Guard g(*this);
+    D3DVIEWPORT9 now = {}; dev->GetViewport(&now);
+    const bool had = holds(kViewport, 0, 0);
+    if (!take(kViewport, 0, 0, 0, nullptr)) return;
+    if (!had) viewport = now;
+    dev->SetViewport(&vp);
+  }
+  template<typename Dev> void holdWorld(Dev* dev, const D3DMATRIX& m) {
+    Guard g(*this);
+    D3DMATRIX now = {}; dev->GetTransform(D3DTS_WORLD, &now);
+    const bool had = holds(kWorld, 0, 0);
+    if (!take(kWorld, 0, 0, 0, nullptr)) return;
+    if (!had) world = now;
+    dev->SetTransform(D3DTS_WORLD, &m);
+  }
+  // the log back to `to` entries, newest first: each state set back where it differs
+  template<typename Dev> void undoTo(Dev* dev, uint32_t to) {
+    Guard g(*this);
+    while (count > to) {
+      Entry& e = log[--count];
+      switch (e.kind) {
+        case kRs: { DWORD now = 0; dev->GetRenderState((D3DRENDERSTATETYPE) e.type, &now); if (now != e.value) dev->SetRenderState((D3DRENDERSTATETYPE) e.type, e.value); break; }
+        case kSampler: { DWORD now = 0; dev->GetSamplerState(e.stage, (D3DSAMPLERSTATETYPE) e.type, &now); if (now != e.value) dev->SetSamplerState(e.stage, (D3DSAMPLERSTATETYPE) e.type, e.value); break; }
+        case kStage: { DWORD now = 0; dev->GetTextureStageState(e.stage, (D3DTEXTURESTAGESTATETYPE) e.type, &now); if (now != e.value) dev->SetTextureStageState(e.stage, (D3DTEXTURESTAGESTATETYPE) e.type, e.value); break; }
+        case kTexture: {
+          IDirect3DBaseTexture9* saved = static_cast<IDirect3DBaseTexture9*>(e.object), *now = nullptr; dev->GetTexture(e.stage, &now);
+          if (now != saved) dev->SetTexture(e.stage, saved);
+          if (now) now->Release();
+          break;
+        }
+        case kPs: {
+          IDirect3DPixelShader9* saved = static_cast<IDirect3DPixelShader9*>(e.object), *now = nullptr; dev->GetPixelShader(&now);
+          if (now != saved) dev->SetPixelShader(saved);
+          if (now) now->Release();
+          break;
+        }
+        case kVs: {
+          IDirect3DVertexShader9* saved = static_cast<IDirect3DVertexShader9*>(e.object), *now = nullptr; dev->GetVertexShader(&now);
+          if (now != saved) dev->SetVertexShader(saved);
+          if (now) now->Release();
+          break;
+        }
+        case kViewport: dev->SetViewport(&viewport); break;
+        case kWorld: dev->SetTransform(D3DTS_WORLD, &world); break;
+        default: break;
+      }
+      if (e.object) e.object->Release();
+      e = Entry();
+    }
+  }
+
+ private:
+  // the state's entry in the current scope, made with the saved value when there is none: false when
+  // the log is full (the state is left alone); an object passed in is the entry's, or released
+  bool take(uint8_t kind, uint32_t stage, uint32_t type, DWORD value, IUnknown* object) {
+    if (holds(kind, stage, type)) { if (object) object->Release(); return true; }
+    if (count >= kEntries) { ++full; if (object) object->Release(); return false; }
+    Entry& e = log[count++];
+    e.kind = kind; e.stage = (uint8_t) stage; e.type = (uint16_t) type; e.value = value; e.object = object;
+    return true;
+  }
+};
+using OwnCall = HookCalls::Guard;
 
 } // namespace sims3cam

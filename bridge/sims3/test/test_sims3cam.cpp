@@ -24,6 +24,27 @@ using namespace sims3cam;
 static int fails = 0, skips = 0;
 #define CHECK(cond, ...) do { if (cond) { printf("  PASS  "); } else { printf("  FAIL  "); ++fails; } printf(__VA_ARGS__); printf("\n"); } while (0)
 #define SKIP(...) do { printf("  SKIP  "); ++skips; printf(__VA_ARGS__); printf("\n"); } while (0)
+// A device for the hook's own calls (milestone 152): the states as plain arrays, every set counted.
+struct FakeDev {
+  DWORD rs[256] = {}, ss[16][16] = {}, tss[8][40] = {}; D3DVIEWPORT9 vp = {}; D3DMATRIX world = {}; uint32_t sets = 0;
+  HRESULT GetRenderState(D3DRENDERSTATETYPE s, DWORD* v) { *v = rs[s]; return S_OK; }
+  HRESULT SetRenderState(D3DRENDERSTATETYPE s, DWORD v) { rs[s] = v; ++sets; return S_OK; }
+  HRESULT GetSamplerState(DWORD st, D3DSAMPLERSTATETYPE t, DWORD* v) { *v = ss[st][t]; return S_OK; }
+  HRESULT SetSamplerState(DWORD st, D3DSAMPLERSTATETYPE t, DWORD v) { ss[st][t] = v; ++sets; return S_OK; }
+  HRESULT GetTextureStageState(DWORD st, D3DTEXTURESTAGESTATETYPE t, DWORD* v) { *v = tss[st][t]; return S_OK; }
+  HRESULT SetTextureStageState(DWORD st, D3DTEXTURESTAGESTATETYPE t, DWORD v) { tss[st][t] = v; ++sets; return S_OK; }
+  HRESULT GetTexture(DWORD, IDirect3DBaseTexture9** t) { *t = nullptr; return S_OK; }
+  HRESULT SetTexture(DWORD, IDirect3DBaseTexture9*) { ++sets; return S_OK; }
+  HRESULT GetPixelShader(IDirect3DPixelShader9** p) { *p = nullptr; return S_OK; }
+  HRESULT SetPixelShader(IDirect3DPixelShader9*) { ++sets; return S_OK; }
+  HRESULT GetVertexShader(IDirect3DVertexShader9** p) { *p = nullptr; return S_OK; }
+  HRESULT SetVertexShader(IDirect3DVertexShader9*) { ++sets; return S_OK; }
+  HRESULT GetViewport(D3DVIEWPORT9* v) { *v = vp; return S_OK; }
+  HRESULT SetViewport(const D3DVIEWPORT9* v) { vp = *v; ++sets; return S_OK; }
+  HRESULT GetTransform(D3DTRANSFORMSTATETYPE, D3DMATRIX* m) { *m = world; return S_OK; }
+  HRESULT SetTransform(D3DTRANSFORMSTATETYPE, const D3DMATRIX* m) { world = *m; ++sets; return S_OK; }
+};
+
 static const char* kindName(Kind k) { return k == Kind::Main ? "Main" : k == Kind::Reflection ? "Reflection" : "None"; }
 
 // The in-game shader dumps (written by the hook, sims3DumpShader) and the captured buffers.
@@ -1551,6 +1572,59 @@ int main() {
       CHECK(!psUnlitOutput(w2) && w2.size() == world.size() && opW == 5u /*MUL*/, "psUnlitOutput 028ce2dd: the world terrain's final mul is left alone (not a mad)");
       CHECK(psUnlitOutput(c2) && !wantsUnlitPatch(0x99ee53ff6ef1b0b6ull), "psUnlitOutput would rewrite the composite's final mad too, which is why the patch is applied by hash only");
     }
+  }
+
+  // --- the hook's own calls (milestone 152): one guard, one undo log with scopes
+  {
+    FakeDev d; HookCalls c;
+    d.rs[D3DRS_ALPHATESTENABLE] = FALSE; d.rs[D3DRS_ALPHAFUNC] = D3DCMP_LESS; d.rs[D3DRS_ALPHAREF] = 1; d.rs[D3DRS_ALPHABLENDENABLE] = TRUE;
+    const HookCalls::Scope draw = c.open();
+    c.holdRs(&d, D3DRS_ALPHATESTENABLE, TRUE); c.holdRs(&d, D3DRS_ALPHAFUNC, D3DCMP_GREATEREQUAL); c.holdRs(&d, D3DRS_ALPHAREF, 84);
+    c.holdRs(&d, D3DRS_ALPHAREF, 120);   // a second group's reference: the game's value stays the saved one
+    CHECK(c.count == 3 && d.rs[D3DRS_ALPHAREF] == 120 && c.holdsRs(D3DRS_ALPHAFUNC) && !c.holdsRs(D3DRS_ALPHABLENDENABLE) && c.own == 0,
+          "hook calls: a state held once per scope, set again as often as wanted; the guard back to 0 after each call");
+    const uint32_t before = d.sets;
+    c.holdRs(&d, D3DRS_ZWRITEENABLE, 0);   // already 0 on the device
+    CHECK(d.sets == before && c.holdsRs(D3DRS_ZWRITEENABLE), "hook calls: a state already at the value is held (taken) but not sent");
+    {
+      const HookCalls::Scope inner = c.open();   // a section inside the draw (the plate, the restore quad)
+      c.holdRs(&d, D3DRS_ALPHAREF, 0); c.holdRs(&d, D3DRS_ALPHABLENDENABLE, FALSE);
+      CHECK(!c.holdsRs(D3DRS_ALPHAFUNC) && c.holdsRs(D3DRS_ALPHAREF) && d.rs[D3DRS_ALPHAREF] == 0, "hook calls: a section's scope sees only its own holds");
+      c.close(&d, inner);
+      CHECK(d.rs[D3DRS_ALPHAREF] == 120 && d.rs[D3DRS_ALPHABLENDENABLE] == TRUE && c.count == 4 && c.holdsRs(D3DRS_ALPHAFUNC),
+            "hook calls: a section's close puts back its own holds only -- the draw's alpha test still set");
+    }
+    d.ss[0][D3DSAMP_SRGBTEXTURE] = TRUE; d.tss[0][D3DTSS_COLOROP] = D3DTOP_MODULATE;
+    c.holdSampler(&d, 0, D3DSAMP_SRGBTEXTURE, FALSE); c.holdStage(&d, 0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+    D3DVIEWPORT9 vp = { 0, 0, 1920, 1080, 0.f, 1.f }; d.vp = vp; D3DVIEWPORT9 sky = vp; sky.MinZ = sky.MaxZ = 1.f;
+    c.holdViewport(&d, sky);
+    D3DMATRIX id = {}; id.m[0][0] = id.m[1][1] = id.m[2][2] = id.m[3][3] = 1.f; d.world = id; D3DMATRIX w = id; w.m[3][0] = 5.f;
+    c.holdWorld(&d, w);
+    CHECK(d.ss[0][D3DSAMP_SRGBTEXTURE] == FALSE && d.tss[0][D3DTSS_COLOROP] == D3DTOP_SELECTARG1 && d.vp.MinZ == 1.f && d.world.m[3][0] == 5.f, "hook calls: sampler, stage, viewport and WORLD held");
+    c.close(&d, draw);
+    CHECK(c.count == 0 && c.scope == 0 && d.rs[D3DRS_ALPHATESTENABLE] == FALSE && d.rs[D3DRS_ALPHAFUNC] == D3DCMP_LESS && d.rs[D3DRS_ALPHAREF] == 1
+          && d.ss[0][D3DSAMP_SRGBTEXTURE] == TRUE && d.tss[0][D3DTSS_COLOROP] == D3DTOP_MODULATE && d.vp.MinZ == 0.f && d.world.m[3][0] == 0.f && c.own == 0,
+          "hook calls: the draw's close puts every state back to the game's value");
+    // a dropped draw: its scope closes empty; a scope around a re-issued draw keeps its holds through the draw's own
+    const HookCalls::Scope around = c.open();
+    c.holdRs(&d, D3DRS_SRCBLEND, D3DBLEND_ONE);
+    const HookCalls::Scope reissue = c.open();
+    c.holdRs(&d, D3DRS_COLORWRITEENABLE, 0xF);
+    c.close(&d, reissue);
+    CHECK(d.rs[D3DRS_SRCBLEND] == D3DBLEND_ONE && d.rs[D3DRS_COLORWRITEENABLE] == 0 && c.count == 1, "hook calls: the re-issue's close leaves the composite's blend held around it");
+    c.close(&d, around);
+    CHECK(d.rs[D3DRS_SRCBLEND] == 0 && c.count == 0, "hook calls: ...which its own close puts back");
+    {
+      HookCalls f; FakeDev e;
+      const HookCalls::Scope s = f.open();
+      for (uint32_t i = 0; i < HookCalls::kEntries + 3; ++i) f.holdRs(&e, (D3DRENDERSTATETYPE) i, 7);
+      CHECK(f.count == HookCalls::kEntries && f.full == 3 && e.rs[HookCalls::kEntries] == 0 && e.rs[HookCalls::kEntries - 1] == 7,
+            "hook calls: a full log leaves the state alone and counts it (%u)", f.full);
+      f.close(&e, s);
+      CHECK(e.rs[0] == 0 && e.rs[HookCalls::kEntries - 1] == 0, "hook calls: ...and still puts back all it held");
+    }
+    { OwnCall g(c); CHECK(c.own == 1, "hook calls: the guard counts the hook's own call while it lives"); }
+    CHECK(c.own == 0, "hook calls: ...and no longer after");
   }
 
   printf("%d failure(s), %d skipped\n", fails, skips);

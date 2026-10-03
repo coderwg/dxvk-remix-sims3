@@ -53,11 +53,11 @@ namespace {
 #include "sims3_device_draw.inl"      // the device reset, sims3BeginDraw and sims3EndDraw
 }
 
-// Around every draw of the game (the hook's own restore quad is left alone). A dropped draw returns
-// here, never sent (nothing was changed on the device for it).
+// Around every draw of the game (the hook's own calls -- the restore quad -- are left alone). A dropped
+// draw returns here, never sent (nothing was changed on the device for it: its scope closes empty).
 #define SIMS3_BEGIN_DRAW() \
-  if (sims3cam::enabled() && !g_sims3.ourDraw) { sims3BeginDraw(g_sims3, this, m_state.renderStates.data(), m_state.streamFreqs[0]); if (g_sims3.drawGlass && g_sims3.waveDumped < 32u && sims3cam::isWaterPs(g_sims3.psHash)) sims3DumpWaveMaps(g_sims3); if (g_sims3.drawDropped) return D3D_OK; }
-#define SIMS3_END_DRAW() if (sims3cam::enabled() && !g_sims3.ourDraw) sims3EndDraw(g_sims3, this)
+  if (sims3cam::enabled() && !g_sims3.calls.own) { sims3BeginDraw(g_sims3, this, m_state.renderStates.data(), m_state.streamFreqs[0]); if (g_sims3.drawGlass && g_sims3.waveDumped < 32u && sims3cam::isWaterPs(g_sims3.psHash)) sims3DumpWaveMaps(g_sims3); if (g_sims3.drawDropped) { g_sims3.calls.close(this, g_sims3.drawScope); return D3D_OK; } }
+#define SIMS3_END_DRAW() if (sims3cam::enabled() && !g_sims3.calls.own) sims3EndDraw(g_sims3, this)
 #include "d3d9_vertexbuffer.h"
 #include "d3d9_vertexdeclaration.h"
 #include "d3d9_vertexshader.h"
@@ -1583,7 +1583,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetRenderState(D3DRENDERSTATETYPE Sta
   ZoneScoped;
   LogFunctionCall();
   // The Sims 3 camera hook: the game's own render states (not the hook's) are trusted from here on
-  if (sims3cam::enabled() && !g_sims3.ourState) {
+  if (sims3cam::enabled() && !g_sims3.calls.own) {
     if ((DWORD) State < 256) g_sims3.rsSet[State] = true;
     if (State == D3DRS_TEXTUREFACTOR) { g_sims3.gameFactor = Value; g_sims3.factorOurs = false; g_sims3.sentFactor = Value; }
   }
@@ -2002,7 +2002,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetTexture(DWORD Stage, IDirect3DBase
   }
 
   // The Sims 3 camera hook: track what the game binds per stage (not our own remap calls).
-  if (sims3cam::enabled() && !g_sims3.inRemap && Stage < 16 && !m_stateRecording) sims3NoteTexture(g_sims3, Stage, pTexture);
+  if (sims3cam::enabled() && !g_sims3.calls.own && Stage < 16 && !m_stateRecording) sims3NoteTexture(g_sims3, Stage, pTexture);
 
   IDirect3DBaseTexture9* pD3DObject = nullptr;
   D3DAutoPtr objectRef;
@@ -2140,7 +2140,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetTextureStageState(DWORD Stage, D3D
   }
   const auto stageIdx = mapSamplerStageToIdx(Stage);
   // The Sims 3 camera hook: the game's own stage-0 values (ours are marked), put back before uncaptured draws
-  if (sims3cam::enabled() && !g_sims3.ourState && Stage == 0) {
+  if (sims3cam::enabled() && !g_sims3.calls.own && Stage == 0) {
     const int k = Type == D3DTSS_COLOROP ? 0 : Type == D3DTSS_COLORARG1 ? 1 : Type == D3DTSS_COLORARG2 ? 2 : Type == D3DTSS_TEXCOORDINDEX ? 3 : -1;
     if (k >= 0) {
       g_sims3.gameTss0[k] = Value;
@@ -2208,7 +2208,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetSamplerState(DWORD Sampler, D3DSAM
   const auto samplerIdx = mapSamplerStageToIdx(Sampler);
   // The Sims 3 camera hook (milestone 18g): the game setting a sampler state the terrain block
   // holds cancels that state's restore -- the game's value is the current one
-  if (sims3cam::enabled() && !g_sims3.ourSampler && !m_stateRecording && g_sims3.tblockActive) {
+  if (sims3cam::enabled() && !g_sims3.calls.own && !m_stateRecording && g_sims3.tblockActive) {
     auto& h = g_sims3;
     if ((int) Sampler == h.tblockStage) for (int i = 0; i < Sims3Hook::kSamplerCopies; ++i) if (kSims3SamplerCopy[i] == Type && (h.tblockSet & (1u << i))) { h.tblockSet &= (uint8_t) ~(1u << i); ++h.tblockCancelled; }
     if (Type == D3DSAMP_SRGBTEXTURE && Sampler < 16 && (h.tblockSrgb & (1u << Sampler))) { h.tblockSrgb &= (uint16_t) ~(1u << Sampler); ++h.tblockCancelled; }
@@ -2631,13 +2631,13 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
         for (uint32_t g_ = 0; g_ < h.fadeG.count; ++g_) {
           memcpy(block_, saved_, regs_ * 4 * sizeof(float));
           for (uint32_t i_ = 0; i_ < h.fadePlants; ++i_) if (!(h.fadeG.members[g_] & (1u << i_))) block_[(h.fadeReg + 3u * i_) * 4u] = 0.f;
-          h.ourConsts = true; SetVertexShaderConstantF(0, block_, regs_); h.ourConsts = false;
+          { sims3cam::OwnCall own_(h.calls); SetVertexShaderConstantF(0, block_, regs_); }
           sims3SetAlphaTest(h, this, h.fadeG.func, h.fadeG.ref[g_]);
           ClientMessage c(Commands::IDirect3DDevice9Ex_DrawIndexedPrimitive, getId());
           currentUID = c.get_uid();
           c.send_many(Type, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount);
         }
-        h.ourConsts = true; SetVertexShaderConstantF(0, saved_, regs_); h.ourConsts = false;
+        { sims3cam::OwnCall own_(h.calls); SetVertexShaderConstantF(0, saved_, regs_); }
         h.fadeSplit = false; ++h.fadeSplitDraws; h.fadeSplitParts += h.fadeG.count;
         wallDone_ = true;
       }
@@ -2773,7 +2773,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetVertexDeclaration(IDirect3DVertexD
 
   auto* const pLssVtxDecl = bridge_cast<Direct3DVertexDeclaration9_LSS*>(pDecl);
   const UID id = (pLssVtxDecl) ? (UID) pLssVtxDecl->getId() : 0;
-  if (sims3cam::enabled()) sims3NoteDecl(g_sims3, pDecl);
+  if (sims3cam::enabled() && !g_sims3.calls.own) sims3NoteDecl(g_sims3, pDecl);
   UID currentUID = 0;
   {
     {
@@ -2818,7 +2818,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetFVF(DWORD FVF) {
     {
       BRIDGE_DEVICE_LOCKGUARD();
       m_FVF = FVF;
-      if (sims3cam::enabled()) { g_sims3.declIs3D = sims3cam::fvfIs3D(FVF); g_sims3.wallLayout = sims3cam::WallLayout(); g_sims3.wallDeclId = 0; }
+      if (sims3cam::enabled() && !g_sims3.calls.own) { g_sims3.declIs3D = sims3cam::fvfIs3D(FVF); g_sims3.wallLayout = sims3cam::WallLayout(); g_sims3.wallDeclId = 0; }
     }
     {
       ClientMessage c(Commands::IDirect3DDevice9Ex_SetFVF, getId());
@@ -2863,7 +2863,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreateVertexShader(CONST DWORD* pFunc
   const DWORD* function = pFunction;
   std::vector<DWORD> sims3Patched;
   const sims3cam::ShaderPatch* sims3ConstPatch = nullptr;
-  const bool sims3Ours = g_sims3.creatingVariant;   // a promoted variant of the game's shader, made by the hook: no tables, no dump
+  const bool sims3Ours = g_sims3.calls.own != 0;   // a shader of the hook's own (a variant of the game's): no tables, no dump
   const bool sims3Hooked = sims3cam::enabled() && !sims3Ours;
   const size_t sims3Count = sims3Hooked ? sims3cam::shaderTokenCount(pFunction) : 0;   // 0: no END token, the analyses refuse the stream
   const uint64_t sims3Hash = sims3Count ? sims3cam::fnv1a64(pFunction, sims3Count * sizeof(DWORD)) : 0;
@@ -2942,7 +2942,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetVertexShader(IDirect3DVertexShader
   // NULL is an allowed value for pShader
   auto* const pLssVertexShader = bridge_cast<Direct3DVertexShader9_LSS*>(pShader);
   const auto id = (pLssVertexShader) ? (uint32_t) pLssVertexShader->getId() : 0;
-  if (sims3cam::enabled() && !g_sims3.swappingVs && !m_stateRecording) sims3NoteVertexShader(g_sims3, pShader);   // our own variant swap around a draw leaves the game's facts in place; a shader set while a state block records does not reach the device
+  if (sims3cam::enabled() && !g_sims3.calls.own && !m_stateRecording) sims3NoteVertexShader(g_sims3, pShader);   // our own variant swap around a draw leaves the game's facts in place; a shader set while a state block records does not reach the device
   UID currentUID = 0;
   {
     {
@@ -2997,7 +2997,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetVertexShaderConstantF(UINT StartRe
 
   // The Sims 3 camera hook: the World rows c4..c6 as the device holds them, for the lot terrain's
   // per-frame copy key (milestone 16); an upload may cover them partly.
-  if (sims3cam::enabled() && !g_sims3.ourConsts && !m_stateRecording) {
+  if (sims3cam::enabled() && !g_sims3.calls.own && !m_stateRecording) {
     if (StartRegister == 0) g_sims3.instBlockRegs = Vector4fCount;   // SpeedTree's plants, three registers each (milestone 139)
     const UINT first = StartRegister > 4 ? StartRegister : 4, last = (StartRegister + Vector4fCount < 7) ? StartRegister + Vector4fCount : 7;
     for (UINT r = first; r < last; ++r) memcpy(g_sims3.rows4to6 + (r - 4) * 4, pConstantData + (r - StartRegister) * 4, 4 * sizeof(float));
@@ -3044,7 +3044,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetVertexShaderConstantF(UINT StartRe
     // them; without this the Remix runtime finds no camera and captures no geometry. See
     // sims3_camera_hook.h. (Must precede WAIT_FOR_OPTIONAL_SERVER_RESPONSE, which returns
     // unconditionally.)
-    if (Vector4fCount >= 4 && sims3cam::enabled() && !g_sims3.ourConsts && !m_stateRecording) {
+    if (Vector4fCount >= 4 && sims3cam::enabled() && !g_sims3.calls.own && !m_stateRecording) {
       // Maintain the verified main camera; the transforms themselves are applied per draw
       // (sims3ApplyForDraw), where the depth-test state and vertex layout are known.
       auto& h = g_sims3;
@@ -3379,7 +3379,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreatePixelShader(CONST DWORD* pFunct
   auto* const pLssPixelShader = trackWrapper(new Direct3DPixelShader9_LSS(this, shader));
   (*ppShader) = pLssPixelShader;
   pLssPixelShader->sims3Major = (uint8_t) shader.getMajorVersion();
-  if (sims3cam::enabled() && !g_sims3.creatingVariant) {   // a terrain variant made by the hook: no tables, no dump
+  if (sims3cam::enabled() && !g_sims3.calls.own) {   // a shader of the hook's own: no tables, no dump
     const size_t count = sims3cam::shaderTokenCount(pFunction);   // 0: no END token, the analysis refuses the stream
     const uint64_t hash = count ? sims3cam::fnv1a64(pFunction, count * sizeof(DWORD)) : 0;
     pLssPixelShader->sims3Hash = hash;
@@ -3419,7 +3419,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetPixelShader(IDirect3DPixelShader9*
   LogFunctionCall();
   Direct3DPixelShader9_LSS* pLssPixelShader = bridge_cast<Direct3DPixelShader9_LSS*>(pShader);
   const auto id = (pLssPixelShader) ? (uint32_t) pLssPixelShader->getId() : 0;
-  if (sims3cam::enabled() && !g_sims3.swappingPs && !m_stateRecording) sims3NotePixelShader(g_sims3, pShader);   // our own variant swap around a terrain draw leaves the game's facts in place; not while a state block records
+  if (sims3cam::enabled() && !g_sims3.calls.own && !m_stateRecording) sims3NotePixelShader(g_sims3, pShader);   // our own variant swap around a terrain draw leaves the game's facts in place; not while a state block records
   {
     BRIDGE_DEVICE_LOCKGUARD();
     if (m_stateRecording) {

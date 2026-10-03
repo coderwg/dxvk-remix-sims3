@@ -6,6 +6,7 @@
 // released, the bound-shader and bound-texture facts are forgotten (the device state is back to
 // defaults; the game's shaders themselves survive a Reset), and the runtime is back to default state.
 inline void sims3OnReset(Sims3Hook& h) {
+  h.calls.forget();   // the states the hook held: their saved objects released (the device is back to its defaults)
   for (auto& s : h.squares) if (s.merged) s.merged->Release();   // the squares' merged shapes (milestone 60)
   h.squares.clear(); h.mergePending = -1;
   for (auto& e : h.plates) {   // the low-detail lots' split, glow layer and its textures (milestones 69-71)
@@ -22,27 +23,21 @@ inline void sims3OnReset(Sims3Hook& h) {
   h.vsWall = nullptr; h.wallLayout = sims3cam::WallLayout(); h.wallDeclId = 0;
   for (uint32_t i = 0; i < h.vsVariantCount; ++i) if (h.vsVariants[i].variant) h.vsVariants[i].variant->Release();
   h.vsVariantCount = 0;
-  if (h.autoVsRestore) { h.autoVsRestore->Release(); h.autoVsRestore = nullptr; }
-  if (h.remapRestore) { h.remapRestore->Release(); h.remapRestore = nullptr; }
   // the terrain baker's markers and pixel shader variants (milestone 17)
   for (uint32_t i = 0; i < h.psVariantCount; ++i) if (h.psVariants[i].variant) h.psVariants[i].variant->Release();
   h.psVariantCount = 0;
-  if (h.psRestore) { h.psRestore->Release(); h.psRestore = nullptr; }
-  if (h.freeStageRestore) { h.freeStageRestore->Release(); h.freeStageRestore = nullptr; }
   for (int i = 0; i < sims3cam::kTerrainMarkers; ++i) { if (h.marker[i]) h.marker[i]->Release(); h.marker[i] = nullptr; h.markerHash[i] = 0; }
   for (int m = 0; m < sims3cam::kGlassMaterials; ++m) { if (h.glassMarkers[m]) h.glassMarkers[m]->Release(); h.glassMarkers[m] = nullptr; h.glassMarkerFailed[m] = false; }
   for (int m = 0; m < sims3cam::kWaterMaterials; ++m) { if (h.waterMarkers[m]) h.waterMarkers[m]->Release(); h.waterMarkers[m] = nullptr; h.waterMarkerFailed[m] = false; }
   if (h.mirrorMarker) { h.mirrorMarker->Release(); h.mirrorMarker = nullptr; }
   h.mirrorMarkerFailed = false;
-  h.blendOurs = false; h.bumpHashes.clear(); h.worldOurs = false;
+  h.bumpHashes.clear();
   for (auto& g : h.glassSides) if (g.second.ib) g.second.ib->Release();
   h.glassSides.clear(); h.glassIb = nullptr; h.glassPrims = 0;
-  h.markerFailed = false; h.markersConfigSent = false; h.terrainFreeStage = -1; h.tblockActive = false; h.tblockStage = -1; h.tblockSet = 0; h.tblockSrgb = 0; h.ourSampler = false; h.psBound = nullptr; h.vsTerrain = nullptr; h.lotFurtherCopy = false; h.swappingPs = false;
-  h.cwOurs = false; h.atOurs = false; h.fogOurs = false;
-  h.extraActive = false; h.splitDraw = false; h.ourConsts = false; h.reissue = false; h.reissueKind = 0; h.compositeSecond = false;
+  h.markerFailed = false; h.markersConfigSent = false; h.tblockActive = false; h.tblockStage = -1; h.tblockSet = 0; h.tblockSrgb = 0; h.psBound = nullptr; h.vsTerrain = nullptr; h.lotFurtherCopy = false;
+  h.splitDraw = false; h.reissue = false; h.reissueKind = 0; h.compositeSecond = false;
   h.fadeSplit = false; h.instBlockRegs = 0;
-  for (int i = 0; i < 2; ++i) { if (h.extraRestore[i]) h.extraRestore[i]->Release(); h.extraRestore[i] = nullptr; }
-  h.remapActive = false; h.maskEmu = 0; h.viewportOurs = false; h.vsSkyDome = false;
+  h.vsSkyDome = false;
   h.vsBound = nullptr; h.vsTabled = false; h.vsNormal = nullptr; h.vsConstOut = nullptr; h.vsCard = nullptr; h.pendingPromote = 0; h.vsHash = 0;
   h.patch = nullptr; h.vsCapturedUv = false;
   h.lotCopies.clear();
@@ -50,7 +45,7 @@ inline void sims3OnReset(Sims3Hook& h) {
   h.declIs3D = false; h.drawCaptured = false; h.autoCapturedUv = false;
   for (int i = 0; i < 16; ++i) { h.boundTex[i] = nullptr; h.boundColor2D[i] = false; h.boundKind[i] = 0; h.boundFmt[i] = 0; h.boundW[i] = h.boundH[i] = 0; }
   for (uint32_t i = 0; i < h.scratchCount; ++i) { if (h.scratch[i].surf) h.scratch[i].surf->Release(); if (h.scratch[i].tex) h.scratch[i].tex->Release(); h.scratch[i] = Sims3Hook::Scratch(); }
-  h.scratchCount = 0; h.copyScratch = -1; h.ourDraw = false; h.rt0W = h.rt0H = 0; h.rt0Fmt = 0; h.rt0Id = 0; h.reflectionRtId = 0; h.rtCubeFace = false;
+  h.scratchCount = 0; h.copyScratch = -1; h.rt0W = h.rt0H = 0; h.rt0Fmt = 0; h.rt0Id = 0; h.reflectionRtId = 0; h.rtCubeFace = false;
   h.held = sims3cam::Held(); h.cameraValid = false; h.camMirrored = false; h.drawDropped = false; h.rtIsPrimary = true;
   h.frameCamSet = false; h.eyeCamSet = false;
   h.tssOurs = 0; h.uvIndexHidden = false; h.factorOurs = false; h.sentFactor = 0xFFFFFFFFu; h.gameFactor = 0xFFFFFFFFu;
@@ -228,8 +223,7 @@ void sims3GlassWorld(Sims3Hook& h, Dev* dev, UINT freq0) {
   D3DMATRIX w = {};
   w.m[0][0] = w.m[1][1] = w.m[2][2] = w.m[3][3] = 1.f;
   w.m[3][0] = world[0]; w.m[3][1] = world[1]; w.m[3][2] = world[2];
-  dev->SetTransform(D3DTS_WORLD, &w);
-  h.worldOurs = true; ++h.worldDraws;
+  h.calls.holdWorld(dev, w); ++h.worldDraws;
 }
 
 // A glass draw's sheets with a back side (milestone 104, sims3cam::glassFrontTriangles): the kept
@@ -290,20 +284,10 @@ void sims3GlassOneSide(Sims3Hook& h, Dev* dev) {
 }
 
 // The hook's alpha test on a captured draw (milestone 151: the one place it is set -- a cut-out, a
-// fade, each group of a split SpeedTree draw): the game's three states saved the first time, put back
-// in sims3EndDraw; only the states that differ are sent.
+// fade, each group of a split SpeedTree draw): held in the draw's scope, put back in sims3EndDraw.
 template<typename Dev>
 void sims3SetAlphaTest(Sims3Hook& h, Dev* dev, uint32_t func, uint32_t ref) {
-  static constexpr D3DRENDERSTATETYPE kRs[3] = { D3DRS_ALPHATESTENABLE, D3DRS_ALPHAFUNC, D3DRS_ALPHAREF };
-  const DWORD want[3] = { TRUE, func, ref };
-  h.ourState = true;
-  for (int i = 0; i < 3; ++i) {
-    DWORD now = 0; dev->GetRenderState(kRs[i], &now);
-    if (!h.atOurs) h.atSaved[i] = now;
-    if (now != want[i]) dev->SetRenderState(kRs[i], want[i]);
-  }
-  h.ourState = false;
-  h.atOurs = true;
+  h.calls.holdRs(dev, D3DRS_ALPHATESTENABLE, TRUE); h.calls.holdRs(dev, D3DRS_ALPHAFUNC, func); h.calls.holdRs(dev, D3DRS_ALPHAREF, ref);
 }
 
 // The fade test of a SpeedTree draw (milestones 135, 137, 139). The draw holds up to eight plants --
@@ -315,7 +299,7 @@ void sims3SetAlphaTest(Sims3Hook& h, Dev* dev, uint32_t func, uint32_t ref) {
 // once per group (h.fadeSplit; DrawIndexedPrimitive, the other plants at scale 0). Returns the
 // comparison set (0: the game's test left as it is).
 template<typename Dev>
-uint32_t sims3FadeTest(Sims3Hook& h, Dev* dev, int fc, bool rel, DWORD gameFunc, DWORD gameRef, bool blendOff, const DWORD* rs) {
+uint32_t sims3FadeTest(Sims3Hook& h, Dev* dev, int fc, bool rel, DWORD gameFunc, DWORD gameRef, bool blendOff) {
   h.fadeSplit = false;
   const uint32_t reg0 = (uint32_t) fc >> 2, comp = (uint32_t) fc & 3u;
   float fades[sims3cam::FadeGroups::kPlants] = {}, v[4] = {};
@@ -330,13 +314,14 @@ uint32_t sims3FadeTest(Sims3Hook& h, Dev* dev, int fc, bool rel, DWORD gameFunc,
   h.fade0 = fades[0]; h.fadeReg = reg0; h.fadePlants = n;
   h.fadeG = sims3cam::groupFades(gameFunc, gameRef, fades, n);
   if (!h.fadeG.func) return 0u;
-  if (blendOff) { h.blendSaved = rs[D3DRS_ALPHABLENDENABLE]; h.blendOurs = true; h.ourState = true; dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE); h.ourState = false; }
+  if (blendOff) h.calls.holdRs(dev, D3DRS_ALPHABLENDENABLE, FALSE);
   sims3SetAlphaTest(h, dev, h.fadeG.func, h.fadeG.count ? h.fadeG.ref[0] : 0u);
   h.fadeSplit = h.fadeG.split();
   return h.fadeG.func;
 }
 
-// Before every draw of the game (not the hook's own restore quad). A captured draw -- the main
+// Before every draw of the game (not the hook's own restore quad). Everything the hook sets for the
+// draw is held in the draw's scope of the undo log (milestone 152, sims3cam::HookCalls). A captured draw -- the main
 // camera held, see sims3ApplyForDraw -- gets: its albedo presented as stage 0 when the game bound
 // a cube map / render target there (Remix would drop the draw), the vertex shader variant for
 // the draw (promoted coordinate, world normal, c255 read), the raw texcoord set hidden for the
@@ -345,6 +330,7 @@ uint32_t sims3FadeTest(Sims3Hook& h, Dev* dev, int fc, bool rel, DWORD gameFunc,
 // into an offscreen target its emulation. Returns whether the draw is captured.
 template<typename Dev>
 bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
+  h.drawScope = h.calls.open();   // closed in sims3EndDraw, or at once for a dropped draw (SIMS3_BEGIN_DRAW)
   h.glassIb = nullptr; h.glassPrims = 0;
   if (h.mergePending >= 0 && !h.reissue) {   // a square's shape that was not sent after its piece (the piece took another way out): next piece then
     if ((size_t) h.mergePending < h.squares.size()) h.squares[(size_t) h.mergePending].mergedFrame = 0xFFFFFFFFu;
@@ -389,9 +375,7 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
     ++h.fogFrameDraws; ++h.fogDraws;
     DWORD start = 0, end = 0; std::memcpy(&start, &h.fogStart, 4); std::memcpy(&end, &h.fogEnd, 4);
     const DWORD ours[5] = { TRUE, D3DFOG_LINEAR, h.fogColour, start, end };
-    for (int i = 0; i < 5; ++i) dev->GetRenderState(kSims3FogRs[i], &h.fogSaved[i]);
-    h.ourState = true; for (int i = 0; i < 5; ++i) dev->SetRenderState(kSims3FogRs[i], ours[i]); h.ourState = false;
-    h.fogOurs = true;
+    for (int i = 0; i < 5; ++i) h.calls.holdRs(dev, kSims3FogRs[i], ours[i]);
   }
   if (!terrain) {
     // glass, mirrors and water (milestones 80, 86, 99, 101, 105, 109, 114): the material's marker at stage 0
@@ -410,21 +394,18 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
     const bool glass = gm >= 0 && (bump || sims3EnsureGlassMarker(h, dev, gm));
     if (water || mirror || glass) {
       h.drawGlass = true;
-      h.remapRestore = h.boundTex[0]; if (h.remapRestore) h.remapRestore->AddRef();   // held until sims3EndDraw, as for an albedo remap
-      h.remapActive = true;
-      h.inRemap = true; dev->SetTexture(0, water ? h.waterMarkers[waterMat] : mirror ? h.mirrorMarker : bump ? bump : (IDirect3DBaseTexture9*) h.glassMarkers[gm]); h.inRemap = false;
+      h.calls.holdTexture(dev, 0, water ? h.waterMarkers[waterMat] : mirror ? h.mirrorMarker : bump ? bump : (IDirect3DBaseTexture9*) h.glassMarkers[gm]);   // back in sims3EndDraw
       // water (milestone 94): the sampler states of the game's first wave map (the one its TEXCOORD0
       // reads) on stage 0, where the runtime takes the material's -- the normal map tiles as the game's
       // waves do; back in sims3EndDraw with the albedo remap's
-      if (water) for (int s = 0; s < 16; ++s) if (h.boundKind[s] == 1 && sims3cam::isWaveMapFormat(h.boundFmt[s])) { if (s > 0) h.remapSamplerSet = sims3SamplerStatesTo0(h, dev, (DWORD) s, h.remapSamplerSaved); break; }
+      if (water) for (int s = 0; s < 16; ++s) if (h.boundKind[s] == 1 && sims3cam::isWaveMapFormat(h.boundFmt[s])) { if (s > 0) sims3SamplerStatesTo0(h, dev, (DWORD) s); break; }
       // bumpy glass (milestone 109): its bump map's sampler states on stage 0 and the bump map's coordinate
       // as the captured TEXCOORD0 (a promoted variant), so the runtime lays the bumps where the game does
       if (bump) {
-        if (named->bumpStage > 0) h.remapSamplerSet = sims3SamplerStatesTo0(h, dev, (DWORD) named->bumpStage, h.remapSamplerSaved);
+        if (named->bumpStage > 0) sims3SamplerStatesTo0(h, dev, (DWORD) named->bumpStage);
         sims3AutoTexcoord(h, named->bumpStage, -1, false);
       }
-      h.blendSaved = rs[D3DRS_ALPHABLENDENABLE]; h.blendOurs = true;
-      h.ourState = true; dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE); h.ourState = false;
+      h.calls.holdRs(dev, D3DRS_ALPHABLENDENABLE, FALSE);
       if (water) ++h.waterDraws[waterMat]; else if (mirror) ++h.mirrorDraws; else ++h.glassDraws[gm];
       if (glass) sims3GlassOneSide(h, dev);   // a sheet's back side left out (milestone 104)
       if (glass) sims3GlassWorld(h, dev, freq0);   // its object's place as the WORLD transform (milestone 119)
@@ -457,7 +438,7 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
     }
     // a cut-out the runtime must see (milestones 67-68): the shader's texkill on its albedo's alpha,
     // a * alpha + b with the bound constants, as the D3D alpha test the runtime applies to the albedo
-    if (k >= 0 && h.psAuto && h.psAuto->valid && h.psAuto->cutSampler == k && !rs[D3DRS_ALPHATESTENABLE] && !h.atOurs) {
+    if (k >= 0 && h.psAuto && h.psAuto->valid && h.psAuto->cutSampler == k && !rs[D3DRS_ALPHATESTENABLE] && !h.calls.holdsRs(D3DRS_ALPHAFUNC)) {
       auto get = [&](uint32_t reg, uint32_t comp) -> float { float v[4] = {}; dev->GetPixelShaderConstantF(reg, v, 1); return v[comp & 3u]; };
       const float a = sims3cam::cutEval(h.psAuto->cutA, get), b = sims3cam::cutEval(h.psAuto->cutB, get);
       uint32_t ref = 0; const uint32_t func = sims3cam::alphaTestFor(a, 255.f * b, D3DCMP_GREATEREQUAL, ref);   // texkill keeps a * alpha + b >= 0
@@ -474,10 +455,10 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
     }
     // the fade (milestones 135, 139): SpeedTree's "fade - alpha" under the game's alpha test, turned
     // onto the alpha the runtime tests -- a texel shows where its alpha reaches its plant's fade
-    if (k >= 0 && h.psAuto && h.psAuto->valid && h.psAuto->fadeSampler == k && rs[D3DRS_ALPHATESTENABLE] && !h.atOurs && h.vsConstOut) {
+    if (k >= 0 && h.psAuto && h.psAuto->valid && h.psAuto->fadeSampler == k && rs[D3DRS_ALPHATESTENABLE] && !h.calls.holdsRs(D3DRS_ALPHAFUNC) && h.vsConstOut) {
       const int in = h.psAuto->fadeInput, fc = h.vsConstOut->c[in];
       const DWORD gameFunc = rs[D3DRS_ALPHAFUNC], gameRef = rs[D3DRS_ALPHAREF];
-      const uint32_t func = fc >= 0 ? sims3FadeTest(h, dev, fc, h.vsConstOut->rel[in], gameFunc, gameRef, false, rs) : 0u;
+      const uint32_t func = fc >= 0 ? sims3FadeTest(h, dev, fc, h.vsConstOut->rel[in], gameFunc, gameRef, false) : 0u;
       if (func) ++h.fadeTestDraws;
       bool seen = false; for (uint32_t i = 0; i < h.fadeLogged; ++i) if (h.fadeLoggedPs[i] == h.psHash) seen = true;
       if (!seen && h.fadeLogged < 16) {
@@ -495,7 +476,7 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
     // plant's fade as the opaque tree's are (the game's LESS 1 on "fade - alpha", turned onto the alpha)
     if (const sims3cam::SolidFade* sf = sims3cam::findSolidFade(h.psHash)) {
       const int fc = h.vsConstOut ? h.vsConstOut->c[sf->fadeInput] : -1;
-      const uint32_t func = (fc >= 0 && k == sf->sampler && !h.atOurs && !h.blendOurs) ? sims3FadeTest(h, dev, fc, h.vsConstOut->rel[sf->fadeInput], D3DCMP_LESS, 1, true, rs) : 0u;
+      const uint32_t func = (fc >= 0 && k == sf->sampler && !h.calls.holdsRs(D3DRS_ALPHAFUNC) && !h.calls.holdsRs(D3DRS_ALPHABLENDENABLE)) ? sims3FadeTest(h, dev, fc, h.vsConstOut->rel[sf->fadeInput], D3DCMP_LESS, 1, true) : 0u;
       if (func) ++h.solidFadeDraws; else ++h.solidFadeLeft;
       bool seen = false; for (uint32_t i = 0; i < h.solidFadeLogged; ++i) if (h.solidFadeLoggedPs[i] == h.psHash) seen = true;
       if (!seen && h.solidFadeLogged < 4) {
@@ -526,101 +507,53 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
   // texture coordinates: hide the raw input set from the runtime (stage 0 index -> 7) for the
   // families whose shader output is verified, so it samples with the captured TEXCOORD0
   const bool wantCaptured = h.vsCapturedUv || h.autoCapturedUv;
-  h.ourState = true;
-  if (wantCaptured != h.uvIndexHidden) {
-    h.uvIndexHidden = wantCaptured;
-    dev->SetTextureStageState(0, D3DTSS_TEXCOORDINDEX, h.uvIndexHidden ? 7u : h.gameTss0[3]);
-    if (h.uvIndexHidden && !h.loggedCapturedUv) { h.loggedCapturedUv = true; Logger::info("Sims 3 camera hook: first draw sampling with the shader's captured texture coordinates (stage 0 texcoord index 7 hides the raw input set)"); }
+  {
+    sims3cam::OwnCall ownCall(h.calls);   // sticky: put back before an uncaptured draw (sims3RestoreGameState)
+    if (wantCaptured != h.uvIndexHidden) {
+      h.uvIndexHidden = wantCaptured;
+      dev->SetTextureStageState(0, D3DTSS_TEXCOORDINDEX, h.uvIndexHidden ? 7u : h.gameTss0[3]);
+      if (h.uvIndexHidden && !h.loggedCapturedUv) { h.loggedCapturedUv = true; Logger::info("Sims 3 camera hook: first draw sampling with the shader's captured texture coordinates (stage 0 texcoord index 7 hides the raw input set)"); }
+    }
+    // Create-A-Style tint: albedo x TEXTUREFACTOR (white when the shader has no tint); each of the
+    // three stage-0 states the game has written since is set again
+    for (int i = 0; i < 3; ++i) if (!(h.tssOurs & (1u << i))) { h.tssOurs |= (uint8_t) (1u << i); dev->SetTextureStageState(0, kSims3Tss[i], kSims3TssOurs[i]); }
+    // the tint as the game's shader reads it: its constant on the device at this draw (milestone 79)
+    float tint[4] = { 1.f, 1.f, 1.f, 1.f };
+    if (h.psTintReg >= 0) dev->GetPixelShaderConstantF((UINT) h.psTintReg, tint, 1);
+    const uint32_t factor = (h.psTintReg >= 0) ? sims3cam::packTint(tint) : 0xFFFFFFFFu;
+    if (!h.factorOurs || factor != h.sentFactor) {
+      h.sentFactor = factor; h.factorOurs = true;
+      dev->SetRenderState(D3DRS_TEXTUREFACTOR, factor);
+    }
+    if (h.psTintReg >= 0 && h.psTintReg < 32 && !(h.loggedTintRegs & (1u << h.psTintReg))) {
+      h.loggedTintRegs |= 1u << h.psTintReg; char msg[224];
+      snprintf(msg, sizeof msg, "Sims 3 camera hook: first tint from c%d (PS %016llx) forwarded as texture factor: %08X (from %.3f %.3f %.3f)",
+               h.psTintReg, (unsigned long long) h.psHash, factor, tint[0], tint[1], tint[2]);
+      Logger::info(msg);
+    }
   }
-  // Create-A-Style tint: albedo x TEXTUREFACTOR (white when the shader has no tint); each of the
-  // three stage-0 states the game has written since is set again
-  for (int i = 0; i < 3; ++i) if (!(h.tssOurs & (1u << i))) { h.tssOurs |= (uint8_t) (1u << i); dev->SetTextureStageState(0, kSims3Tss[i], kSims3TssOurs[i]); }
-  // the tint as the game's shader reads it: its constant on the device at this draw (milestone 79)
-  float tint[4] = { 1.f, 1.f, 1.f, 1.f };
-  if (h.psTintReg >= 0) dev->GetPixelShaderConstantF((UINT) h.psTintReg, tint, 1);
-  const uint32_t factor = (h.psTintReg >= 0) ? sims3cam::packTint(tint) : 0xFFFFFFFFu;
-  if (!h.factorOurs || factor != h.sentFactor) {
-    h.sentFactor = factor; h.factorOurs = true;
-    dev->SetRenderState(D3DRS_TEXTUREFACTOR, factor);
-  }
-  if (h.psTintReg >= 0 && h.psTintReg < 32 && !(h.loggedTintRegs & (1u << h.psTintReg))) {
-    h.loggedTintRegs |= 1u << h.psTintReg; char msg[224];
-    snprintf(msg, sizeof msg, "Sims 3 camera hook: first tint from c%d (PS %016llx) forwarded as texture factor: %08X (from %.3f %.3f %.3f)",
-             h.psTintReg, (unsigned long long) h.psHash, factor, tint[0], tint[1], tint[2]);
-    Logger::info(msg);
-  }
-  h.ourState = false;
   // the sky dome: any 2D texture at stage 0 (the runtime drops a draw whose stage-0 texture has
   // no hash, and a cube map has none), and a depth-1 viewport, which makes the draw the sky
   if (h.vsSkyDome) {
     if (k < 0 && (h.boundKind[0] & 0x7F) != 1) for (int s = 1; s < 16; ++s) if ((h.boundKind[s] & 0x7F) == 1 && h.boundTex[s]) { k = s; break; }
-    dev->GetViewport(&h.gameViewport);
-    D3DVIEWPORT9 vp = h.gameViewport; vp.MinZ = 1.f; vp.MaxZ = 1.f;
-    dev->SetViewport(&vp);
-    h.viewportOurs = true; ++h.skyDraws;
+    D3DVIEWPORT9 vp = {}; dev->GetViewport(&vp); vp.MinZ = 1.f; vp.MaxZ = 1.f;
+    h.calls.holdViewport(dev, vp); ++h.skyDraws;
   }
   if (k > 0) {
     if (!h.loggedRemap) { h.loggedRemap = true; char msg[192]; snprintf(msg, sizeof msg, "Sims 3 camera hook: first captured draw whose albedo is not at stage 0; presenting stage %d as the albedo for such draws", k); Logger::info(msg); }
-    h.remapRestore = h.boundTex[0]; if (h.remapRestore) h.remapRestore->AddRef();   // held until sims3EndDraw: the remap drops the state's reference
-    h.remapActive = true;
-    h.inRemap = true; dev->SetTexture(0, h.boundTex[k]); h.inRemap = false;
+    h.calls.holdTexture(dev, 0, h.boundTex[k]);
     // its sampler states go with it (milestone 68); the game's stage 0 states come back in sims3EndDraw
-    h.remapSamplerSet = sims3SamplerStatesTo0(h, dev, (DWORD) k, h.remapSamplerSaved);
+    sims3SamplerStatesTo0(h, dev, (DWORD) k);
   }
   return true;
 }
 
-// After the draw's message has been queued: the game's stage-0 texture and vertex shader back,
-// the masked-write emulation undone.
+// After the draw's message has been queued: a masked write's unwritten channels back from the copy,
+// then everything the hook set for the draw back to the game's (milestone 152: the draw's scope).
 template<typename Dev>
 void sims3EndDraw(Sims3Hook& h, Dev* dev) {
   if (h.fadeSplit) { h.fadeSplit = false; ++h.fadeSplitUnused; }   // a per-plant split not drawn (not an indexed draw)
-  if (h.fogOurs) { h.fogOurs = false; h.ourState = true; for (int i = 0; i < 5; ++i) dev->SetRenderState(kSims3FogRs[i], h.fogSaved[i]); h.ourState = false; }
-  if (h.viewportOurs) { h.viewportOurs = false; dev->SetViewport(&h.gameViewport); }
-  // a terrain draw's pixel shader variant, moved texture and sampler states (milestone 17)
-  if (h.psRestore) {
-    IDirect3DPixelShader9* ps = h.psRestore; h.psRestore = nullptr;
-    h.swappingPs = true; dev->SetPixelShader(ps); h.swappingPs = false;
-    ps->Release();
-  }
-  if (h.cwOurs) { h.cwOurs = false; h.ourState = true; dev->SetRenderState(D3DRS_COLORWRITEENABLE, h.cwRestore); h.ourState = false; }
-  if (h.atOurs) {
-    h.atOurs = false; h.ourState = true;
-    dev->SetRenderState(D3DRS_ALPHATESTENABLE, h.atSaved[0]); dev->SetRenderState(D3DRS_ALPHAFUNC, h.atSaved[1]); dev->SetRenderState(D3DRS_ALPHAREF, h.atSaved[2]);
-    h.ourState = false;
-  }
-  if (h.blendOurs) { h.blendOurs = false; h.ourState = true; dev->SetRenderState(D3DRS_ALPHABLENDENABLE, h.blendSaved); h.ourState = false; }   // a glass draw's blending (milestone 80)
-  if (h.worldOurs) {   // a glass draw's place (milestone 119): every other draw keeps the identity
-    static const D3DMATRIX kWorldIdentity = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
-    h.worldOurs = false; dev->SetTransform(D3DTS_WORLD, &kWorldIdentity);
-  }
-  if (h.terrainFreeStage >= 0) {
-    h.inRemap = true; dev->SetTexture((DWORD) h.terrainFreeStage, h.freeStageRestore); h.inRemap = false;
-    if (h.freeStageRestore) { h.freeStageRestore->Release(); h.freeStageRestore = nullptr; }
-    h.terrainFreeStage = -1;
-  }
-  if (h.extraActive) {   // the composite's second pass: stages 1 and 2 back (milestone 17l)
-    h.extraActive = false; h.inRemap = true;
-    for (int s = 0; s < 2; ++s) { dev->SetTexture((DWORD) (s + 1), h.extraRestore[s]); if (h.extraRestore[s]) { h.extraRestore[s]->Release(); h.extraRestore[s] = nullptr; } }
-    h.inRemap = false;
-  }
   h.splitDraw = false;
-  if (h.remapActive) {
-    h.remapActive = false;
-    h.inRemap = true; dev->SetTexture(0, h.remapRestore); h.inRemap = false;
-    if (h.remapRestore) { h.remapRestore->Release(); h.remapRestore = nullptr; }
-  }
-  sims3SamplerStatesBack(h, dev, h.remapSamplerSaved, h.remapSamplerSet);   // the game's stage 0 sampler states back (milestone 68)
-  h.remapSamplerSet = 0;
-  if (h.autoVsRestore) {
-    IDirect3DVertexShader9* base = h.autoVsRestore; h.autoVsRestore = nullptr;
-    h.swappingVs = true; dev->SetVertexShader(base); h.swappingVs = false;
-    base->Release();
-  }
-  if (h.maskEmu) {
-    if (h.maskEmu == 3) sims3RestoreChannels(h, dev);
-    h.ourState = true;
-    for (int i = 0; i < 10; ++i) if (h.maskEmuBits & (1u << i)) dev->SetRenderState(kSims3MaskRs[i], h.maskSaved[i]);
-    h.ourState = false; h.maskEmu = 0;
-  }
+  sims3RestoreChannels(h, dev);   // before the draw's states go: the quad needs the full colour mask still set
+  h.calls.close(dev, h.drawScope);
 }

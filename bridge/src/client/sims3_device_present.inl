@@ -19,9 +19,9 @@ static void sims3LogStats() {
   for (int k = 0; k < 16 && n > 0 && n < (int) sizeof msg - 16; ++k)
     if (h.remapCount[k]) n += snprintf(msg + n, sizeof msg - n, " s%d=%u", k, h.remapCount[k]);
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   draws: %u normal variants, %u draws with the shader's normal, %u with the input hidden, vs_2_0 rewritten %u (failed %u); instanced draws split %u (%u instances); the game's state put back %u times; masked writes emulated %u + %u + %u copied (skipped %u, copy failed %u)",
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   draws: %u normal variants, %u draws with the shader's normal, %u with the input hidden, vs_2_0 rewritten %u (failed %u); instanced draws split %u (%u instances); the game's state put back %u times; masked writes emulated %u + %u + %u copied (skipped %u, copy failed %u); %u state changes not made (the hook's undo log full)",
            h.normalVariantsMade, h.normalDraws, h.normalHiddenDraws, h.vsConverted, h.vsConvertFailed, h.deinstancedDraws, h.deinstancedInstances,
-           h.restoreCount, h.maskEmuA, h.maskEmuB, h.maskEmuC, h.maskEmuSkipped, h.copyFailed);
+           h.restoreCount, h.maskEmuA, h.maskEmuB, h.maskEmuC, h.maskEmuSkipped, h.copyFailed, h.calls.full);
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   cameras: transforms sent %u times, %u uploads without their eye taken as the camera continued, %u sky dome draws; dropped: %u shadow map, %u sky cube, %u water reflection, %u reflection-pass draws in %u frames (%u mirrored uploads), %u of the game's own fakes, %u world surfaces left out, %u blended copies",
            h.transformSends, h.continuedUploads, h.skyDraws, h.unshownDrops[sims3cam::kShadowMapPass], h.unshownDrops[sims3cam::kSkyCubePass], h.unshownDrops[sims3cam::kWaterReflectionPass],
