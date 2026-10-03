@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-142).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-143).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -1954,12 +1954,6 @@ struct PsAnalysis {
   // shader hands over (VsConstantOutputs). fadeSampler: that sampler, or -1; fadeInput: the
   // interpolated component, semantic * 4 + component as in VsConstantOutputs.
   int8_t fadeSampler = -1, fadeInput = -1;
-  // The tint (milestone 142): per sampler, the float constant its colour sample is multiplied by
-  // straight away, component by component (mul rN, <the sample>, cM with cM uploaded, not a DEF):
-  // the game's colour for a grey sheet -- the hedges' PS 783b8225 tints its leaf sheet s2 by c2 --
-  // forwarded as the texture factor when it is the draw's albedo. -1: none.
-  int8_t samplerTint[16];
-  PsAnalysis() { for (int8_t& t : samplerTint) t = -1; }
   bool valid = false;
 };
 
@@ -1981,8 +1975,6 @@ inline bool analyzePixelShader(const DWORD* tokens, size_t count, PsAnalysis& ou
   // per temp: the sampler and coordinate register of the last TEXLD into it (the mask test)
   int8_t texldSampler[32]; uint32_t texldCoord[32] = {};
   for (int i = 0; i < 32; ++i) texldSampler[i] = -1;
-  // per temp: the sampler whose sample its x, y, z still hold unchanged (the tint, milestone 142), or -1
-  int8_t rawSample[32]; for (int i = 0; i < 32; ++i) rawSample[i] = -1;
   auto regKey = [](uint32_t tok) -> uint32_t { return (dxsoRegType(tok) << 16) | dxsoRegNum(tok); };
   // the taint of one source component (after the source's swizzle)
   auto srcComp = [&](uint32_t tok, uint32_t destComp) -> uint64_t {
@@ -2115,23 +2107,6 @@ inline bool analyzePixelShader(const DWORD* tokens, size_t count, PsAnalysis& ou
       }
       if (dtype == kTemp) { for (uint32_t c = 0; c < 4; ++c) if (mask & (1u << c)) form[dn][c] = nf[c]; }
       else if (mask & 8u) alphaOut = nf[3];
-    }
-    // the tint (milestone 142): MUL of an unchanged colour sample by an uploaded constant, x, y, z each by its own
-    if (dtype == kTemp && dn < 32) {
-      if (op == 0x05u && len >= 3 && (mask & 7u) == 7u && !((tokens[pos] >> 28) & 1u)) {
-        for (int side = 0; side < 2; ++side) {
-          const uint32_t smp = tokens[pos + 2 + side], cst = tokens[pos + 3 - side];
-          const bool plainS = ((smp >> 24) & 0xFu) == 0u && !(smp & (1u << 13)), plainC = ((cst >> 24) & 0xFu) == 0u && !(cst & (1u << 13));
-          if (dxsoRegType(smp) == kTemp && dxsoRegNum(smp) < 32 && plainS && ((smp >> 16) & 0x3Fu) == 0x24u && rawSample[dxsoRegNum(smp)] >= 0
-              && dxsoRegType(cst) == 2u && dxsoRegNum(cst) < 256 && plainC && ((cst >> 16) & 0x3Fu) == 0x24u && !defd[dxsoRegNum(cst)]) {
-            int8_t& t = out.samplerTint[rawSample[dxsoRegNum(smp)]];
-            if (t < 0 && dxsoRegNum(cst) < 128) t = (int8_t) dxsoRegNum(cst);
-          }
-        }
-      }
-      if (mask & 7u) rawSample[dn] = -1;
-      if (op == 0x42u && len >= 3 && (mask & 7u) == 7u && dxsoRegType(tokens[pos + 3]) == kSampler && dxsoRegNum(tokens[pos + 3]) < 16
-          && ((tokens[pos + 3] >> 16) & 0x3Fu) == 0x24u && !(((tokens[pos] >> 16) & 0xFFu) & 1u)) rawSample[dn] = (int8_t) dxsoRegNum(tokens[pos + 3]);
     }
     uint64_t taint[4] = {};
     if (op == 0x42u && len >= 3) {                                     // TEXLD dest, coord, sampler

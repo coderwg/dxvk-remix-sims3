@@ -336,14 +336,6 @@ uint32_t sims3FadeTest(Sims3Hook& h, Dev* dev, int fc, bool rel, DWORD gameFunc,
   dev->SetRenderState(D3DRS_ALPHATESTENABLE, TRUE); dev->SetRenderState(D3DRS_ALPHAFUNC, h.fadeG.func); dev->SetRenderState(D3DRS_ALPHAREF, h.fadeG.count ? h.fadeG.ref[0] : 0u);
   h.ourState = false;
   h.fadeSplit = h.fadeG.split();
-  if (h.fadeSplit && h.fadeSplitLogged < 6) {
-    ++h.fadeSplitLogged; char list[96] = {}; int ln = 0;
-    for (uint32_t i = 0; i < n && ln < (int) sizeof list - 8; ++i) ln += snprintf(list + ln, sizeof list - ln, "%s%.3f", i ? " " : "", fades[i]);
-    char msg[288];
-    snprintf(msg, sizeof msg, "Sims 3 camera hook: plants cut apart at frame %u -> PS %016llx (VS %016llx): %u plants, fades %s -> %u groups (first ref %u), faded out %02x",
-             h.frames + 1, (unsigned long long) h.psHash, (unsigned long long) h.vsHash, n, list, h.fadeG.count, h.fadeG.count ? h.fadeG.ref[0] : 0u, (unsigned) h.fadeG.out);
-    Logger::info(msg);
-  }
   return h.fadeG.func;
 }
 
@@ -538,15 +530,6 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
       dev->GetVertexShaderConstantF(h.vsCard->basisReg, basis, 3);
       outward = sims3cam::cardBasisIsCamera(basis, h.cam);
       if (outward) ++h.cardDraws; else ++h.cardNotCamera;
-      bool seen = false; for (uint32_t i = 0; i < h.cardLogged; ++i) if (h.cardLoggedVs[i] == h.vsHash) seen = true;
-      if (!seen && h.cardLogged < 8) {
-        h.cardLoggedVs[h.cardLogged++] = h.vsHash; char msg[320];
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: leaf cards of VS %016llx: c%u-c%u columns (%.3f %.3f %.3f) (%.3f %.3f %.3f) (%.3f %.3f %.3f), the camera's right (%.3f %.3f %.3f) -> %s",
-                 (unsigned long long) h.vsHash, (unsigned) h.vsCard->basisReg, (unsigned) h.vsCard->basisReg + 2u,
-                 basis[0], basis[4], basis[8], basis[1], basis[5], basis[9], basis[2], basis[6], basis[10], h.cam.view._11, h.cam.view._21, h.cam.view._31,
-                 outward ? "the camera's axes: faced outward from their tree" : "not the camera's axes: left as the game draws them");
-        Logger::info(msg);
-      }
     }
     // the vertex shader variant for the draw: the promoted coordinate and/or the world normal as a
     // NORMAL output, on a hardware-instanced draw (split per instance) a read of c255 for the tag,
@@ -567,24 +550,18 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
   // Create-A-Style tint: albedo x TEXTUREFACTOR (white when the shader has no tint); each of the
   // three stage-0 states the game has written since is set again
   for (int i = 0; i < 3; ++i) if (!(h.tssOurs & (1u << i))) { h.tssOurs |= (uint8_t) (1u << i); dev->SetTextureStageState(0, kSims3Tss[i], kSims3TssOurs[i]); }
-  // the tint as the game's shader reads it: its constant on the device at this draw (milestone 79) --
-  // the table's, or where the table names none, the constant the shader multiplies its albedo's
-  // colour by straight away (milestone 142, PsAnalysis::samplerTint: the hedges' grey leaf sheet,
-  // green by c2, run 246). Not for glass, water or the terrain, which go out with the hook's markers.
-  int tintReg = h.psTintReg;
-  if (tintReg < 0 && !terrain && !h.drawGlass && k >= 0 && k < 16 && h.psAuto && h.psAuto->valid) tintReg = h.psAuto->samplerTint[k];
+  // the tint as the game's shader reads it: its constant on the device at this draw (milestone 79)
   float tint[4] = { 1.f, 1.f, 1.f, 1.f };
-  if (tintReg >= 0) dev->GetPixelShaderConstantF((UINT) tintReg, tint, 1);
-  const uint32_t factor = (tintReg >= 0) ? sims3cam::packTint(tint) : 0xFFFFFFFFu;
+  if (h.psTintReg >= 0) dev->GetPixelShaderConstantF((UINT) h.psTintReg, tint, 1);
+  const uint32_t factor = (h.psTintReg >= 0) ? sims3cam::packTint(tint) : 0xFFFFFFFFu;
   if (!h.factorOurs || factor != h.sentFactor) {
     h.sentFactor = factor; h.factorOurs = true;
     dev->SetRenderState(D3DRS_TEXTUREFACTOR, factor);
   }
-  if (tintReg >= 0 && tintReg != h.psTintReg) ++h.autoTintDraws;
-  if (tintReg >= 0 && tintReg < 32 && !(h.loggedTintRegs & (1u << tintReg))) {
-    h.loggedTintRegs |= 1u << tintReg; char msg[256];
-    snprintf(msg, sizeof msg, "Sims 3 camera hook: first tint from c%d (PS %016llx%s) forwarded as texture factor: %08X (from %.3f %.3f %.3f)",
-             tintReg, (unsigned long long) h.psHash, tintReg != h.psTintReg ? ", read from its bytecode" : "", factor, tint[0], tint[1], tint[2]);
+  if (h.psTintReg >= 0 && h.psTintReg < 32 && !(h.loggedTintRegs & (1u << h.psTintReg))) {
+    h.loggedTintRegs |= 1u << h.psTintReg; char msg[224];
+    snprintf(msg, sizeof msg, "Sims 3 camera hook: first tint from c%d (PS %016llx) forwarded as texture factor: %08X (from %.3f %.3f %.3f)",
+             h.psTintReg, (unsigned long long) h.psHash, factor, tint[0], tint[1], tint[2]);
     Logger::info(msg);
   }
   h.ourState = false;

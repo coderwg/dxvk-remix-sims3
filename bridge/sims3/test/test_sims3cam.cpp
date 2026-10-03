@@ -470,7 +470,7 @@ int main() {
       PsAnalysis a;
       CHECK(analyzePixelShader(vin.data(), vin.size(), a) && a.cutSampler == -1, "cut: PS 03d26432 discards by a vertex value: no cut-out");
     } else SKIP("ps_03d264329cbfcf64 dump not found");
-    // the hedges' PS 783b8225 (milestone 142): its cut-out, texkill on s2's alpha, and its albedo's tint
+    // the hedges' PS 783b8225: its cut-out, texkill on s2's alpha
     std::vector<DWORD> hedge;
     if (loadShader("ps_783b82250ef7c14d", hedge)) {
       PsAnalysis a;
@@ -480,15 +480,7 @@ int main() {
       const uint32_t f = ok ? cutAlphaTest(cutEval(a.cutA, get), cutEval(a.cutB, get), r) : 0u;
       CHECK(ok && a.cutSampler == 2 && f == D3DCMP_GREATEREQUAL && r == 128,
             "cut: the hedges' PS 783b8225 -> 255 * c2.w * alpha(s2) - c9.x (c2.w 1, c9.x 128: alpha test >= %u)", r);
-      CHECK(ok && a.samplerTint[2] == 2 && a.samplerTint[3] == 3, "tint (M142): the hedges' leaf sheet s2 is multiplied by c2 straight away (and its other sheet s3 by c3)");
     } else SKIP("ps_783b82250ef7c14d dump not found");
-    std::vector<DWORD> objT, leafT, grassT;
-    if (loadShader("ps_d99d3c12905fd7c9", objT) && loadShader("ps_7e48acce64547cd0", leafT) && loadShader("ps_e8daded2c199a6e2", grassT)) {
-      PsAnalysis o, l, g;
-      CHECK(analyzePixelShader(objT.data(), objT.size(), o) && o.samplerTint[1] == 10 && analyzePixelShader(leafT.data(), leafT.size(), l) && l.samplerTint[1] == -1
-            && analyzePixelShader(grassT.data(), grassT.size(), g) && g.samplerTint[1] == -1 && g.samplerTint[3] == -1,
-            "tint (M142): PS d99d3c12's albedo s1 x c10; the SpeedTree leaves' s1 and the grass sheet s1 none; the grass light map s3 x c2.x (one component for all three) is no tint");
-    } else SKIP("ps_d99d3c12 / ps_7e48acce / ps_e8daded2 dumps not found");
   }
 
   // --- the trees' fade (milestone 135): "fade - alpha" under the game's LESS 1, turned onto the alpha

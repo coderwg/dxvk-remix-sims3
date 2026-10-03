@@ -82,9 +82,9 @@ static void sims3LogStats(bool withTable) {
              "fades (milestone 135): %u pixel shaders with alpha = fade - a sampler's alpha; %u captured draws given the test on the alpha; "
              "leaf cards (milestone 136): %u draws faced outward from their tree, %u whose constants were not the camera's axes; "
              "trees near the camera (milestone 137): %u draws solid, %u left as the game's; "
-             "plants cut apart (milestone 139): %u draws sent as %u, %u not split (not an indexed draw); tints read from the bytecode (milestone 142): %u draws",
+             "plants cut apart (milestone 139): %u draws sent as %u, %u not split (not an indexed draw)",
              h.cutShaders, h.alphaCutDraws, h.fadeShaders, h.fadeTestDraws, h.cardDraws, h.cardNotCamera, h.solidFadeDraws, h.solidFadeLeft,
-             h.fadeSplitDraws, h.fadeSplitParts, h.fadeSplitUnused, h.autoTintDraws);
+             h.fadeSplitDraws, h.fadeSplitParts, h.fadeSplitUnused);
     Logger::info(msg);
     snprintf(msg, sizeof msg, "Sims 3 camera hook:   glass, mirrors and water (milestones 80-114): %u glass draws, %u car glass, %u plumbob, %u mirror; water draws: %u pool, %u pond, %u sea, %u object water; %u wave maps looked at; %u effect draws left out",
              h.glassDraws[sims3cam::kClearGlass], h.glassDraws[sims3cam::kCarGlass], h.glassDraws[sims3cam::kPlumbob], h.mirrorDraws,

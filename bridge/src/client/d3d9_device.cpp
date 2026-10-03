@@ -2947,12 +2947,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreateVertexShader(CONST DWORD* pFunc
     // the constants it hands the pixel shader unchanged (milestone 135: the trees' fade)
     sims3cam::analyzeVertexConstantOutputs(pFunction, sims3Count, pLssVertexShader->sims3ConstOut);
     // cards turned to the camera (milestone 136: the trees' leaves)
-    if (sims3cam::analyzeCameraCard(pFunction, sims3Count, pLssVertexShader->sims3Card)) {
-      char msg[192];
-      snprintf(msg, sizeof msg, "Sims 3 camera hook: vertex shader %016llx turns cards to the camera with c%u-c%u (leaves): faced outward from their tree when those are the camera's axes",
-               (unsigned long long) pLssVertexShader->sims3Hash, (unsigned) pLssVertexShader->sims3Card.basisReg, (unsigned) pLssVertexShader->sims3Card.basisReg + 2u);
-      Logger::info(msg);
-    }
+    sims3cam::analyzeCameraCard(pFunction, sims3Count, pLssVertexShader->sims3Card);
     if (pLssVertexShader->sims3Normal.hasNormalInput && g_sims3.normalShaderLogged < 80) {
       ++g_sims3.normalShaderLogged;
       const sims3cam::VsNormalInfo& ni = pLssVertexShader->sims3Normal;
