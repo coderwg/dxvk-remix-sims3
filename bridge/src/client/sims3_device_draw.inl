@@ -474,33 +474,24 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
       if (k < 0) { bool bound[16]; for (int i = 0; i < 16; ++i) bound[i] = h.boundTex[i] != nullptr; k = sims3cam::pickAlbedoStage(bound, h.boundColor2D); }
     }
     // a cut-out the runtime must see (milestones 67-68): the shader's texkill on its albedo's alpha,
-    // a * alpha + b with the bound constants, as the D3D alpha test the runtime applies to the albedo.
-    // Also in place of the game's own alpha test when that is on a value the albedo's alpha does not
-    // feed (milestone 141): the runtime would test the albedo's alpha against it -- the hedges' PS
-    // 783b8225 cuts its leaves by texkill and alpha-tests the lit colour's luminance, and kept the
-    // sheet's faint fringe, a grey shell (run 245). 476 of the 482 cut-out shaders dumped alpha-test
-    // something else when they alpha-test at all.
-    const bool gameTestElsewhere = k >= 0 && k < 16 && rs[D3DRS_ALPHATESTENABLE] && h.psAuto && h.psAuto->valid && !(h.psAuto->alphaOutTaint & (1ull << (k * 4 + 3)));
-    if (k >= 0 && h.psAuto && h.psAuto->valid && h.psAuto->cutSampler == k && (!rs[D3DRS_ALPHATESTENABLE] || gameTestElsewhere) && !h.atOurs) {
+    // a * alpha + b with the bound constants, as the D3D alpha test the runtime applies to the albedo
+    if (k >= 0 && h.psAuto && h.psAuto->valid && h.psAuto->cutSampler == k && !rs[D3DRS_ALPHATESTENABLE] && !h.atOurs) {
       auto get = [&](uint32_t reg, uint32_t comp) -> float { float v[4] = {}; dev->GetPixelShaderConstantF(reg, v, 1); return v[comp & 3u]; };
       const float a = sims3cam::cutEval(h.psAuto->cutA, get), b = sims3cam::cutEval(h.psAuto->cutB, get);
       uint32_t ref = 0; const uint32_t func = sims3cam::cutAlphaTest(a, b, ref);
-      if (func || gameTestElsewhere) {
+      if (func) {
         dev->GetRenderState(D3DRS_ALPHATESTENABLE, &h.atSaved[0]); dev->GetRenderState(D3DRS_ALPHAFUNC, &h.atSaved[1]); dev->GetRenderState(D3DRS_ALPHAREF, &h.atSaved[2]);
         h.atOurs = true; h.ourState = true;
-        dev->SetRenderState(D3DRS_ALPHATESTENABLE, func ? TRUE : FALSE);
-        if (func) { dev->SetRenderState(D3DRS_ALPHAFUNC, func); dev->SetRenderState(D3DRS_ALPHAREF, ref); }
+        dev->SetRenderState(D3DRS_ALPHATESTENABLE, TRUE); dev->SetRenderState(D3DRS_ALPHAFUNC, func); dev->SetRenderState(D3DRS_ALPHAREF, ref);
         h.ourState = false;
-        if (func) ++h.alphaCutDraws;
-        if (gameTestElsewhere) ++h.alphaCutReplaced;
+        ++h.alphaCutDraws;
       }
       bool seen = false; for (uint32_t i = 0; i < h.cutLogged; ++i) if (h.cutLoggedPs[i] == h.psHash) seen = true;
       if (!seen && h.cutLogged < 32) {
-        h.cutLoggedPs[h.cutLogged++] = h.psHash; char msg[320];
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: cut-out of PS %016llx (VS %016llx): texkill on the alpha of s%d, %.3f * alpha + %.3f -> %s %u%s",
+        h.cutLoggedPs[h.cutLogged++] = h.psHash; char msg[256];
+        snprintf(msg, sizeof msg, "Sims 3 camera hook: cut-out of PS %016llx (VS %016llx): texkill on the alpha of s%d, %.3f * alpha + %.3f -> %s %u",
                  (unsigned long long) h.psHash, (unsigned long long) h.vsHash, k, a, b,
-                 func == D3DCMP_GREATEREQUAL ? "alpha test >=" : func == D3DCMP_LESSEQUAL ? "alpha test <=" : func == D3DCMP_NEVER ? "never drawn" : "nothing discarded, no test", ref,
-                 gameTestElsewhere ? " (in place of the game's own alpha test, on a value the albedo's alpha does not feed)" : "");
+                 func == D3DCMP_GREATEREQUAL ? "alpha test >=" : func == D3DCMP_LESSEQUAL ? "alpha test <=" : func == D3DCMP_NEVER ? "never drawn" : "nothing discarded, no test", ref);
         Logger::info(msg);
       }
     }
@@ -576,18 +567,24 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
   // Create-A-Style tint: albedo x TEXTUREFACTOR (white when the shader has no tint); each of the
   // three stage-0 states the game has written since is set again
   for (int i = 0; i < 3; ++i) if (!(h.tssOurs & (1u << i))) { h.tssOurs |= (uint8_t) (1u << i); dev->SetTextureStageState(0, kSims3Tss[i], kSims3TssOurs[i]); }
-  // the tint as the game's shader reads it: its constant on the device at this draw (milestone 79)
+  // the tint as the game's shader reads it: its constant on the device at this draw (milestone 79) --
+  // the table's, or where the table names none, the constant the shader multiplies its albedo's
+  // colour by straight away (milestone 142, PsAnalysis::samplerTint: the hedges' grey leaf sheet,
+  // green by c2, run 246). Not for glass, water or the terrain, which go out with the hook's markers.
+  int tintReg = h.psTintReg;
+  if (tintReg < 0 && !terrain && !h.drawGlass && k >= 0 && k < 16 && h.psAuto && h.psAuto->valid) tintReg = h.psAuto->samplerTint[k];
   float tint[4] = { 1.f, 1.f, 1.f, 1.f };
-  if (h.psTintReg >= 0) dev->GetPixelShaderConstantF((UINT) h.psTintReg, tint, 1);
-  const uint32_t factor = (h.psTintReg >= 0) ? sims3cam::packTint(tint) : 0xFFFFFFFFu;
+  if (tintReg >= 0) dev->GetPixelShaderConstantF((UINT) tintReg, tint, 1);
+  const uint32_t factor = (tintReg >= 0) ? sims3cam::packTint(tint) : 0xFFFFFFFFu;
   if (!h.factorOurs || factor != h.sentFactor) {
     h.sentFactor = factor; h.factorOurs = true;
     dev->SetRenderState(D3DRS_TEXTUREFACTOR, factor);
   }
-  if (h.psTintReg >= 0 && h.psTintReg < 32 && !(h.loggedTintRegs & (1u << h.psTintReg))) {
-    h.loggedTintRegs |= 1u << h.psTintReg; char msg[224];
-    snprintf(msg, sizeof msg, "Sims 3 camera hook: first tint from c%d (PS %016llx) forwarded as texture factor: %08X (from %.3f %.3f %.3f)",
-             h.psTintReg, (unsigned long long) h.psHash, factor, tint[0], tint[1], tint[2]);
+  if (tintReg >= 0 && tintReg != h.psTintReg) ++h.autoTintDraws;
+  if (tintReg >= 0 && tintReg < 32 && !(h.loggedTintRegs & (1u << tintReg))) {
+    h.loggedTintRegs |= 1u << tintReg; char msg[256];
+    snprintf(msg, sizeof msg, "Sims 3 camera hook: first tint from c%d (PS %016llx%s) forwarded as texture factor: %08X (from %.3f %.3f %.3f)",
+             tintReg, (unsigned long long) h.psHash, tintReg != h.psTintReg ? ", read from its bytecode" : "", factor, tint[0], tint[1], tint[2]);
     Logger::info(msg);
   }
   h.ourState = false;

@@ -284,7 +284,7 @@ struct Sims3Hook {
   uint32_t lotPictureDropped = 0;   // the neighbourhood view's lot picture draws left out (milestone 63)
   uint32_t effectsLeftOut = 0;      // effect draws left out of the ray tracing (milestone 114, sims3cam::leftOutPs)
   uint32_t alphaCutDraws = 0;       // captured draws given their shader's cut-out as an alpha test (milestones 67-68)
-  uint32_t alphaCutReplaced = 0;    // ...of them, or with no test, in place of the game's own test on another value (milestone 141)
+  uint32_t autoTintDraws = 0;       // captured draws given the tint their shader's bytecode multiplies the albedo by (milestone 142)
   uint32_t fadeTestDraws = 0;       // captured draws whose "fade - alpha" test was turned onto the alpha (milestone 135)
   uint32_t solidFadeDraws = 0, solidFadeLeft = 0, solidFadeLogged = 0; uint64_t solidFadeLoggedPs[4] = {};   // trees near the camera drawn solid / left as the game's (milestone 137)
   // Each plant its own cut (milestone 139): the registers of the block the game last uploaded at c0
