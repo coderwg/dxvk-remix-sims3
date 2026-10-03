@@ -138,7 +138,7 @@ struct Sims3Hook {
   // milestone 124: render target 0's bridge id and whether it is a cube map's face; the id of the target a
   // reflection camera drew into; the draws of the passes Remix never shows, dropped (sims3cam::UnshownPass)
   size_t rt0Id = 0, reflectionRtId = 0; bool rtCubeFace = false; uint32_t unshownDrops[sims3cam::kUnshownPasses] = {};
-  uint32_t fakeDrops = 0, blendedCopyDrops = 0;   // draws left out by sims3cam::kDropPs (milestone 148): the game's fakes, the blended copies
+  uint32_t dropped[sims3cam::kDropKinds] = {};   // draws left out by sims3cam::kDropPs, by kind (milestones 148, 149)
   uint8_t copyMask = 0; int copyScratch = -1; uint32_t maskEmuC = 0, maskEmuCopyLogged = 0, copyFailed = 0;
   // Wall openings (milestone 13): the windows and doors the wall pixel shaders cut with a mask
   // are cut into the triangles on the client (sims3_walls.h) and the cut geometry, in the
@@ -267,8 +267,6 @@ struct Sims3Hook {
     IDirect3DIndexBuffer9* merged = nullptr; uint32_t mergedPrims = 0, minIndex = 0, numVertices = 0; bool ready = false;
     uint32_t kept = 0, skirts = 0, flat = 0;
   };
-  uint32_t lotPictureDropped = 0;   // the neighbourhood view's lot picture draws left out (milestone 63)
-  uint32_t effectsLeftOut = 0;      // effect draws left out of the ray tracing (milestone 114, sims3cam::leftOutPs)
   uint32_t alphaCutDraws = 0;       // captured draws given their shader's cut-out as an alpha test (milestones 67-68)
   uint32_t fadeTestDraws = 0;       // captured draws whose "fade - alpha" test was turned onto the alpha (milestone 135)
   uint32_t solidFadeDraws = 0, solidFadeLeft = 0, solidFadeLogged = 0; uint64_t solidFadeLoggedPs[4] = {};   // trees near the camera drawn solid / left as the game's (milestone 137)

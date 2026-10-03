@@ -56,11 +56,10 @@ bool sims3ApplyForDraw(Sims3Hook& h, Dev* dev, const DWORD* rs) {
   D3DVIEWPORT9 vp = {}; dev->GetViewport(&vp);
   const bool fullViewport = h.rt0W == 0 || (vp.X == 0 && vp.Y == 0 && vp.Width == h.rt0W && vp.Height == h.rt0H);   // milestone 133
   const bool is3D = sims3cam::drawIs3D(h.cameraValid, h.declIs3D, zEnable, h.rtIsPrimary, fullViewport);
-  // a draw the runtime must not have (milestone 148, kDropPs): the game's own fakes -- its shadows, fog, glow
-  // and tone curve, which Remix makes itself -- and the blended copies drawn in the world
+  // a draw the runtime must not have (milestones 148, 149, kDropPs): the game's own fakes -- its shadows, fog,
+  // glow and tone curve, which Remix makes itself -- the world surfaces left out and the blended copies drawn in the world
   if (sims3cam::dropsDraw(h.psDrop, is3D, rs[D3DRS_ALPHABLENDENABLE])) {
-    h.drawDropped = true;
-    if (h.psDrop->kind == sims3cam::kGameFake) ++h.fakeDrops; else ++h.blendedCopyDrops;
+    h.drawDropped = true; ++h.dropped[h.psDrop->kind];
     return false;
   }
   if (sims3LotTerrainCopy(h, dev, is3D)) return false;   // a lot chunk copy without the baker's markers: dropped (milestone 16)

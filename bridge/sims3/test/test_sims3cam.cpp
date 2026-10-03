@@ -282,9 +282,12 @@ int main() {
           "drop table (M148): the blended copies -- the Sims' hair indoors and out, the effect cards by their two pixel shaders");
     CHECK(!findDropPs(0x5aee1186d554dbc4ull) && !findDropPs(0x7ba9f578d1a1ebb2ull) && !findDropPs(0x52d5e6267a915d34ull) && !findDropPs(0xe8daded2c199a6e2ull) && !findDropPs(0),
           "drop table: not the objects' shader, the interface, the cursor's depth pick, the grass sprites (sent since milestone 138)");
-    const DropPs* f = findDropPs(0xbac911e069b2ee21ull); const DropPs* hair = findDropPs(0x57a5a049ffa47770ull);
-    CHECK(dropsDraw(f, false, FALSE) && dropsDraw(f, true, TRUE) && dropsDraw(hair, true, TRUE) && !dropsDraw(hair, true, FALSE) && !dropsDraw(hair, false, TRUE) && !dropsDraw(nullptr, true, TRUE),
-          "drop table: a fake goes in every draw; a blended copy only as a blended world draw (its opaque pass captured, the menu portrait's rasterized)");
+    const DropPs* f = findDropPs(0xbac911e069b2ee21ull); const DropPs* hair = findDropPs(0x57a5a049ffa47770ull); const DropPs* pic = findDropPs(0x4c59eb620412df33ull);
+    CHECK(pic && pic->kind == kLeftOut && !findDropPs(0x92337a1805f17506ull),
+          "drop table (M149): the neighbourhood view's lot picture by its pixel shader 4c59eb62, not its vertex shader 92337a18");
+    CHECK(dropsDraw(f, false, FALSE) && dropsDraw(f, true, TRUE) && dropsDraw(hair, true, TRUE) && !dropsDraw(hair, true, FALSE) && !dropsDraw(hair, false, TRUE) && !dropsDraw(nullptr, true, TRUE)
+          && dropsDraw(pic, true, FALSE) && dropsDraw(pic, true, TRUE) && !dropsDraw(pic, false, FALSE),
+          "drop table: a fake goes in every draw; a surface left out in every world draw; a blended copy only as a blended world draw (its opaque pass captured, the menu portrait's rasterized)");
   }
 
   // --- the passes Remix never shows (milestone 124), from the in-world trace's targets
@@ -1297,7 +1300,7 @@ int main() {
       // milestones 107, 109: the survey's glass -- clear; bumpy with a normal map; objects fading in are not glass
       auto glassMat = [](uint64_t hsh) { const NamedGlass* g = namedGlass(hsh); return g ? (int) g->material : -1; };
       CHECK(farOk && glassMat(0x2b1da1b45f51d3f9ull) == kPlumbob && glassMat(0x8ff495765d26a6fdull) == kClearGlass && glassMat(0x7eeb349a23cbefefull) == kClearGlass
-            && glassMat(0x8fe3ce7c5fbc6234ull) == kClearGlass && glassMat(0x910a56f24813e248ull) == kClearGlass && glassMat(0xa9336d35a25143aeull) == -1 && leftOutPs(0xa9336d35a25143aeull)
+            && glassMat(0x8fe3ce7c5fbc6234ull) == kClearGlass && glassMat(0x910a56f24813e248ull) == kClearGlass && glassMat(0xa9336d35a25143aeull) == -1 && findDropPs(0xa9336d35a25143aeull) && findDropPs(0xa9336d35a25143aeull)->kind == kLeftOut
             && glassMat(0x7b3cb6be7d73e3b4ull) == -1 && glassMat(0xa8c64e11b251a0cbull) == -1 && glassMat(0x834b21919e9f8d8aull) == -1 && glassMat(0x3661ea706449953cull) == -1,
             "glass (M107, M114): the survey's 8ff49576 / 7eeb349a / 8fe3ce7c / 910a56f2 clear glass, the plumbob 2b1da1b4 its own, none cube-only; the speakers' sound waves a9336d35 left out, not glass; the fading objects 7b3cb6be / a8c64e11 / 834b2191 / 3661ea70 not named");
       // milestone 109: bumpy glass -- the bump map's sampler and coordinate from the bytecode (the promotion needs a plain read),

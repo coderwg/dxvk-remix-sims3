@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-148).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-149).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -38,8 +38,9 @@
  * 3D draws are dropped on the client (recognised by the mirrored camera). The passes whose
  * result Remix never shows -- the shadow map, the sky's environment cube, the water's
  * reflection target -- are dropped whole (milestone 124, unshownPass), and so are the draws
- * named in kDropPs by their pixel shader (milestone 148): the game's own fakes and the blended
- * copies drawn in the world. Any other draw that is not captured gets the identity
+ * named in kDropPs by their pixel shader (milestones 148, 149): the game's own fakes, the world
+ * draws Remix must not have and the blended copies drawn in the world. Any other draw that is not
+ * captured gets the identity
  * transforms: into another target, or after the interface, the runtime rasterizes it as the
  * game drew it. (A 3D draw on the screen before the interface the runtime does NOT rasterize:
  * it traces it with an unknown camera, rtx.skipObjectsWithUnknownCamera being off -- junk at the
@@ -1089,20 +1090,24 @@ inline uint32_t packTint(const float* rgb) {
   return 0xFF000000u | (to8(rgb[0]) << 16) | (to8(rgb[1]) << 8) | to8(rgb[2]);   // D3DCOLOR ARGB
 }
 
-// ---- draws never sent to the runtime, by pixel shader (milestones 130, 131, 133; one table since 148) -
+// ---- draws never sent to the runtime, by pixel shader (milestones 130, 131, 133; one table since 148-149)
 // What the pixel shader computes decides it. kGameFake: what the game paints because it cannot trace
 // light -- its shadows, its fog, its glow and its tone curve -- which Remix makes itself: every draw of
 // the shader is left out (run 234 counted what still reached the runtime uncaptured; the shaders
 // disassembled; none of these is ever captured). Before the interface they cost the bridge and the
 // runtime for nothing; the tone curve, after the interface, was laid over the ray-traced picture.
+// kLeftOut: a surface the ray tracer must not have in the world -- one it cannot draw, or a second one
+// over another: every world draw is left out (draws outside the world are rasterized as the game draws them).
 // kBlendedCopy: the blended copy of an alpha-tested surface -- the same mesh drawn again for soft edges,
 // or a faint effect over it: its blended world draws are left out (see-through, the runtime gives them
 // no motion and drops their vertex colour); its opaque draws are captured, and its draws outside the
 // world (the action menu's portrait, a partial viewport) are rasterized as the game draws them.
 // (Until milestone 148 a second table, kNeverCapture, named some of these by vertex shader: its entries
 // whose vertex shader only ever drew with a fake went in milestone 144, and the effect cards' vertex
-// shader 6cb3b47f, which only ever draws with 7304aaea and 7865aa44, became those two here.)
-enum : uint8_t { kGameFake = 0, kBlendedCopy = 1 };
+// shader 6cb3b47f, which only ever draws with 7304aaea and 7865aa44, became those two here. Until 149
+// the lot picture was named by its vertex shader 92337a18, which only ever draws with 4c59eb62, and the
+// sound waves stood in a list of their own, both dropped once the draw had been taken for capture.)
+enum : uint8_t { kGameFake = 0, kLeftOut = 1, kBlendedCopy = 2, kDropKinds = 3 };
 struct DropPs { uint64_t hash; const char* name; uint8_t kind; };   // hash: the pixel shader's
 inline const DropPs kDropPs[] = {
   // the screen copied in 256x256 tiles after the interface and drawn back through x (1 + c0) / (x + c0)
@@ -1130,6 +1135,17 @@ inline const DropPs kDropPs[] = {
   // the fog painted over the lot (the runtime's fog comes from the game's light record)
   { 0xd33629855723d2bcull, "the game's fog over the lot", kGameFake },
   { 0xd09db2967daf6d1full, "the game's fog over the lot", kGameFake },
+  // The lot's ground as the neighbourhood view draws it (milestone 63): VS 92337a18 (the lot VS's decode
+  // and per-chunk clip, plus a normal) with this pixel shader, which shows only a pre-baked 256x256 picture
+  // of the lot's paint; two draws per frame, the active lot only (runs 168-171). A second surface over the
+  // lot's ground there -- the low-detail model's plate, which fills the hole the town ground has under
+  // every lot (run 176).
+  { 0x4c59eb620412df33ull, "the neighbourhood view's lot picture (a second surface over the lot's ground)", kLeftOut },
+  // A screen-shimmer effect (milestone 114): the game bends the scene behind through a bump map, tinted by
+  // a colour texture and the vertex colour, cut out on its alpha -- the sound waves from speakers (run 219),
+  // taken for bumpy glass by milestone 107's survey. The ray tracer cannot draw a shimmer (the user: "leave
+  // the sound waves out for now").
+  { 0xa9336d35a25143aeull, "the sound waves from speakers: ps_2_0, signed bump map s2 at TEXCOORD4, the scene behind s1, colour s3 (VS 648e326d)", kLeftOut },
   // The Sims' hair soft-edge pass (milestones 131, 133; found in run 171): each Sim's hair is drawn twice --
   // alpha-tested and opaque, then the same mesh blended (SRCALPHA / INVSRCALPHA, no depth write) for its
   // soft edges; the vertex shader differs from Sim to Sim, the pixel shader is the hair's: 57a5a049 and
@@ -1147,7 +1163,9 @@ inline const DropPs kDropPs[] = {
 };
 inline const DropPs* findDropPs(uint64_t psHash) { return findByHash(kDropPs, psHash); }
 // Whether a draw of the bound pixel shader is left out (is3D: a world draw, see drawIs3D).
-inline bool dropsDraw(const DropPs* d, bool is3D, DWORD alphaBlendEnable) { return d && (d->kind == kGameFake || (is3D && alphaBlendEnable != 0)); }
+inline bool dropsDraw(const DropPs* d, bool is3D, DWORD alphaBlendEnable) {
+  return d && (d->kind == kGameFake || (is3D && (d->kind == kLeftOut || alphaBlendEnable != 0)));
+}
 
 // ---- trees near the camera drawn solid (milestone 137) -------------------------------------
 // When the camera comes close the game draws a whole tree blended instead of opaque: its own pixel
@@ -1385,12 +1403,7 @@ inline const TerrainShader kTerrainShaders[] = {
 // The neighbourhood view's only ground; in the household view the game draws, square by square,
 // either the detailed pieces or the coarse square, never both (run 170). It goes through the
 // squares' merged path like the detailed squares. VS: position x c16.xyx + c16.zwz, rows c8..c10.
-// The lot's ground as the neighbourhood view draws it (milestone 63): VS 92337a18 (the lot VS's
-// decode and per-chunk clip, plus a normal) with PS 4c59eb62, which shows only a pre-baked 256x256
-// picture of the lot's paint; two draws per frame, the active lot only (runs 168-171). It is left out:
-// a second surface over the lot's ground there -- the low-detail model's plate, which fills the hole
-// the town ground has under every lot (run 176).
-inline constexpr uint64_t kLotPictureVs = 0x92337a1805f17506ull;
+// (The lot's ground as the neighbourhood view draws it, VS 92337a18: left out by its pixel shader, kDropPs.)
 
 
 // How a terrain variant treats alpha: 0 as the shader writes it (blended layer passes), 1 forced
@@ -2245,16 +2258,6 @@ inline const NamedGlass kNamedGlass[] = {
   { 0x66516d5db94ab307ull, "car glass, a passing car's windshield and windows: cube only (VS e79a4bf1, skinned; run 215)", kCarGlass },
 };
 inline const NamedGlass* namedGlass(uint64_t hash) { return findByHash(kNamedGlass, hash); }
-// ---- effects left out of the ray tracing (milestone 114) ---------------------------------------------
-// A screen-shimmer effect: the game bends the scene behind through a bump map, tinted by a colour
-// texture and the vertex colour, cut out on its alpha -- the sound waves from speakers (run 219), taken
-// for bumpy glass by milestone 107's survey. The ray tracer cannot draw a shimmer; the draw is left out
-// (the user: "leave the sound waves out for now").
-struct LeftOutPs { uint64_t hash; const char* name; };
-inline const LeftOutPs kLeftOutPs[] = {
-  { 0xa9336d35a25143aeull, "the sound waves from speakers: ps_2_0, signed bump map s2 at TEXCOORD4, the scene behind s1, colour s3 (VS 648e326d)" },
-};
-inline const LeftOutPs* leftOutPs(uint64_t hash) { return findByHash(kLeftOutPs, hash); }
 // (The glass survey, milestones 110 to 118, showed every glass shader not yet identified in a flat colour
 // of its own -- pink at the end -- until the user came across it (runs 218-221 named ten). Retired in
 // milestone 146: the four left, 8fe3ce7c, 8ff49576, d03ebab1 and 7eeb349a, go out as their named glass.

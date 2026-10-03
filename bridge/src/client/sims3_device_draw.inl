@@ -347,10 +347,6 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
     sims3BeginMaskedWrite(h, dev, rs);
     return false;
   }
-  // the neighbourhood view's lot picture (milestone 63): a second surface over the lot's ground, left out
-  if (h.vsHash == sims3cam::kLotPictureVs) { h.drawDropped = true; h.drawCaptured = false; ++h.lotPictureDropped; return false; }
-  // an effect the ray tracer cannot draw (milestone 114, sims3cam::leftOutPs): the speakers' sound waves, left out
-  if (sims3cam::leftOutPs(h.psHash)) { h.drawDropped = true; h.drawCaptured = false; ++h.effectsLeftOut; return false; }
   // a mirror's face (milestone 101, sims3cam::isReflectiveSheet): the mirror material below
   const bool reflectiveSheet = h.psAuto && h.psAuto->valid && sims3cam::isReflectiveSheet(*h.psAuto, rs[D3DRS_STENCILENABLE]);
   // a zero-thickness wall's back side (milestone 97, sims3cam::isWallBackSide): left out

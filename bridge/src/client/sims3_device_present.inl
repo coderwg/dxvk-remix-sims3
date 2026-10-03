@@ -23,9 +23,9 @@ static void sims3LogStats() {
            h.normalVariantsMade, h.normalDraws, h.normalHiddenDraws, h.vsConverted, h.vsConvertFailed, h.deinstancedDraws, h.deinstancedInstances,
            h.restoreCount, h.maskEmuA, h.maskEmuB, h.maskEmuC, h.maskEmuSkipped, h.copyFailed);
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   cameras: transforms sent %u times, %u uploads without their eye taken as the camera continued, %u sky dome draws; dropped: %u shadow map, %u sky cube, %u water reflection, %u reflection-pass draws in %u frames (%u mirrored uploads), %u of the game's own fakes, %u blended copies, %u of the neighbourhood view's lot picture",
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   cameras: transforms sent %u times, %u uploads without their eye taken as the camera continued, %u sky dome draws; dropped: %u shadow map, %u sky cube, %u water reflection, %u reflection-pass draws in %u frames (%u mirrored uploads), %u of the game's own fakes, %u world surfaces left out, %u blended copies",
            h.transformSends, h.continuedUploads, h.skyDraws, h.unshownDrops[sims3cam::kShadowMapPass], h.unshownDrops[sims3cam::kSkyCubePass], h.unshownDrops[sims3cam::kWaterReflectionPass],
-           h.reflectionDrops, h.reflectionFrames, h.mirroredUploads, h.fakeDrops, h.blendedCopyDrops, h.lotPictureDropped);
+           h.reflectionDrops, h.reflectionFrames, h.mirroredUploads, h.dropped[sims3cam::kGameFake], h.dropped[sims3cam::kLeftOut], h.dropped[sims3cam::kBlendedCopy]);
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   sky: the game's light record %s (%u frames lit by it); clock %s %.2f h (sunrise %.2f, sunset %.2f); the game's light is the %s's, luminance %.3f; sun %s %.3f toward %.3f, %.3f, %.3f; moon %s %.3f toward %.3f, %.3f, %.3f; afterglow %s; %u light updates; the street lamps at %.3f by the game's night switch",
            h.lightRec ? "reached" : "NOT reached", h.framesFromGame, !h.clock.known ? "unknown," : (h.clock.night ? "night," : "day,"), h.clock.hour, h.clock.sunrise, h.clock.sunset,
@@ -69,9 +69,9 @@ static void sims3LogStats() {
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   cut-outs: %u pixel shaders read with a cut-out, %u draws given it as an alpha test; trees: %u fade shaders, %u draws given the test on the alpha, %u plant draws sent as %u (%u not split), %u leaf draws faced outward (%u whose constants were not the camera's axes), %u near-camera draws solid (%u left as the game's)",
            h.cutShaders, h.alphaCutDraws, h.fadeShaders, h.fadeTestDraws, h.fadeSplitDraws, h.fadeSplitParts, h.fadeSplitUnused, h.cardDraws, h.cardNotCamera, h.solidFadeDraws, h.solidFadeLeft);
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   glass: %u clear, %u car, %u plumbob, %u mirror; water: %u pool, %u pond, %u sea, %u object; %u effect draws left out; bumpy glass %u draws with their own bump map (%u materials%s, %u still without one); %u placed by their object's WORLD transform (%u not placed); %u sent without their back side (%llu triangles left out, %u meshes not read)",
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   glass: %u clear, %u car, %u plumbob, %u mirror; water: %u pool, %u pond, %u sea, %u object; bumpy glass %u draws with their own bump map (%u materials%s, %u still without one); %u placed by their object's WORLD transform (%u not placed); %u sent without their back side (%llu triangles left out, %u meshes not read)",
            h.glassDraws[sims3cam::kClearGlass], h.glassDraws[sims3cam::kCarGlass], h.glassDraws[sims3cam::kPlumbob], h.mirrorDraws,
-           h.waterDraws[sims3cam::kWaterPool], h.waterDraws[sims3cam::kWaterPond], h.waterDraws[sims3cam::kWaterSea], h.waterDraws[sims3cam::kWaterObject], h.effectsLeftOut,
+           h.waterDraws[sims3cam::kWaterPool], h.waterDraws[sims3cam::kWaterPond], h.waterDraws[sims3cam::kWaterSea], h.waterDraws[sims3cam::kWaterObject],
            h.bumpDraws, (unsigned) h.bumpMaterials.size(), h.bumpModRead ? "" : ", not read yet", h.bumpPending,
            h.worldDraws, h.worldFailed, h.glassSideDraws, (unsigned long long) h.glassSideTris, h.glassSideSkipped);
   Logger::info(msg);
