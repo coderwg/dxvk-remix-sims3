@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-150).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-151).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -1879,7 +1879,7 @@ struct PsAnalysis {
   // The fade (milestone 135): the alpha output is an interpolated component minus one 2D sampler's
   // alpha -- SpeedTree's leaves and branches, "fade - alpha" under the game's alpha test LESS 1/255:
   // a texel shows where its alpha reaches the tree's fade. The runtime tests the texture's own
-  // alpha, so the test is turned around at draw time (fadeAlphaTest) with the fade the vertex
+  // alpha, so the test is turned around at draw time (groupFades) with the fade the vertex
   // shader hands over (VsConstantOutputs). fadeSampler: that sampler, or -1; fadeInput: the
   // interpolated component, semantic * 4 + component as in VsConstantOutputs.
   int8_t fadeSampler = -1, fadeInput = -1;
@@ -2098,50 +2098,41 @@ inline float cutEval(const CutPoly& p, Get&& get) {
   for (uint8_t i = 0; i < p.n; ++i) v += p.t[i].k * (p.t[i].c >= 0 ? get((uint32_t) p.t[i].c >> 2, (uint32_t) p.t[i].c & 3u) : 1.f);
   return v;
 }
-// The D3D alpha test that keeps what "texkill (a * alpha + b)" keeps (alpha in steps of 1/255):
-// D3DCMP_GREATEREQUAL or D3DCMP_LESSEQUAL with ref, D3DCMP_NEVER when every texel is discarded,
-// 0 when none ever is (no test needed).
-inline uint32_t cutAlphaTest(float a, float b, uint32_t& ref) {
+// The D3D alpha test, the one the runtime applies to the albedo, that keeps the texels where
+// "a * x + c OP 0" -- x the texel's alpha in steps of 1/255 (0..255), OP one of the four ordered
+// comparisons (milestone 151: one converter for the shaders' cut-outs, milestones 67-68, and the trees'
+// fade, milestone 135). D3DCMP_GREATEREQUAL or D3DCMP_LESSEQUAL with ref -- every texel passing comes
+// out as GREATEREQUAL 0 or LESSEQUAL 255 (alphaTestPassesAll) --, D3DCMP_NEVER when none passes, 0 when
+// OP is not an ordered comparison.
+inline uint32_t alphaTestFor(float a, float c, uint32_t op, uint32_t& ref) {
   ref = 0;
-  if (a == 0.f) return b < 0.f ? (uint32_t) D3DCMP_NEVER : 0u;
-  const float t = -b / a;
-  if (a > 0.f) {
-    if (t <= 0.f) return 0u;
-    if (t > 1.f) return (uint32_t) D3DCMP_NEVER;
-    const float r = std::ceil(t * 255.f - 1e-3f); ref = r <= 0.f ? 0u : r >= 255.f ? 255u : (uint32_t) r;
-    return (uint32_t) D3DCMP_GREATEREQUAL;
+  const bool greater = op == D3DCMP_GREATER || op == D3DCMP_GREATEREQUAL;
+  if (!greater && op != D3DCMP_LESS && op != D3DCMP_LESSEQUAL) return 0u;
+  const bool strict = op == D3DCMP_GREATER || op == D3DCMP_LESS;
+  if (a == 0.f) {   // a constant: every texel or none
+    const bool pass = greater ? (strict ? c > 0.f : c >= 0.f) : (strict ? c < 0.f : c <= 0.f);
+    return pass ? (uint32_t) D3DCMP_GREATEREQUAL : (uint32_t) D3DCMP_NEVER;
   }
-  if (t >= 1.f) return 0u;
-  if (t < 0.f) return (uint32_t) D3DCMP_NEVER;
-  const float r = std::floor(t * 255.f + 1e-3f); ref = r <= 0.f ? 0u : r >= 255.f ? 255u : (uint32_t) r;
-  return (uint32_t) D3DCMP_LESSEQUAL;
-}
-
-// The game's alpha test on "fade - alpha" turned onto the alpha itself (milestone 135; alpha in steps
-// of 1/255): fade - alpha OP ref/255 <=> alpha OP' 255 * fade - ref, the comparison mirrored.
-// D3DCMP_GREATEREQUAL or D3DCMP_LESSEQUAL with outRef, D3DCMP_NEVER when no texel passes, 0 when
-// the game's comparison is not one of the four ordered ones (its test is left as it is).
-inline uint32_t fadeAlphaTest(uint32_t func, uint32_t ref, float fade, uint32_t& outRef) {
-  outRef = 0;
-  const bool above = func == D3DCMP_LESS || func == D3DCMP_LESSEQUAL;          // fade - alpha below ref: alpha above
-  if (!above && func != D3DCMP_GREATER && func != D3DCMP_GREATEREQUAL) return 0u;
-  const bool strict = func == D3DCMP_LESS || func == D3DCMP_GREATER;
-  const float t = 255.f * fade - (float) ref;
-  if (above) {                                                                  // alpha > t, or alpha >= t
+  const float t = -c / a;   // the comparison with x, mirrored when a is negative
+  if (greater == (a > 0.f)) {                                                   // x > t, or x >= t
     const float r = strict ? std::floor(t + 1e-3f) + 1.f : std::ceil(t - 1e-3f);
     if (r > 255.f) return (uint32_t) D3DCMP_NEVER;
-    outRef = r <= 0.f ? 0u : (uint32_t) r;
+    ref = r <= 0.f ? 0u : (uint32_t) r;
     return (uint32_t) D3DCMP_GREATEREQUAL;
   }
-  const float r = strict ? std::ceil(t - 1e-3f) - 1.f : std::floor(t + 1e-3f);  // alpha < t, or alpha <= t
+  const float r = strict ? std::ceil(t - 1e-3f) - 1.f : std::floor(t + 1e-3f);  // x < t, or x <= t
   if (r < 0.f) return (uint32_t) D3DCMP_NEVER;
-  outRef = r >= 255.f ? 255u : (uint32_t) r;
+  ref = r >= 255.f ? 255u : (uint32_t) r;
   return (uint32_t) D3DCMP_LESSEQUAL;
+}
+inline bool alphaTestPassesAll(uint32_t func, uint32_t ref) {
+  return (func == D3DCMP_GREATEREQUAL && ref == 0u) || (func == D3DCMP_LESSEQUAL && ref == 255u);
 }
 
 // The plants of a SpeedTree draw grouped by their cut (milestone 139). SpeedTree draws up to eight
 // plants at once, each with its own fade (shader instancing); each plant's fade turned into the
-// runtime's test (fadeAlphaTest), plants with the same reference form a group, and a plant faded
+// runtime's test -- the game's "fade - alpha OP ref/255", times 255: -x + 255 * fade - ref OP 0
+// (alphaTestFor) --, plants with the same reference form a group, and a plant faded
 // out entirely (D3DCMP_NEVER) belongs to none (out). func: the comparison of every group -- 0 when
 // the game's test cannot be turned, D3DCMP_NEVER when every plant is faded out.
 struct FadeGroups {
@@ -2154,7 +2145,7 @@ inline FadeGroups groupFades(uint32_t gameFunc, uint32_t gameRef, const float* f
   FadeGroups g;
   for (uint32_t i = 0; i < n && i < FadeGroups::kPlants; ++i) {
     uint32_t r = 0;
-    const uint32_t f = fadeAlphaTest(gameFunc, gameRef, fades[i], r);
+    const uint32_t f = alphaTestFor(-1.f, 255.f * fades[i] - (float) gameRef, gameFunc, r);
     if (!f) return FadeGroups();
     if (f == (uint32_t) D3DCMP_NEVER) { g.out |= (uint8_t) (1u << i); continue; }
     g.func = f;

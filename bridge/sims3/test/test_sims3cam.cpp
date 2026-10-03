@@ -452,13 +452,19 @@ int main() {
   // --- the cut-out (milestone 68): a texkill on one sampler's alpha read as a * alpha + b
   {
     uint32_t ref = 0;
-    CHECK(cutAlphaTest(1.f, -0.5f, ref) == D3DCMP_GREATEREQUAL && ref == 128, "cut: alpha - 0.5 keeps alpha >= 128/255 (ref %u)", ref);
-    CHECK(cutAlphaTest(255.f, -128.f, ref) == D3DCMP_GREATEREQUAL && ref == 128, "cut: alpha * 255 - 128 keeps alpha >= 128 (ref %u)", ref);
-    CHECK(cutAlphaTest(255.f, 0.f, ref) == 0u, "cut: alpha * 255 - 0 discards nothing: no test");
-    CHECK(cutAlphaTest(1.f, 0.5f, ref) == 0u, "cut: alpha + 0.5 discards nothing");
-    CHECK(cutAlphaTest(1.f, -1.5f, ref) == D3DCMP_NEVER, "cut: alpha - 1.5 discards everything");
-    CHECK(cutAlphaTest(-1.f, 0.5f, ref) == D3DCMP_LESSEQUAL && ref == 127, "cut: 0.5 - alpha keeps alpha <= 127/255 (ref %u)", ref);
-    CHECK(cutAlphaTest(0.f, -1.f, ref) == D3DCMP_NEVER && cutAlphaTest(0.f, 1.f, ref) == 0u, "cut: a constant value discards all or nothing");
+    // the hook's call (sims3BeginDraw): texkill keeps a * alpha + b >= 0, times 255
+    auto cut = [](float a, float b, uint32_t& r) { return alphaTestFor(a, 255.f * b, D3DCMP_GREATEREQUAL, r); };
+    auto cutNone = [&](float a, float b) { uint32_t r = 0; const uint32_t f = cut(a, b, r); return alphaTestPassesAll(f, r); };
+    CHECK(cut(1.f, -0.5f, ref) == D3DCMP_GREATEREQUAL && ref == 128, "cut: alpha - 0.5 keeps alpha >= 128/255 (ref %u)", ref);
+    CHECK(cut(255.f, -128.f, ref) == D3DCMP_GREATEREQUAL && ref == 128, "cut: alpha * 255 - 128 keeps alpha >= 128 (ref %u)", ref);
+    CHECK(cutNone(255.f, 0.f), "cut: alpha * 255 - 0 discards nothing: no test");
+    CHECK(cutNone(1.f, 0.5f), "cut: alpha + 0.5 discards nothing");
+    CHECK(cut(1.f, -1.5f, ref) == D3DCMP_NEVER, "cut: alpha - 1.5 discards everything");
+    CHECK(cut(-1.f, 0.5f, ref) == D3DCMP_LESSEQUAL && ref == 127 && !cutNone(-1.f, 0.5f) && cutNone(-1.f, 1.f), "cut: 0.5 - alpha keeps alpha <= 127/255 (ref %u); 1 - alpha discards nothing", ref);
+    CHECK(cut(0.f, -1.f, ref) == D3DCMP_NEVER && cutNone(0.f, 1.f), "cut: a constant value discards all or nothing");
+    CHECK(alphaTestFor(1.f, -10.f, D3DCMP_GREATER, ref) == D3DCMP_GREATEREQUAL && ref == 11 && alphaTestFor(1.f, -10.f, D3DCMP_LESS, ref) == D3DCMP_LESSEQUAL && ref == 9
+          && alphaTestFor(1.f, -10.f, D3DCMP_EQUAL, ref) == 0u && alphaTestFor(0.f, 0.f, D3DCMP_GREATER, ref) == D3DCMP_NEVER,
+          "alphaTestFor (M151): x - 10 > 0 keeps x >= 11, < 0 keeps x <= 9; EQUAL not turned; a constant 0 > 0 keeps nothing");
     std::vector<DWORD> imp, obj, obj2, walls, two, vin;
     if (loadShader("ps_9c84a6b7017f33fc", imp)) {
       PsAnalysis a;
@@ -472,7 +478,7 @@ int main() {
             "cut: object PS 00230c49 -> 255 * alpha(s6) - c7.x, the game's alpha reference (sampler %d, b term c%d)", a.cutSampler, a.cutB.n ? a.cutB.t[0].c : -1);
       auto get = [](uint32_t reg, uint32_t comp) -> float { return (reg == 7 && comp == 0) ? 96.f : 0.f; };
       uint32_t r2 = 0;
-      CHECK(cutAlphaTest(cutEval(a.cutA, get), cutEval(a.cutB, get), r2) == D3DCMP_GREATEREQUAL && r2 == 96, "  with c7.x = 96: alpha test >= 96 (ref %u)", r2);
+      CHECK(cut(cutEval(a.cutA, get), cutEval(a.cutB, get), r2) == D3DCMP_GREATEREQUAL && r2 == 96, "  with c7.x = 96: alpha test >= 96 (ref %u)", r2);
     } else SKIP("ps_00230c49e1b880b6 dump not found");
     if (loadShader("ps_10c22e3b87e087a0", obj2)) {
       PsAnalysis a;
@@ -493,7 +499,7 @@ int main() {
       const bool ok = analyzePixelShader(hedge.data(), hedge.size(), a);
       auto get = [](uint32_t reg, uint32_t comp) -> float { return (reg == 2 && comp == 3) ? 1.f : (reg == 9 && comp == 0) ? 128.f : 0.f; };
       uint32_t r = 0;
-      const uint32_t f = ok ? cutAlphaTest(cutEval(a.cutA, get), cutEval(a.cutB, get), r) : 0u;
+      const uint32_t f = ok ? cut(cutEval(a.cutA, get), cutEval(a.cutB, get), r) : 0u;
       CHECK(ok && a.cutSampler == 2 && f == D3DCMP_GREATEREQUAL && r == 128,
             "cut: the hedges' PS 783b8225 -> 255 * c2.w * alpha(s2) - c9.x (c2.w 1, c9.x 128: alpha test >= %u)", r);
     } else SKIP("ps_783b82250ef7c14d dump not found");
@@ -501,14 +507,16 @@ int main() {
 
   // --- the trees' fade (milestone 135): "fade - alpha" under the game's LESS 1, turned onto the alpha
   {
+    // one plant: the game's test on "fade - alpha" turned by groupFades (alphaTestFor)
+    auto one = [](uint32_t func, uint32_t gref, float f, uint32_t& r) { const FadeGroups g = groupFades(func, gref, &f, 1); r = g.count ? g.ref[0] : 0u; return g.func; };
     uint32_t ref = 0;
-    CHECK(fadeAlphaTest(D3DCMP_LESS, 1, 0.3313726f, ref) == D3DCMP_GREATEREQUAL && ref == 84, "fade: a whole tree (0.3313726 - alpha < 1/255) keeps alpha >= 84 (ref %u)", ref);
-    CHECK(fadeAlphaTest(D3DCMP_LESS, 1, 1.f, ref) == D3DCMP_GREATEREQUAL && ref == 255, "fade: faded out (1 - alpha < 1/255) keeps alpha 255 only (ref %u)", ref);
-    CHECK(fadeAlphaTest(D3DCMP_LESS, 1, 0.f, ref) == D3DCMP_GREATEREQUAL && ref == 0, "fade: fade 0 keeps every texel (ref %u)", ref);
-    CHECK(fadeAlphaTest(D3DCMP_LESSEQUAL, 0, 0.5f, ref) == D3DCMP_GREATEREQUAL && ref == 128, "fade: 0.5 - alpha <= 0 keeps alpha >= 128 (ref %u)", ref);
-    CHECK(fadeAlphaTest(D3DCMP_GREATER, 0, 0.5f, ref) == D3DCMP_LESSEQUAL && ref == 127, "fade: 0.5 - alpha > 0 keeps alpha <= 127 (ref %u)", ref);
-    CHECK(fadeAlphaTest(D3DCMP_LESS, 0, 0.f, ref) == D3DCMP_GREATEREQUAL && ref == 1, "fade: 0 - alpha < 0 keeps alpha above 0, >= 1 (ref %u)", ref);
-    CHECK(fadeAlphaTest(D3DCMP_EQUAL, 1, 0.33f, ref) == 0u && fadeAlphaTest(D3DCMP_ALWAYS, 1, 0.33f, ref) == 0u, "fade: other comparisons left as the game's");
+    CHECK(one(D3DCMP_LESS, 1, 0.3313726f, ref) == D3DCMP_GREATEREQUAL && ref == 84, "fade: a whole tree (0.3313726 - alpha < 1/255) keeps alpha >= 84 (ref %u)", ref);
+    CHECK(one(D3DCMP_LESS, 1, 1.f, ref) == D3DCMP_GREATEREQUAL && ref == 255, "fade: faded out (1 - alpha < 1/255) keeps alpha 255 only (ref %u)", ref);
+    CHECK(one(D3DCMP_LESS, 1, 0.f, ref) == D3DCMP_GREATEREQUAL && ref == 0, "fade: fade 0 keeps every texel (ref %u)", ref);
+    CHECK(one(D3DCMP_LESSEQUAL, 0, 0.5f, ref) == D3DCMP_GREATEREQUAL && ref == 128, "fade: 0.5 - alpha <= 0 keeps alpha >= 128 (ref %u)", ref);
+    CHECK(one(D3DCMP_GREATER, 0, 0.5f, ref) == D3DCMP_LESSEQUAL && ref == 127, "fade: 0.5 - alpha > 0 keeps alpha <= 127 (ref %u)", ref);
+    CHECK(one(D3DCMP_LESS, 0, 0.f, ref) == D3DCMP_GREATEREQUAL && ref == 1, "fade: 0 - alpha < 0 keeps alpha above 0, >= 1 (ref %u)", ref);
+    CHECK(one(D3DCMP_EQUAL, 1, 0.33f, ref) == 0u && one(D3DCMP_ALWAYS, 1, 0.33f, ref) == 0u, "fade: other comparisons left as the game's");
     // milestone 139: each plant its own cut -- traced batches (native2 trace) grouped
     {
       const float whole[4] = { 0.3313726f, 0.3313726f, 0.3313726f, 0.3313726f }, mixed[3] = { 0.3432f, 0.4654f, 0.4725f }, pair[3] = { 0.6031f, 0.4204f, 0.4204f }, gone[2] = { 0.3313726f, 1.2f }, allGone[2] = { 1.2f, 1.5f };

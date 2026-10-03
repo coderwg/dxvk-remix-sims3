@@ -289,6 +289,23 @@ void sims3GlassOneSide(Sims3Hook& h, Dev* dev) {
   if (it->second.ib) { h.glassIb = it->second.ib; h.glassPrims = it->second.prims; ++h.glassSideDraws; h.glassSideTris += it->second.dropped; }
 }
 
+// The hook's alpha test on a captured draw (milestone 151: the one place it is set -- a cut-out, a
+// fade, each group of a split SpeedTree draw): the game's three states saved the first time, put back
+// in sims3EndDraw; only the states that differ are sent.
+template<typename Dev>
+void sims3SetAlphaTest(Sims3Hook& h, Dev* dev, uint32_t func, uint32_t ref) {
+  static constexpr D3DRENDERSTATETYPE kRs[3] = { D3DRS_ALPHATESTENABLE, D3DRS_ALPHAFUNC, D3DRS_ALPHAREF };
+  const DWORD want[3] = { TRUE, func, ref };
+  h.ourState = true;
+  for (int i = 0; i < 3; ++i) {
+    DWORD now = 0; dev->GetRenderState(kRs[i], &now);
+    if (!h.atOurs) h.atSaved[i] = now;
+    if (now != want[i]) dev->SetRenderState(kRs[i], want[i]);
+  }
+  h.ourState = false;
+  h.atOurs = true;
+}
+
 // The fade test of a SpeedTree draw (milestones 135, 137, 139). The draw holds up to eight plants --
 // shader instancing, three registers each from c0, the block the game last uploaded there: position,
 // rotation, (scale, fade, 1, 1) -- each with its own fade; the vertex shader hands over the first
@@ -313,13 +330,8 @@ uint32_t sims3FadeTest(Sims3Hook& h, Dev* dev, int fc, bool rel, DWORD gameFunc,
   h.fade0 = fades[0]; h.fadeReg = reg0; h.fadePlants = n;
   h.fadeG = sims3cam::groupFades(gameFunc, gameRef, fades, n);
   if (!h.fadeG.func) return 0u;
-  dev->GetRenderState(D3DRS_ALPHATESTENABLE, &h.atSaved[0]); dev->GetRenderState(D3DRS_ALPHAFUNC, &h.atSaved[1]); dev->GetRenderState(D3DRS_ALPHAREF, &h.atSaved[2]);
-  h.atOurs = true;
-  if (blendOff) { h.blendSaved = rs[D3DRS_ALPHABLENDENABLE]; h.blendOurs = true; }
-  h.ourState = true;
-  if (blendOff) dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
-  dev->SetRenderState(D3DRS_ALPHATESTENABLE, TRUE); dev->SetRenderState(D3DRS_ALPHAFUNC, h.fadeG.func); dev->SetRenderState(D3DRS_ALPHAREF, h.fadeG.count ? h.fadeG.ref[0] : 0u);
-  h.ourState = false;
+  if (blendOff) { h.blendSaved = rs[D3DRS_ALPHABLENDENABLE]; h.blendOurs = true; h.ourState = true; dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE); h.ourState = false; }
+  sims3SetAlphaTest(h, dev, h.fadeG.func, h.fadeG.count ? h.fadeG.ref[0] : 0u);
   h.fadeSplit = h.fadeG.split();
   return h.fadeG.func;
 }
@@ -448,20 +460,15 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
     if (k >= 0 && h.psAuto && h.psAuto->valid && h.psAuto->cutSampler == k && !rs[D3DRS_ALPHATESTENABLE] && !h.atOurs) {
       auto get = [&](uint32_t reg, uint32_t comp) -> float { float v[4] = {}; dev->GetPixelShaderConstantF(reg, v, 1); return v[comp & 3u]; };
       const float a = sims3cam::cutEval(h.psAuto->cutA, get), b = sims3cam::cutEval(h.psAuto->cutB, get);
-      uint32_t ref = 0; const uint32_t func = sims3cam::cutAlphaTest(a, b, ref);
-      if (func) {
-        dev->GetRenderState(D3DRS_ALPHATESTENABLE, &h.atSaved[0]); dev->GetRenderState(D3DRS_ALPHAFUNC, &h.atSaved[1]); dev->GetRenderState(D3DRS_ALPHAREF, &h.atSaved[2]);
-        h.atOurs = true; h.ourState = true;
-        dev->SetRenderState(D3DRS_ALPHATESTENABLE, TRUE); dev->SetRenderState(D3DRS_ALPHAFUNC, func); dev->SetRenderState(D3DRS_ALPHAREF, ref);
-        h.ourState = false;
-        ++h.alphaCutDraws;
-      }
+      uint32_t ref = 0; const uint32_t func = sims3cam::alphaTestFor(a, 255.f * b, D3DCMP_GREATEREQUAL, ref);   // texkill keeps a * alpha + b >= 0
+      const bool none = sims3cam::alphaTestPassesAll(func, ref);
+      if (!none) { sims3SetAlphaTest(h, dev, func, ref); ++h.alphaCutDraws; }
       bool seen = false; for (uint32_t i = 0; i < h.cutLogged; ++i) if (h.cutLoggedPs[i] == h.psHash) seen = true;
       if (!seen && h.cutLogged < 32) {
         h.cutLoggedPs[h.cutLogged++] = h.psHash; char msg[256];
         snprintf(msg, sizeof msg, "Sims 3 camera hook: cut-out of PS %016llx (VS %016llx): texkill on the alpha of s%d, %.3f * alpha + %.3f -> %s %u",
                  (unsigned long long) h.psHash, (unsigned long long) h.vsHash, k, a, b,
-                 func == D3DCMP_GREATEREQUAL ? "alpha test >=" : func == D3DCMP_LESSEQUAL ? "alpha test <=" : func == D3DCMP_NEVER ? "never drawn" : "nothing discarded, no test", ref);
+                 none ? "nothing discarded, no test" : func == D3DCMP_GREATEREQUAL ? "alpha test >=" : func == D3DCMP_LESSEQUAL ? "alpha test <=" : "never drawn", ref);
         Logger::info(msg);
       }
     }

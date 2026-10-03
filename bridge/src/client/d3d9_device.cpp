@@ -2632,7 +2632,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
           memcpy(block_, saved_, regs_ * 4 * sizeof(float));
           for (uint32_t i_ = 0; i_ < h.fadePlants; ++i_) if (!(h.fadeG.members[g_] & (1u << i_))) block_[(h.fadeReg + 3u * i_) * 4u] = 0.f;
           h.ourConsts = true; SetVertexShaderConstantF(0, block_, regs_); h.ourConsts = false;
-          h.ourState = true; SetRenderState(D3DRS_ALPHAREF, h.fadeG.ref[g_]); h.ourState = false;
+          sims3SetAlphaTest(h, this, h.fadeG.func, h.fadeG.ref[g_]);
           ClientMessage c(Commands::IDirect3DDevice9Ex_DrawIndexedPrimitive, getId());
           currentUID = c.get_uid();
           c.send_many(Type, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount);
