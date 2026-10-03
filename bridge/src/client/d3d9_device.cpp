@@ -3076,29 +3076,12 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetVertexShaderConstantF(UINT StartRe
       const sims3cam::Kind kind = sims3cam::classify(pConstantData, Vector4fCount, cam);
       char msg[256];
       if (kind == sims3cam::Kind::Main) {
-        // the play camera does not move within a frame: a main camera unlike the frame's first one
-        // (lens or position) is not adopted (run 70: the once-per-frame origin camera at a horizon tilt)
-        bool adopt = true;
-        if (!h.frameCamSet) { h.frameCam = cam; h.frameCamSet = true; }
-        else {
-          const sims3cam::Camera& f = h.frameCam;
-          const float dp[3] = { cam.pos[0] - f.pos[0], cam.pos[1] - f.pos[1], cam.pos[2] - f.pos[2] };
-          // the same camera re-derived from another object's fused matrix agrees to ~1e-6 relative;
-          // anything beyond is another lens (near / far plane), position or direction
-          const bool differs = std::fabs(cam.fovY - f.fovY) > 1e-4f || std::fabs(cam.nearZ - f.nearZ) > 1e-3f * f.nearZ || std::fabs(cam.aspect - f.aspect) > 1e-3f
-                            || std::fabs(cam.proj._33 - f.proj._33) > 2e-6f || std::fabs(cam.proj._43 - f.proj._43) > 1e-4f * std::fabs(f.proj._43) + 1e-5f
-                            || sims3cam::len3(dp) > 0.05f || sims3cam::dot3(cam.fwd, f.fwd) < 0.99999f;
-          if (differs) {
-            adopt = false; ++h.frameCamRejected;   // a measure (milestone 120): does this rule ever act?
-            if (h.frameCamRejectLogged < 4u) {
-              ++h.frameCamRejectLogged;
-              snprintf(msg, sizeof msg, "Sims 3 camera hook: a main camera unlike the frame's first, not adopted at frame %u (fovY %.2f / %.2f deg, near %.4f / %.4f, eye moved %.3f, fwd dot %.6f)",
-                       h.frames + 1, cam.fovY * 57.2958f, f.fovY * 57.2958f, cam.nearZ, f.nearZ, sims3cam::len3(dp), sims3cam::dot3(cam.fwd, f.fwd));
-              Logger::info(msg);
-            }
-          }
-        }
-        if (adopt) { h.cam = cam; h.cameraValid = true; h.camMirrored = false; }
+        // the play camera does not move within a frame: the frame's first main camera holds for the whole
+        // frame (milestone 121). Later uploads re-derive it from other objects' fused matrices and differ
+        // only by the game's single-precision rounding of the depth term (run 224: near 0.2500 / 0.2501 /
+        // 0.2502, eye and direction exact). Each one still means the main pass is drawing.
+        if (!h.frameCamSet) { h.frameCamSet = true; h.cam = cam; }
+        h.cameraValid = true; h.camMirrored = false;
         if (!h.loggedMain) {
           h.loggedMain = true;
           snprintf(msg, sizeof msg, "Sims 3 camera hook: main camera verified (fovY=%.1f deg, aspect=%.3f, near=%.4f, P33=%.7f P43=%.5f, eye=%.1f,%.1f,%.1f)",

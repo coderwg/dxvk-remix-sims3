@@ -116,8 +116,8 @@ static void sims3LogStats(bool withTable) {
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   lot paint: %u composite second passes, %u lot re-submissions split in two; client copies of surfaces %u MB, address space in use %u of %u MB",
            h.compositePasses, h.splitDraws, (unsigned) (Direct3DSurface9_LSS::sims3ShadowBytes() >> 20), (unsigned) ((ms.ullTotalVirtual - ms.ullAvailVirtual) >> 20), (unsigned) (ms.ullTotalVirtual >> 20));
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   cameras: transforms sent to the runtime %u times; sky dome draws presented as the sky %u; %u captured draws before the frame's camera upload (in %u frames: placed with the previous frame's camera); %u main cameras unlike the frame's first left unadopted",
-           h.transformSends, h.skyDraws, h.staleCameraDraws, h.staleCameraFrames, h.frameCamRejected);
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   cameras: transforms sent to the runtime %u times; sky dome draws presented as the sky %u; %u captured draws before the frame's camera upload (in %u frames: placed with the previous frame's camera)",
+           h.transformSends, h.skyDraws, h.staleCameraDraws, h.staleCameraFrames);
   Logger::info(msg);
   if (!withTable) return;
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   captured draws per shader pair since the last table (%d pairs%s; textures as first seen, render states as last seen):", h.shaderStatCount, h.shaderStatCount >= Sims3Hook::kShaderStats ? ", table full" : "");

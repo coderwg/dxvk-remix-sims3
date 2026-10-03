@@ -293,13 +293,11 @@ struct Sims3Hook {
   std::vector<Square> squares; int mergePending = -1;
   uint32_t mergedDraws = 0, mergePaintPieces = 0, mergeFallbackPieces = 0, mergeBuilds = 0, mergeBuildFailed = 0, mergeLogged = 0, mergeEvicted = 0, mergeSkipped = 0;
   bool drawIndexed = false; D3DPRIMITIVETYPE drawType = D3DPT_TRIANGLELIST; INT drawBase = 0; UINT drawStart = 0, drawPrims = 0;   // the indexed draw call's arguments, for the squares
-  // The frame's first main camera (run 69: the far view broken at a horizon tilt): a later upload
-  // that differs from it in lens or position is another camera of the frame, not adopted.
-  sims3cam::Camera frameCam; bool frameCamSet = false;
+  bool frameCamSet = false;   // the frame's first main camera is in cam; it holds for the frame (milestone 121)
   uint32_t transformSends = 0;
-  // measures (milestone 120): captured draws before the frame's main camera upload (placed with the
-  // previous frame's camera) and the frames they fell in; main cameras the rule above left unadopted
-  uint32_t staleCameraDraws = 0, staleCameraFrames = 0, staleCameraFrame = 0xFFFFFFFFu, frameCamRejected = 0, frameCamRejectLogged = 0;
+  // a measure (milestones 120-121): captured draws before the frame's main camera upload (placed with the
+  // previous frame's camera) and the frames they fell in
+  uint32_t staleCameraDraws = 0, staleCameraFrames = 0, staleCameraFrame = 0xFFFFFFFFu;
 } g_sims3;
 
 // the lamp reporter's block (milestone 36): where it was found, and the search for it
