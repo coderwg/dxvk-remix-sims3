@@ -12,6 +12,7 @@ struct Sims3Hook {
   bool declIs3D = false;               // bound vertex layout has a 3-component POSITION
   const sims3cam::ShaderPatch* patch = nullptr;   // constant patch rule of the bound vertex shader
   uint8_t vsNeverCapture = 0;          // bound vertex shader's 3D draws never sent: 1 all of them, 2 the alpha-blended ones (neverCaptureMode, milestone 131)
+  uint8_t psNeverCapture = 0;          // the same by the bound pixel shader (milestone 133)
   // The sky dome (runs 70-72): its draws are captured with a depth-1 viewport, which the runtime
   // takes as "this draw is the sky", and its first 2D texture presented at stage 0 (the cube map
   // there has no hash and would drop the draw).
@@ -79,9 +80,6 @@ struct Sims3Hook {
   sims3cam::GameClock clock = {}; bool clockSaid = false, clockNight = false; uint32_t clockLogged = 0, lampsWorldDark = 0;
   float worldFade = 0.f;   // the street lamps' fade, 0..1: the game's night switch (milestones 54, 55, 128)
   uint32_t markDump = 0;               // frames left to log after the mark key
-  // milestone 132, a diagnostic: the marked frame draw by draw -- the camera the uploads since the previous draw carried
-  // (-1 no upload, 0 none found, 1 a main camera by its eye, 2 the main camera continued, 3 a reflection), their number, lines
-  int markUpKind = -1; float markUpEye[3] = {}; float markUpFov = 0.f; uint32_t markUploads = 0, markDrawsLogged = 0;
   sims3cam::Lamps lamps;               // the game's own lamps, forwarded as Remix API lights
   uint32_t lampEvents = 0;             // API light creations and destructions made for lamps
   // night from the sun (milestone 20d): the sun's luminance smoothed, the day reference, what was sent

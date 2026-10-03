@@ -46,7 +46,7 @@ inline void sims3OnReset(Sims3Hook& h) {
   h.vsBound = nullptr; h.vsTabled = false; h.vsNormal = nullptr; h.pendingPromote = 0; h.vsHash = 0;
   h.patch = nullptr; h.vsNeverCapture = 0; h.vsCapturedUv = false;
   h.lotCopies.clear();
-  h.psAuto = nullptr; h.psAlbedoStage = -1; h.psTintReg = -1; h.psHash = 0;
+  h.psAuto = nullptr; h.psAlbedoStage = -1; h.psTintReg = -1; h.psHash = 0; h.psNeverCapture = 0;
   h.declIs3D = false; h.drawCaptured = false; h.autoCapturedUv = false;
   for (int i = 0; i < 16; ++i) { h.boundTex[i] = nullptr; h.boundColor2D[i] = false; h.boundKind[i] = 0; h.boundFmt[i] = 0; h.boundW[i] = h.boundH[i] = 0; }
   for (uint32_t i = 0; i < h.scratchCount; ++i) { if (h.scratch[i].surf) h.scratch[i].surf->Release(); if (h.scratch[i].tex) h.scratch[i].tex->Release(); h.scratch[i] = Sims3Hook::Scratch(); }
@@ -301,28 +301,6 @@ void sims3GlassOneSide(Sims3Hook& h, Dev* dev) {
     it = h.glassSides.emplace(key, side).first;
   }
   if (it->second.ib) { h.glassIb = it->second.ib; h.glassPrims = it->second.prims; ++h.glassSideDraws; h.glassSideTris += it->second.dropped; }
-}
-
-// Milestone 132, a diagnostic: the marked frame, one line per draw of the game -- its shaders, target, viewport and
-// states as sent, what the hook did with it, and the camera its own constant uploads carried against the frame's
-// camera (the action menu's portrait head; a Sim's head trailing behind). Removed once answered.
-template<typename Dev>
-void sims3MarkDraw(Sims3Hook& h, Dev* dev, const DWORD* rs) {
-  if (h.markDrawsLogged >= 900u) return;
-  ++h.markDrawsLogged;
-  D3DVIEWPORT9 vp = {}; dev->GetViewport(&vp);
-  static const char* const kUp[5] = { "no upload since the last draw", "no camera found in them", "a main camera by its eye", "the main camera continued (no eye)", "a reflection camera" };
-  const std::string what = h.drawDropped ? std::string("dropped: ") + (h.dropWhy ? h.dropWhy : "?")
-                         : h.drawCaptured ? std::string("RAY TRACED with the frame's camera")
-                         : format_string("not captured (camera %d, 3D layout %d, z %lu, screen %d)", (int) h.cameraValid, (int) h.declIs3D, (unsigned long) rs[D3DRS_ZENABLE], (int) h.rtIsPrimary);
-  const std::string up = h.markUpKind >= 1 ? format_string(" -- eye %.2f, %.2f, %.2f, fovY %.1f", h.markUpEye[0], h.markUpEye[1], h.markUpEye[2], h.markUpFov * 57.2958f) : std::string();
-  Logger::info(format_string("Sims 3 camera hook: mark frame %u draw %u: VS %016llx PS %016llx, %s %u primitives, target %ux%u%s, viewport %lu,%lu %lux%lu, z %lu write %lu, blend %lu %lu/%lu, cw %lx -- %s; its uploads (%u): %s%s; the frame's camera: eye %.2f, %.2f, %.2f, fovY %.1f",
-                             h.frames + 1, h.markDrawsLogged, (unsigned long long) h.vsHash, (unsigned long long) h.psHash, h.drawIndexed ? "indexed" : "not indexed", h.drawIndexed ? h.drawPrims : 0u,
-                             (unsigned) h.rt0W, (unsigned) h.rt0H, h.rtIsPrimary ? " (screen)" : "", (unsigned long) vp.X, (unsigned long) vp.Y, (unsigned long) vp.Width, (unsigned long) vp.Height,
-                             (unsigned long) rs[D3DRS_ZENABLE], (unsigned long) rs[D3DRS_ZWRITEENABLE], (unsigned long) rs[D3DRS_ALPHABLENDENABLE], (unsigned long) rs[D3DRS_SRCBLEND], (unsigned long) rs[D3DRS_DESTBLEND],
-                             (unsigned long) rs[D3DRS_COLORWRITEENABLE], what.c_str(), h.markUploads, kUp[h.markUpKind + 1], up.c_str(),
-                             h.cam.pos[0], h.cam.pos[1], h.cam.pos[2], h.cam.fovY * 57.2958f));
-  h.markUpKind = -1; h.markUploads = 0;
 }
 
 // Before every draw of the game (not the hook's own restore quad). A captured draw -- the main

@@ -69,11 +69,13 @@ bool sims3ApplyForDraw(Sims3Hook& h, Dev* dev, const DWORD* rs) {
     }
     return false;
   }
-  const bool is3D = sims3cam::drawIs3D(h.cameraValid, h.declIs3D, zEnable, h.rtIsPrimary);
+  D3DVIEWPORT9 vp = {}; dev->GetViewport(&vp);
+  const bool fullViewport = h.rt0W == 0 || (vp.X == 0 && vp.Y == 0 && vp.Width == h.rt0W && vp.Height == h.rt0H);   // milestone 133
+  const bool is3D = sims3cam::drawIs3D(h.cameraValid, h.declIs3D, zEnable, h.rtIsPrimary, fullViewport);
   if (sims3LotTerrainCopy(h, dev, is3D)) return false;   // a lot chunk copy without the baker's markers: dropped (milestone 16)
   // a 3D draw the ray tracer must not have (kNeverCapture): never sent (milestone 131) -- with the
   // identity transforms the runtime would trace it with an unknown camera, at the world origin
-  if (is3D && sims3cam::neverCaptureDraw(h.vsNeverCapture, rs[D3DRS_ALPHABLENDENABLE])) {
+  if (is3D && (sims3cam::neverCaptureDraw(h.vsNeverCapture, rs[D3DRS_ALPHABLENDENABLE]) || sims3cam::neverCaptureDraw(h.psNeverCapture, rs[D3DRS_ALPHABLENDENABLE]))) {
     h.drawDropped = true; h.dropWhy = "never captured"; ++h.neverSentDrops;
     return false;
   }

@@ -300,11 +300,12 @@ int main() {
   CHECK(!positionIs3D(pretr),  "decl POSITIONT (pre-transformed): not 3D");
   CHECK(!positionIs3D(nopos),  "decl with no POSITION (TEXCOORD-only): not 3D");
   CHECK(fvfIs3D(D3DFVF_XYZ | D3DFVF_DIFFUSE) && !fvfIs3D(D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1), "FVF XYZ: 3D, XYZRHW: not 3D");
-  CHECK(drawIs3D(true, true, D3DZB_TRUE, true),   "3D decl + depth on + camera + primary RT -> main camera");
-  CHECK(!drawIs3D(true, true, D3DZB_FALSE, true), "3D decl + depth OFF                      -> identity (post/UI window)");
-  CHECK(!drawIs3D(true, false, D3DZB_TRUE, true), "2D decl                                  -> identity");
-  CHECK(!drawIs3D(false, true, D3DZB_TRUE, true), "no verified camera yet                   -> identity");
-  CHECK(!drawIs3D(true, true, D3DZB_TRUE, false), "non-primary render target (shadow/reflection pass) -> identity");
+  CHECK(drawIs3D(true, true, D3DZB_TRUE, true, true),   "3D decl + depth on + camera + primary RT -> main camera");
+  CHECK(!drawIs3D(true, true, D3DZB_FALSE, true, true), "3D decl + depth OFF                      -> identity (post/UI window)");
+  CHECK(!drawIs3D(true, false, D3DZB_TRUE, true, true), "2D decl                                  -> identity");
+  CHECK(!drawIs3D(false, true, D3DZB_TRUE, true, true), "no verified camera yet                   -> identity");
+  CHECK(!drawIs3D(true, true, D3DZB_TRUE, false, true), "non-primary render target (shadow/reflection pass) -> identity");
+  CHECK(!drawIs3D(true, true, D3DZB_TRUE, true, false), "a viewport over part of the screen (the action menu's portrait, M133) -> as the game draws it");
 
   // --- draw-time texture remap (milestone 1g)
   CHECK(isColorFormat(D3DFMT_A8R8G8B8) && isColorFormat(D3DFMT_DXT5) && isColorFormat(D3DFMT_DXT1), "colour formats: A8R8G8B8, DXT1, DXT5");
@@ -579,9 +580,9 @@ int main() {
     CHECK(findTexcoordPromote(0x0ba6ddb9aa01913cull) && findTexcoordPromote(0x0ba6ddb9aa01913cull)->texcoordIndex == 2 && findTexcoordPromote(0x55c99586fb17cd1cull) == nullptr, "promotions: objects promote 2; the terrain paint no longer promotes");
     CHECK(findNeverCapture(0xc79615c0181b5ef1ull) && findNeverCapture(0x5a2deada1e077b44ull), "never-capture: the drop-shadow decals and the grass sprites are never sent");
     CHECK(!findNeverCapture(0xab38a73070378739ull) && findGameFake(0x11227d6d7bba5802ull), "never-capture: the Sim black overlay pass is not listed: its pixel shader 11227d6d is a game fake (milestone 131)");
-    const NeverCapture* hair = findNeverCapture(0xe12c352d135375f2ull);
-    CHECK(hair && hair->blendedOnly && neverCaptureDraw(neverCaptureMode(hair), TRUE) && !neverCaptureDraw(neverCaptureMode(hair), FALSE),
-          "never-capture (M131): the Sims' hair -- its blended soft-edge copy never sent, its alpha-tested opaque pass captured");
+    const NeverCapture* hair = findNeverCapture(0x57a5a049ffa47770ull); const NeverCapture* hair2 = findNeverCapture(0x00e85de9a42890fbull);
+    CHECK(hair && hair2 && hair->blendedOnly && hair2->blendedOnly && neverCaptureDraw(neverCaptureMode(hair), TRUE) && !neverCaptureDraw(neverCaptureMode(hair), FALSE) && !findNeverCapture(0xe12c352d135375f2ull),
+          "never-capture (M133): the Sims' hair by its pixel shaders -- the blended soft-edge copy never sent, the alpha-tested opaque pass captured; not by one Sim's vertex shader");
     CHECK(findNeverCapture(0x41a25ab37bb2622cull) == nullptr, "never-capture: the sky dome is not in the table (it is presented as the runtime's sky instead)");
     {
       // the sky dome recognised from its bytecode: a position input, and the position's z pinned to w

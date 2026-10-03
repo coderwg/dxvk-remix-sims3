@@ -22,6 +22,7 @@ void sims3NotePixelShader(Sims3Hook& h, IDirect3DPixelShader9* pShader) {
   h.psAlbedoStage = pLssPixelShader ? pLssPixelShader->sims3AlbedoStage : -1;
   h.psTintReg = pLssPixelShader ? pLssPixelShader->sims3TintReg : -1;
   h.psHash = pLssPixelShader ? pLssPixelShader->sims3Hash : 0;
+  h.psNeverCapture = sims3cam::neverCaptureMode(sims3cam::findNeverCapture(h.psHash));   // milestone 133
   h.psAuto = pLssPixelShader ? &pLssPixelShader->sims3Auto : nullptr;
   h.psMajor = pLssPixelShader ? pLssPixelShader->sims3Major : (uint8_t) 0;
 }

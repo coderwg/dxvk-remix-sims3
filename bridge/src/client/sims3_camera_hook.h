@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-131).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-133).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -354,9 +354,12 @@ inline int unshownPass(bool rtIsPrimary, unsigned rtW, unsigned rtH, DWORD colou
 }
 
 // A 3D draw of the main pass: a verified camera, a 3D position layout, depth testing on, the
-// primary render target.
-inline bool drawIs3D(bool cameraValid, bool declIs3D, DWORD zEnable, bool rtIsPrimary) {
-  return cameraValid && declIs3D && zEnable != D3DZB_FALSE && rtIsPrimary;
+// primary render target, and a viewport over the whole of it. Run 237: the action menu's portrait
+// of the active Sim is drawn after the interface into a 256x256 viewport of the screen, through a
+// camera of its own; the runtime rasterizes it over the traced picture, so it stays exactly as the
+// game draws it (milestone 133; as a world draw it got the hook's variants and textures: broken).
+inline bool drawIs3D(bool cameraValid, bool declIs3D, DWORD zEnable, bool rtIsPrimary, bool fullViewport) {
+  return cameraValid && declIs3D && zEnable != D3DZB_FALSE && rtIsPrimary && fullViewport;
 }
 
 // ---- draw-time texture remap (milestone 1g) -------------------------------------------
@@ -906,11 +909,11 @@ inline uint32_t packTint(const float* rgb) {
 }
 
 // ---- draws never to capture (milestone 2c; populated in 2f; blended-only entries in 16) ----
-// The 3D draws of the listed vertex shaders are never sent to the runtime (milestone 131; until
-// then they went out with the identity transforms, which the runtime traced at the world origin):
-// passes the ray tracer cannot represent. An entry marked blendedOnly drops only the shader's
-// alpha-blended draws and captures its opaque ones.
-struct NeverCapture { uint64_t hash; const char* name; bool blendedOnly; };
+// The 3D draws of the listed vertex shaders -- or pixel shaders (milestone 133) -- are never sent to
+// the runtime (milestone 131; until then they went out with the identity transforms, which the
+// runtime traced at the world origin): passes the ray tracer cannot represent. An entry marked
+// blendedOnly drops only the shader's alpha-blended draws and captures its opaque ones.
+struct NeverCapture { uint64_t hash; const char* name; bool blendedOnly; };   // hash: the vertex or the pixel shader's
 
 inline const NeverCapture kNeverCapture[] = {
   // from the run-15 shader dump
@@ -922,11 +925,14 @@ inline const NeverCapture kNeverCapture[] = {
   { 0x5a2deada1e077b44ull, "grass/flower detail sprites (distance-faded, wind-animated, alpha-cut)", false },
   // (The Sims' soft shadow blob, VS b7d550c6, and their black overlay pass, VS ab38a730, were listed here
   // until milestone 131: their pixel shaders are the game's own fakes now, kGameFakes.)
-  // The Sims' hair soft-edge pass (milestone 131; found in run 171, parked with the Sims until then):
-  // VS e12c352d, a skinned Sim mesh with morph targets, draws the hair twice -- alpha-tested and
-  // opaque, then the same mesh blended (SRCALPHA / INVSRCALPHA, no depth write) for its soft edges.
-  // Captured, the second copy was a see-through layer on the hair; the opaque pass is the hair.
-  { 0xe12c352d135375f2ull, "the Sims' hair soft-edge pass (the blended copy of the alpha-tested hair)", true },
+  // The Sims' hair soft-edge pass (milestones 131, 133; found in run 171): each Sim's hair is drawn
+  // twice -- alpha-tested and opaque, then the same mesh blended (SRCALPHA / INVSRCALPHA, no depth
+  // write) for its soft edges. The vertex shader differs from Sim to Sim (e12c352d, a4ca9554: the
+  // skinning and morph variants -- M131 keyed it by one of them); the PIXEL shader is the hair's.
+  // Captured, the second copy was see-through, and the runtime gives see-through surfaces no motion:
+  // it trailed behind a walking Sim, a second head (run 237). The opaque pass is the hair.
+  { 0x57a5a049ffa47770ull, "the Sims' hair soft-edge pass (pixel shader; the blended copy of the alpha-tested hair)", true },
+  { 0x00e85de9a42890fbull, "the Sims' hair soft-edge pass (pixel shader; the blended copy of the alpha-tested hair)", true },
   // The lot overlays drawn right after each lot ground patch (milestone 18c, run 109): three
   // families with NO texture at all (alpha-blended, depth write off), one draw per lot patch --
   // the game's shading / fade quads over the lot -- and their textured sibling that draws the
