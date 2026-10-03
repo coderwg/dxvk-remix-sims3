@@ -36,6 +36,7 @@ struct Sims3Hook {
   uint32_t remapSamplerDraws = 0, remapSrgbDraws = 0, remapSamplerLogged = 0;
   uint64_t remapSamplerLoggedPs[24] = {};
   uint32_t cutShaders = 0, cutLogged = 0; uint64_t cutLoggedPs[32] = {};   // pixel shaders analysed with a cut-out; their first draws logged (milestone 68)
+  uint32_t fadeShaders = 0, fadeLogged = 0; uint64_t fadeLoggedPs[16] = {};   // pixel shaders whose alpha is "fade - alpha"; their first draws logged (milestone 135)
   bool loggedMain = false, loggedOther = false, loggedDraw3D = false, loggedDraw2D = false, loggedRemap = false;
   uint32_t loggedPatches = 0;          // bit per rule index, so each patch is announced once
   int psAlbedoStage = -1;              // bound pixel shader's known diffuse stage, or -1
@@ -97,6 +98,7 @@ struct Sims3Hook {
   VsVariant vsVariants[kVsVariants] = {};         // one per (shader, coordinate, normal, c255 read); keyed by pointer AND hash (an address may be reused); variant null = could not be made
   uint32_t vsVariantCount = 0, vsVariantsFull = 0;   // ...and the draws that found the table full
   const sims3cam::VsNormalInfo* vsNormal = nullptr;   // the bound (game) vertex shader's normal facts
+  const sims3cam::VsConstantOutputs* vsConstOut = nullptr;   // ...and the constants it hands the pixel shader (milestone 135)
   uint8_t pendingPromote = 0;                     // the coordinate to promote for this draw (0 = none), decided before the variant is bound
   uint32_t normalVariantsMade = 0, normalDraws = 0, normalHiddenDraws = 0, normalLogged = 0, normalShaderLogged = 0;
   uint32_t vsConverted = 0, vsConvertFailed = 0;   // vs_2_x shaders rewritten as vs_3_0 for a NORMAL output (milestone 11b)
@@ -280,6 +282,7 @@ struct Sims3Hook {
   uint32_t lotPictureDropped = 0;   // the neighbourhood view's lot picture draws left out (milestone 63)
   uint32_t effectsLeftOut = 0;      // effect draws left out of the ray tracing (milestone 114, sims3cam::leftOutPs)
   uint32_t alphaCutDraws = 0;       // captured draws given their shader's cut-out as an alpha test (milestones 67-68)
+  uint32_t fadeTestDraws = 0;       // captured draws whose "fade - alpha" test was turned onto the alpha (milestone 135)
   // The low-detail lots' ground plates as terrain (milestone 69): per model draw (by the buffers'
   // content and the draw range) the house's and the plate's own index buffers.
   struct PlateEntry { uint64_t key = 0; IDirect3DIndexBuffer9* house = nullptr; IDirect3DIndexBuffer9* plate = nullptr; IDirect3DIndexBuffer9* glow = nullptr; IDirect3DVertexBuffer9* glowVb = nullptr; uint32_t houseMin = 0, houseNum = 0, housePrims = 0, plateMin = 0, plateNum = 0, platePrims = 0, glowMin = 0, glowNum = 0, glowPrims = 0, glowStride = 0, lastFrame = 0; bool ok = false; };

@@ -43,7 +43,7 @@ inline void sims3OnReset(Sims3Hook& h) {
   h.compositePass = 0; h.extraActive = false; h.splitDraw = false; h.ourConsts = false; h.reissue = false; h.reissueKind = 0; h.compositeSecond = false;
   for (int i = 0; i < 2; ++i) { if (h.extraRestore[i]) h.extraRestore[i]->Release(); h.extraRestore[i] = nullptr; }
   h.remapActive = false; h.maskEmu = 0; h.viewportOurs = false; h.vsSkyDome = false;
-  h.vsBound = nullptr; h.vsTabled = false; h.vsNormal = nullptr; h.pendingPromote = 0; h.vsHash = 0;
+  h.vsBound = nullptr; h.vsTabled = false; h.vsNormal = nullptr; h.vsConstOut = nullptr; h.pendingPromote = 0; h.vsHash = 0;
   h.patch = nullptr; h.vsNeverCapture = 0; h.vsCapturedUv = false;
   h.lotCopies.clear();
   h.psAuto = nullptr; h.psAlbedoStage = -1; h.psTintReg = -1; h.psHash = 0; h.psNeverCapture = 0;
@@ -448,6 +448,33 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
         snprintf(msg, sizeof msg, "Sims 3 camera hook: cut-out of PS %016llx (VS %016llx): texkill on the alpha of s%d, %.3f * alpha + %.3f -> %s %u",
                  (unsigned long long) h.psHash, (unsigned long long) h.vsHash, k, a, b,
                  func == D3DCMP_GREATEREQUAL ? "alpha test >=" : func == D3DCMP_LESSEQUAL ? "alpha test <=" : func == D3DCMP_NEVER ? "never drawn" : "nothing discarded, no test", ref);
+        Logger::info(msg);
+      }
+    }
+    // the fade (milestone 135): SpeedTree's "fade - alpha" under the game's alpha test, turned onto
+    // the alpha the runtime tests -- a texel shows where its alpha reaches the tree's fade, the first
+    // instance's, read from the constant the vertex shader hands over
+    if (k >= 0 && h.psAuto && h.psAuto->valid && h.psAuto->fadeSampler == k && rs[D3DRS_ALPHATESTENABLE] && !h.atOurs && h.vsConstOut) {
+      const int fc = h.vsConstOut->c[h.psAuto->fadeInput];
+      float v[4] = {};
+      if (fc >= 0) dev->GetVertexShaderConstantF((UINT) (fc >> 2), v, 1);
+      const float fade = fc >= 0 ? v[fc & 3] : 0.f;
+      uint32_t ref = 0; const uint32_t func = fc >= 0 ? sims3cam::fadeAlphaTest(rs[D3DRS_ALPHAFUNC], rs[D3DRS_ALPHAREF], fade, ref) : 0u;
+      if (func) {
+        dev->GetRenderState(D3DRS_ALPHATESTENABLE, &h.atSaved[0]); dev->GetRenderState(D3DRS_ALPHAFUNC, &h.atSaved[1]); dev->GetRenderState(D3DRS_ALPHAREF, &h.atSaved[2]);
+        h.atOurs = true; h.ourState = true;
+        dev->SetRenderState(D3DRS_ALPHAFUNC, func); dev->SetRenderState(D3DRS_ALPHAREF, ref);
+        h.ourState = false;
+        ++h.fadeTestDraws;
+      }
+      bool seen = false; for (uint32_t i = 0; i < h.fadeLogged; ++i) if (h.fadeLoggedPs[i] == h.psHash) seen = true;
+      if (!seen && h.fadeLogged < 16) {
+        h.fadeLoggedPs[h.fadeLogged++] = h.psHash; char msg[320];
+        const int in = h.psAuto->fadeInput, sem = in >> 2;
+        snprintf(msg, sizeof msg, "Sims 3 camera hook: fade of PS %016llx (VS %016llx): alpha = %s%d.%c - alpha(s%d); the vertex shader's c%d.%c = %.4f there; the game's test (func %u, ref %u) -> %s %u",
+                 (unsigned long long) h.psHash, (unsigned long long) h.vsHash, sem >= sims3cam::kSemColor0 ? "COLOR" : "TEXCOORD", sem >= sims3cam::kSemColor0 ? sem - sims3cam::kSemColor0 : sem, "xyzw"[in & 3], k,
+                 fc >> 2, fc >= 0 ? "xyzw"[fc & 3] : '?', fade, (unsigned) rs[D3DRS_ALPHAFUNC], (unsigned) rs[D3DRS_ALPHAREF],
+                 fc < 0 ? "no constant: left as the game's" : func == D3DCMP_GREATEREQUAL ? "alpha test >=" : func == D3DCMP_LESSEQUAL ? "alpha test <=" : func == D3DCMP_NEVER ? "never drawn" : "left as the game's", ref);
         Logger::info(msg);
       }
     }

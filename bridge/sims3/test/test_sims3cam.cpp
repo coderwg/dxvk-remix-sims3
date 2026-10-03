@@ -472,6 +472,39 @@ int main() {
     } else SKIP("ps_03d264329cbfcf64 dump not found");
   }
 
+  // --- the trees' fade (milestone 135): "fade - alpha" under the game's LESS 1, turned onto the alpha
+  {
+    uint32_t ref = 0;
+    CHECK(fadeAlphaTest(D3DCMP_LESS, 1, 0.3313726f, ref) == D3DCMP_GREATEREQUAL && ref == 84, "fade: a whole tree (0.3313726 - alpha < 1/255) keeps alpha >= 84 (ref %u)", ref);
+    CHECK(fadeAlphaTest(D3DCMP_LESS, 1, 1.f, ref) == D3DCMP_GREATEREQUAL && ref == 255, "fade: faded out (1 - alpha < 1/255) keeps alpha 255 only (ref %u)", ref);
+    CHECK(fadeAlphaTest(D3DCMP_LESS, 1, 0.f, ref) == D3DCMP_GREATEREQUAL && ref == 0, "fade: fade 0 keeps every texel (ref %u)", ref);
+    CHECK(fadeAlphaTest(D3DCMP_LESSEQUAL, 0, 0.5f, ref) == D3DCMP_GREATEREQUAL && ref == 128, "fade: 0.5 - alpha <= 0 keeps alpha >= 128 (ref %u)", ref);
+    CHECK(fadeAlphaTest(D3DCMP_GREATER, 0, 0.5f, ref) == D3DCMP_LESSEQUAL && ref == 127, "fade: 0.5 - alpha > 0 keeps alpha <= 127 (ref %u)", ref);
+    CHECK(fadeAlphaTest(D3DCMP_LESS, 0, 0.f, ref) == D3DCMP_GREATEREQUAL && ref == 1, "fade: 0 - alpha < 0 keeps alpha above 0, >= 1 (ref %u)", ref);
+    CHECK(fadeAlphaTest(D3DCMP_EQUAL, 1, 0.33f, ref) == 0u && fadeAlphaTest(D3DCMP_ALWAYS, 1, 0.33f, ref) == 0u, "fade: other comparisons left as the game's");
+    std::vector<DWORD> leafPs, branchPs, leafVs, branchVs, lodPs, objPs;
+    if (loadShader("ps_7e48acce64547cd0", leafPs) && loadShader("ps_2746661ff9d95c1d", branchPs) && loadShader("vs_799a26fa907d36d7", leafVs) && loadShader("vs_854fd850257ee36f", branchVs)) {
+      PsAnalysis a, b;
+      CHECK(analyzePixelShader(leafPs.data(), leafPs.size(), a) && a.fadeSampler == 1 && a.fadeInput == 1 * 4 + 3 && a.cutSampler == -1,
+            "fade: leaves PS 7e48acce -> alpha = TEXCOORD1.w - alpha(s1) (sampler %d, input %d)", a.fadeSampler, a.fadeInput);
+      CHECK(analyzePixelShader(branchPs.data(), branchPs.size(), b) && b.fadeSampler == 1 && b.fadeInput == kSemColor0 * 4 + 3 && b.cutSampler == -1,
+            "fade: branches PS 2746661f -> alpha = COLOR0.w - alpha(s1) (sampler %d, input %d)", b.fadeSampler, b.fadeInput);
+      VsConstantOutputs lv, bv;
+      CHECK(analyzeVertexConstantOutputs(leafVs.data(), leafVs.size(), lv) && lv.c[1 * 4 + 3] == 2 * 4 + 1 && lv.c[1 * 4 + 2] == -1,
+            "fade: leaves VS 799a26fa hands c2.y (the first instance's fade) over in TEXCOORD1.w (c%d), its z computed", lv.c[7]);
+      CHECK(analyzeVertexConstantOutputs(branchVs.data(), branchVs.size(), bv) && bv.c[kSemColor0 * 4 + 3] == 2 * 4 + 1,
+            "fade: branches VS 854fd850 hands c2.y over in COLOR0.w (c%d)", bv.c[kSemColor0 * 4 + 3]);
+    } else SKIP("SpeedTree shader dumps (ps_7e48acce / ps_2746661f / vs_799a26fa / vs_854fd850) not found");
+    if (loadShader("ps_714d5dae31da4378", lodPs)) {
+      PsAnalysis a;
+      CHECK(analyzePixelShader(lodPs.data(), lodPs.size(), a) && a.fadeSampler == -1 && a.cutSampler == -1, "fade: the LOD fade's blended PS 714d5dae (alpha = TEXCOORD3.x, texkill on alpha + an interpolant) has neither");
+    } else SKIP("ps_714d5dae31da4378 dump not found");
+    if (loadShader("ps_00230c49e1b880b6", objPs)) {
+      PsAnalysis a;
+      CHECK(analyzePixelShader(objPs.data(), objPs.size(), a) && a.fadeSampler == -1 && a.cutSampler == 6, "fade: object PS 00230c49 keeps its cut-out and has no fade");
+    } else SKIP("ps_00230c49e1b880b6 dump not found");
+  }
+
   // --- the world normal from the vertex shader (milestone 11), on the in-game shader dumps
   {
     std::vector<DWORD> obj, sim, wallsB3, roof, floors, psObj;

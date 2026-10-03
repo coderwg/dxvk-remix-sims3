@@ -2922,6 +2922,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreateVertexShader(CONST DWORD* pFunc
     }
     // where the world-space normal leaves the shader (milestone 11), from the original bytecode
     sims3cam::analyzeVertexNormal(pFunction, sims3Count, pLssVertexShader->sims3Normal);
+    // the constants it hands the pixel shader unchanged (milestone 135: the trees' fade)
+    sims3cam::analyzeVertexConstantOutputs(pFunction, sims3Count, pLssVertexShader->sims3ConstOut);
     if (pLssVertexShader->sims3Normal.hasNormalInput && g_sims3.normalShaderLogged < 80) {
       ++g_sims3.normalShaderLogged;
       const sims3cam::VsNormalInfo& ni = pLssVertexShader->sims3Normal;
@@ -3417,6 +3419,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreatePixelShader(CONST DWORD* pFunct
     // coordinate for tabled ones drawn with an untabled vertex shader, the wall opening mask
     sims3cam::analyzePixelShader(pFunction, count, pLssPixelShader->sims3Auto);
     if (pLssPixelShader->sims3Auto.cutSampler >= 0) ++g_sims3.cutShaders;
+    if (pLssPixelShader->sims3Auto.fadeSampler >= 0) ++g_sims3.fadeShaders;
   }
 
   uint32_t dataSize = 0;

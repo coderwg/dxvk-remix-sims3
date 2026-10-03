@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-134).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-135).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -821,6 +821,46 @@ inline bool appendConstantRead(std::vector<DWORD>& t, uint32_t reg) {
   const DWORD ins[3] = { 0x02000001u, 0x800F0000u, 0xA0E40000u | reg };   // MOV r0.xyzw, c<reg>.xyzw
   t.insert(t.begin() + (end - 1), ins, ins + 3);
   return true;
+}
+
+// ---- the constants a vertex shader hands its pixel shader unchanged (milestone 135) ---------
+// Per interpolated component (semantic * 4 + component: TEXCOORD0-15 0-63, COLOR0-1 64-71), the
+// float constant the vertex shader copies into it with a plain MOV, register * 4 + component, or
+// -1. A relatively addressed copy (c2[a0.w].y: shader instancing, three registers per instance)
+// names its base register -- the first instance's. SpeedTree hands each tree's fade over this way.
+inline constexpr int kSemColor0 = 16;
+struct VsConstantOutputs { int16_t c[72]; VsConstantOutputs() { for (int16_t& v : c) v = -1; } };
+
+inline bool analyzeVertexConstantOutputs(const DWORD* tokens, size_t count, VsConstantOutputs& out) {
+  out = VsConstantOutputs();
+  if (!dxsoIsVertexShader(tokens, count, 2)) return false;
+  const bool vs3 = dxsoIsVertexShader(tokens, count, 3);
+  const uint32_t kAttrOut = 5u;                                         // vs_2_x oD#
+  int8_t sem[16];
+  for (int i = 0; i < 16; ++i) sem[i] = vs3 ? (int8_t) -1 : (int8_t) i;  // vs_2_x: oT# is TEXCOORD#
+  bool flow = false;
+  dxsoForEach(tokens, count, [&](size_t pos, uint32_t op, uint32_t len) {
+    if (op == kDxsoOpDcl) {
+      uint32_t usage, idx, reg;
+      if (vs3 && dxsoDcl(tokens, pos, len, kDxsoRegOutput, usage, idx, reg) && reg < 16)
+        sem[reg] = usage == kUsageTexcoord ? (int8_t) idx : (usage == kUsageColor && idx < 2) ? (int8_t) (kSemColor0 + idx) : (int8_t) -1;
+      return true;
+    }
+    if (dxsoIsDef(op) || len < 1) return true;
+    if ((op >= 0x19u && op <= 0x1Eu) || (op >= 0x26u && op <= 0x2Du) || op == 0x60u) { flow = true; return false; }   // call / loop / rep / if: not followed
+    const uint32_t dest = tokens[pos + 1], ty = dxsoRegType(dest), n = dxsoRegNum(dest), mask = (dest >> 16) & 0xFu;
+    int s = -1;
+    if (ty == kDxsoRegOutput && n < 16) s = sem[n];
+    else if (!vs3 && ty == kAttrOut && n < 2) s = kSemColor0 + (int) n;
+    if (s < 0) return true;
+    const uint32_t src = len >= 2 ? tokens[pos + 2] : 0u;
+    const bool copy = op == 0x01u && len >= 2 && dxsoRegType(src) == 2u && ((src >> 24) & 0xFu) == 0u && ((dest >> 20) & 0xFu) == 0u;   // MOV o, c: no source or result modifier
+    for (uint32_t c = 0; c < 4; ++c) if (mask & (1u << c))
+      out.c[s * 4 + c] = copy ? (int16_t) (dxsoRegNum(src) * 4 + ((src >> (16 + 2 * c)) & 3u)) : (int16_t) -1;
+    return true;
+  });
+  if (flow) out = VsConstantOutputs();
+  return !flow;
 }
 
 // ---- per-pixel-shader albedo stage (milestone 2c) -----------------------------------------
@@ -1727,6 +1767,13 @@ struct PsAnalysis {
   // not of that form (a mask, a vertex value, two textures, a comparison, flow control).
   int8_t cutSampler = -1;
   CutPoly cutA, cutB;
+  // The fade (milestone 135): the alpha output is an interpolated component minus one 2D sampler's
+  // alpha -- SpeedTree's leaves and branches, "fade - alpha" under the game's alpha test LESS 1/255:
+  // a texel shows where its alpha reaches the tree's fade. The runtime tests the texture's own
+  // alpha, so the test is turned around at draw time (fadeAlphaTest) with the fade the vertex
+  // shader hands over (VsConstantOutputs). fadeSampler: that sampler, or -1; fadeInput: the
+  // interpolated component, semantic * 4 + component as in VsConstantOutputs.
+  int8_t fadeSampler = -1, fadeInput = -1;
   bool valid = false;
 };
 
@@ -1741,6 +1788,7 @@ inline bool analyzePixelShader(const DWORD* tokens, size_t count, PsAnalysis& ou
   const unsigned major = (version >> 8) & 0xFFu;
   if (major < 2) return false;                                        // ps_1_x has no dcl/texld of this shape
   int8_t inputTexcoord[32]; for (int i = 0; i < 32; ++i) inputTexcoord[i] = -1;
+  int8_t inputColor[32]; for (int i = 0; i < 32; ++i) inputColor[i] = (major < 3 && i < 2) ? (int8_t) i : (int8_t) -1;   // ps_2_x: v# is COLOR#
   uint64_t tempTaint[32][4] = {}, colorTaint[4][4] = {};
   const uint32_t kTemp = 0u, kInput = 1u, kTexture = 3u, kColorOut = 8u, kSampler = 10u;
   auto bit = [](uint32_t sampler, uint32_t channel) -> uint64_t { return 1ull << (sampler * 4 + channel); };
@@ -1761,9 +1809,10 @@ inline bool analyzePixelShader(const DWORD* tokens, size_t count, PsAnalysis& ou
     for (uint32_t c = 0; c < n; ++c) all |= tempTaint[dxsoRegNum(tok)][(tok >> (16 + 2 * c)) & 3u];
     return all;
   };
-  // the cut-out (milestone 68): per temp component, a * alpha(sampler) + b, or unknown
-  struct Form { bool known = false; int8_t s = -1; CutPoly a, b; };
-  Form form[32][4];
+  // the cut-out (milestone 68): per temp component, a * alpha(sampler) + b, or unknown; b may also
+  // add one interpolated component, in (semantic * 4 + component; the fade, milestone 135)
+  struct Form { bool known = false; int8_t s = -1, in = -1; CutPoly a, b; };
+  Form form[32][4], alphaOut;
   float defv[256][4] = {}; bool defd[256] = {};
   int kills = 0; bool killOk = false, flow = false; Form killed;
   auto srcForm = [&](uint32_t tok, uint32_t comp) -> Form {
@@ -1772,21 +1821,26 @@ inline bool analyzePixelShader(const DWORD* tokens, size_t count, PsAnalysis& ou
     if ((mod != 0u && mod != 1u) || (tok & (1u << 13))) return f;   // plain or negated, no relative addressing
     const uint32_t ty = dxsoRegType(tok), n = dxsoRegNum(tok), sc = (tok >> (16 + 2 * comp)) & 3u;
     if (ty == kTemp && n < 32) f = form[n][sc];
-    else if (ty == 2u && n < 256) {                                      // a float constant: a literal (DEF) or read at draw time
+    else if ((ty == kInput || ty == kTexture) && n < 32) {              // an interpolated component, added as it is
+      const int sem = (ty == kTexture || major >= 3) && inputTexcoord[n] >= 0 ? inputTexcoord[n] : (ty == kInput && inputColor[n] >= 0) ? kSemColor0 + inputColor[n] : -1;
+      if (sem < 0 || mod != 0u) return f;
+      f.known = true; f.in = (int8_t) (sem * 4 + (int) sc);
+      return f;
+    } else if (ty == 2u && n < 256) {                                      // a float constant: a literal (DEF) or read at draw time
       f.known = true; f.b.n = 1;
       if (defd[n]) f.b.t[0].k = defv[n][sc]; else { f.b.t[0].k = 1.f; f.b.t[0].c = (int16_t) (n * 4 + sc); }
     } else return f;
-    if (f.known && mod == 1u) { f.a.negate(); f.b.negate(); }
+    if (f.known && mod == 1u) { if (f.in >= 0) return Form(); f.a.negate(); f.b.negate(); }
     return f;
   };
   auto addForm = [](const Form& x, const Form& y) -> Form {
-    if (!x.known || !y.known || (x.s >= 0 && y.s >= 0 && x.s != y.s)) return Form();
-    Form r = x; r.s = x.s >= 0 ? x.s : y.s;
+    if (!x.known || !y.known || (x.s >= 0 && y.s >= 0 && x.s != y.s) || (x.in >= 0 && y.in >= 0)) return Form();
+    Form r = x; r.s = x.s >= 0 ? x.s : y.s; r.in = x.in >= 0 ? x.in : y.in;
     if (!r.a.add(y.a) || !r.b.add(y.b)) return Form();
     return r;
   };
   auto mulForm = [](const Form& x, const Form& y) -> Form {
-    if (!x.known || !y.known || (x.s >= 0 && y.s >= 0)) return Form();
+    if (!x.known || !y.known || (x.s >= 0 && y.s >= 0) || x.in >= 0 || y.in >= 0) return Form();
     const Form& v = x.s >= 0 ? x : y; const Form& kf = x.s >= 0 ? y : x;   // kf: a constant
     if (kf.b.n != 1) return Form();
     const CutTerm kt = kf.b.t[0];
@@ -1804,6 +1858,7 @@ inline bool analyzePixelShader(const DWORD* tokens, size_t count, PsAnalysis& ou
       const uint32_t type = dxsoRegType(dest), n = dxsoRegNum(dest);
       if (type == kSampler && n < 16) out.samplers[n].cube = ((usage >> 27) & 0xFu) == 3u;   // texture type: 2 = 2D, 3 = cube, 4 = volume
       else if (type == kInput && n < 32 && major >= 3 && (usage & 0x1Fu) == kUsageTexcoord) { inputTexcoord[n] = (int8_t) ((usage >> 16) & 0xFu); out.inputTexcoords |= (uint16_t) (1u << ((usage >> 16) & 0xFu)); }
+      else if (type == kInput && n < 32 && major >= 3 && (usage & 0x1Fu) == kUsageColor && ((usage >> 16) & 0xFu) < 2u) inputColor[n] = (int8_t) ((usage >> 16) & 0xFu);
       else if (type == kTexture && n < 32 && major < 3) { inputTexcoord[n] = (int8_t) n; if (n < 16) out.inputTexcoords |= (uint16_t) (1u << n); }
       return true;
     }
@@ -1842,7 +1897,7 @@ inline bool analyzePixelShader(const DWORD* tokens, size_t count, PsAnalysis& ou
         for (uint32_t c = 0; c < 4 && same; ++c) {
           if (!(mask & (1u << c))) continue;
           const Form& f = form[dn][c];
-          if (!f.known || f.s < 0) same = false;
+          if (!f.known || f.s < 0 || f.in >= 0) same = false;
           else if (!f0.known) f0 = f;
           else if (f.s != f0.s || !f.a.same(f0.a) || !f.b.same(f0.b)) same = false;
         }
@@ -1850,8 +1905,9 @@ inline bool analyzePixelShader(const DWORD* tokens, size_t count, PsAnalysis& ou
       }
       return true;
     }
-    // the cut-out's forms of the components this instruction writes (unknown unless plain arithmetic)
-    if (dtype == kTemp && dn < 32) {
+    // the cut-out's forms of the components this instruction writes (unknown unless plain arithmetic),
+    // and the alpha output's (the fade)
+    if ((dtype == kTemp && dn < 32) || (dtype == kColorOut && dn == 0)) {
       Form nf[4];
       const bool sat = ((dest >> 20) & 1u) != 0u, predicated = (tokens[pos] & (1u << 28)) != 0u;
       for (uint32_t c = 0; c < 4 && !sat && !predicated; ++c) {
@@ -1865,11 +1921,12 @@ inline bool analyzePixelShader(const DWORD* tokens, size_t count, PsAnalysis& ou
         }
         else if (op == 0x01u && len >= 2) nf[c] = srcForm(tokens[pos + 2], c);
         else if (op == 0x02u && len >= 3) nf[c] = addForm(srcForm(tokens[pos + 2], c), srcForm(tokens[pos + 3], c));
-        else if (op == 0x03u && len >= 3) { Form y = srcForm(tokens[pos + 3], c); if (y.known) { y.a.negate(); y.b.negate(); } nf[c] = addForm(srcForm(tokens[pos + 2], c), y); }
+        else if (op == 0x03u && len >= 3) { Form y = srcForm(tokens[pos + 3], c); if (y.in >= 0) y = Form(); if (y.known) { y.a.negate(); y.b.negate(); } nf[c] = addForm(srcForm(tokens[pos + 2], c), y); }
         else if (op == 0x05u && len >= 3) nf[c] = mulForm(srcForm(tokens[pos + 2], c), srcForm(tokens[pos + 3], c));
         else if (op == 0x04u && len >= 4) nf[c] = addForm(mulForm(srcForm(tokens[pos + 2], c), srcForm(tokens[pos + 3], c)), srcForm(tokens[pos + 4], c));
       }
-      for (uint32_t c = 0; c < 4; ++c) if (mask & (1u << c)) form[dn][c] = nf[c];
+      if (dtype == kTemp) { for (uint32_t c = 0; c < 4; ++c) if (mask & (1u << c)) form[dn][c] = nf[c]; }
+      else if (mask & 8u) alphaOut = nf[3];
     }
     uint64_t taint[4] = {};
     if (op == 0x42u && len >= 3) {                                     // TEXLD dest, coord, sampler
@@ -1918,6 +1975,9 @@ inline bool analyzePixelShader(const DWORD* tokens, size_t count, PsAnalysis& ou
   }
   if (out.maskSampler >= 0 && !out.maskKill && (colorTaint[0][3] & bit((uint32_t) out.maskSampler, 0))) out.maskAlpha = true;
   if (kills == 1 && killOk && killed.s >= 0 && killed.s < 16 && !out.samplers[killed.s].cube) { out.cutSampler = killed.s; out.cutA = killed.a; out.cutB = killed.b; }
+  // the fade (milestone 135): oC0.w = an interpolated component - alpha(s), nothing else
+  if (!flow && alphaOut.known && alphaOut.s >= 0 && alphaOut.s < 16 && !out.samplers[alphaOut.s].cube && alphaOut.in >= 0
+      && alphaOut.a.n == 1 && alphaOut.a.t[0].c < 0 && alphaOut.a.t[0].k == -1.f && alphaOut.b.n == 0) { out.fadeSampler = alphaOut.s; out.fadeInput = alphaOut.in; }
   out.valid = true;
   return true;
 }
@@ -1945,6 +2005,28 @@ inline uint32_t cutAlphaTest(float a, float b, uint32_t& ref) {
   if (t >= 1.f) return 0u;
   if (t < 0.f) return (uint32_t) D3DCMP_NEVER;
   const float r = std::floor(t * 255.f + 1e-3f); ref = r <= 0.f ? 0u : r >= 255.f ? 255u : (uint32_t) r;
+  return (uint32_t) D3DCMP_LESSEQUAL;
+}
+
+// The game's alpha test on "fade - alpha" turned onto the alpha itself (milestone 135; alpha in steps
+// of 1/255): fade - alpha OP ref/255 <=> alpha OP' 255 * fade - ref, the comparison mirrored.
+// D3DCMP_GREATEREQUAL or D3DCMP_LESSEQUAL with outRef, D3DCMP_NEVER when no texel passes, 0 when
+// the game's comparison is not one of the four ordered ones (its test is left as it is).
+inline uint32_t fadeAlphaTest(uint32_t func, uint32_t ref, float fade, uint32_t& outRef) {
+  outRef = 0;
+  const bool above = func == D3DCMP_LESS || func == D3DCMP_LESSEQUAL;          // fade - alpha below ref: alpha above
+  if (!above && func != D3DCMP_GREATER && func != D3DCMP_GREATEREQUAL) return 0u;
+  const bool strict = func == D3DCMP_LESS || func == D3DCMP_GREATER;
+  const float t = 255.f * fade - (float) ref;
+  if (above) {                                                                  // alpha > t, or alpha >= t
+    const float r = strict ? std::floor(t + 1e-3f) + 1.f : std::ceil(t - 1e-3f);
+    if (r > 255.f) return (uint32_t) D3DCMP_NEVER;
+    outRef = r <= 0.f ? 0u : (uint32_t) r;
+    return (uint32_t) D3DCMP_GREATEREQUAL;
+  }
+  const float r = strict ? std::ceil(t - 1e-3f) - 1.f : std::floor(t + 1e-3f);  // alpha < t, or alpha <= t
+  if (r < 0.f) return (uint32_t) D3DCMP_NEVER;
+  outRef = r >= 255.f ? 255u : (uint32_t) r;
   return (uint32_t) D3DCMP_LESSEQUAL;
 }
 
