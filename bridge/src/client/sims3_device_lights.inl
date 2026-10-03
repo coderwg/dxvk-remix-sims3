@@ -22,19 +22,16 @@ static void sims3LampScan() {
   // own allocator need not hand out plain private read-write pages)
   const uint8_t* a = (const uint8_t*) 0x10000; const uint8_t* found = nullptr;
   MEMORY_BASIC_INFORMATION mbi;
-  uint32_t regions = 0; uint64_t bytes = 0;
   while (!found && VirtualQuery(a, &mbi, sizeof mbi) == sizeof mbi) {
     const DWORD prot = mbi.Protect & 0xFF;
     const bool writable = prot == PAGE_READWRITE || prot == PAGE_EXECUTE_READWRITE || prot == PAGE_WRITECOPY || prot == PAGE_EXECUTE_WRITECOPY;
     if (mbi.State == MEM_COMMIT && writable && !(mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS))) {
-      ++regions; bytes += mbi.RegionSize;
       found = sims3LampScanRegion((const uint8_t*) mbi.BaseAddress, mbi.RegionSize);
     }
     const uint8_t* next = (const uint8_t*) mbi.BaseAddress + mbi.RegionSize;
     if (next <= a) break;
     a = next;
   }
-  g_sims3LampScanRegions = regions; g_sims3LampScanMegabytes = (uint32_t) (bytes >> 20);
   if (found) g_sims3LampBlock = found;
   ++g_sims3LampScans;
   g_sims3LampScanBusy = false;
@@ -223,7 +220,7 @@ static void sims3PresentLamps(Sims3Hook& h) {
     sims3cam::LampHead head = {};
     const int r = sims3LampRead(block, h.lampRecordsNext.data(), h.lampIntsNext.data(), head);
     if (r == 0) { h.lampRecords.swap(h.lampRecordsNext); h.lampInts.swap(h.lampIntsNext); h.lampReported = head.lamps; h.lampReportWorld = head.world; ++h.lampReportReads; h.lampReportFails = 0; }
-    else if (r == 1) ++h.lampReportStale;   // being written: the last whole reading stands
+    // r == 1: being written; the last whole reading stands
     else if (++h.lampReportFails > 300u) { g_sims3LampBlock = nullptr; h.lampReported = 0; h.lampReportWorld = false; h.lampReportFails = 0; Logger::info("Sims 3 camera hook: the lamp reporter's block is gone (or is an older version's); searching again"); }
     h.lampReportLive = h.lampReportReads > 0 && h.lampReportWorld;
     if (h.lampReportLive && !h.lampReportAnnounced) {
@@ -333,25 +330,16 @@ static void sims3PresentLamps(Sims3Hook& h) {
         L->tube = def.type == 6 ? def.d[0] : 0.f;
         const sims3cam::LampWord w = sims3cam::lampWordFromRecord(rec, def.col, def.intensity, frame[5]);
         for (int q = 0; q < 3; ++q) L->col[q] = def.type == 11 ? w.col[q] * worldFade : w.col[q];   // a world light, by the game's night switch
-        if ((fresh && h.lampWordsLogged < 600u) || (mark && marked < 60u)) {
-          if (fresh) ++h.lampWordsLogged;
-          if (mark) ++marked;
+        if (mark && marked < 60u) {
+          ++marked;
           char msg[420];
-          snprintf(msg, sizeof msg, "Sims 3 camera hook: lamp %s, frame %u: object %016llx (model %016llx) at (%.2f, %.2f, %.2f), light %u of %u, type %u, at (%.2f, %.2f, %.2f), travelling (%.2f, %.2f, %.2f); colour preset %d (%.2f, %.2f, %.2f), level x%.2f (intensity %.2f, dimmer %.2f), floor %d; sent colour %.2f, %.2f, %.2f",
-                   fresh ? "LIT" : "at the mark", h.frames, (unsigned long long) object, (unsigned long long) pick.m->inst, rec[0], rec[1], rec[2], (unsigned) li + 1u, (unsigned) pick.m->n, (unsigned) def.type,
+          snprintf(msg, sizeof msg, "Sims 3 camera hook: lamp at the mark, frame %u: object %016llx (model %016llx) at (%.2f, %.2f, %.2f), light %u of %u, type %u, at (%.2f, %.2f, %.2f), travelling (%.2f, %.2f, %.2f); colour preset %d (%.2f, %.2f, %.2f), level x%.2f (intensity %.2f, dimmer %.2f), floor %d; sent colour %.2f, %.2f, %.2f",
+                   h.frames, (unsigned long long) object, (unsigned long long) pick.m->inst, rec[0], rec[1], rec[2], (unsigned) li + 1u, (unsigned) pick.m->n, (unsigned) def.type,
                    L->pos[0], L->pos[1], L->pos[2], L->dir[0], L->dir[1], L->dir[2], (int) (rec[9] + 0.5f), rec[3], rec[4], rec[5], w.level, rec[6], rec[7], (int) rec[11], w.col[0], w.col[1], w.col[2]);
           Logger::info(msg);
         }
       }
     }
-  }
-  for (uint32_t k = 0; k < h.lamps.n; ++k) {   // the lights no longer named: put out
-    const sims3cam::Lamp& L = h.lamps.lamps[k];
-    if (L.seen || h.lampWordsLogged >= 600u) continue;
-    ++h.lampWordsLogged;
-    char msg[200];
-    snprintf(msg, sizeof msg, "Sims 3 camera hook: lamp put out, frame %u: object %016llx, light %u, at (%.2f, %.2f, %.2f)", h.frames, (unsigned long long) L.object, (unsigned) L.light + 1u, L.pos[0], L.pos[1], L.pos[2]);
-    Logger::info(msg);
   }
   h.lamps.end();
   if (mark) {
@@ -372,14 +360,6 @@ static void sims3PresentLamps(Sims3Hook& h) {
       h.apiLightCalls += sims3ApiLamp(L);
       for (int q = 0; q < 3; ++q) { L.sentPos[q] = L.pos[q]; L.sentCol[q] = L.col[q]; L.sentDir[q] = L.dir[q]; }
       L.sent = true; ++h.lampEvents;
-      if (L.kind < 32 && !(h.loggedShapes & (1u << L.kind))) {   // the first light of each kind, with its shape (milestone 32)
-        h.loggedShapes |= 1u << L.kind;
-        char msg[360];
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: first light of kind %u (3 sphere, 4 cone, 5 two cones and a shade, 6 cylinder) forwarded at (%.1f, %.1f, %.1f): its light travels (%.2f, %.2f, %.2f), cone %.0f degrees from the axis, opposite cone %.0f, shade light %.2f,%.2f,%.2f, tube %.2f; cone scale %.2f; API lights: main %s, opposite %s, shade %s",
-                 (unsigned) L.kind, L.pos[0], L.pos[1], L.pos[2], L.dir[0], L.dir[1], L.dir[2], L.angle, L.bottom, L.shade[0], L.shade[1], L.shade[2], L.tube,
-                 sims3cam::lampConeScale(), L.api ? "yes" : "no", L.api2 ? "yes" : "no", L.api3 ? "yes" : "no");
-        Logger::info(msg);
-      }
     }
     if (L.api) remixapi::remixapi_DrawLightInstance((remixapi_LightHandle) L.api);   // every frame the lamp is on
     if (L.api2) remixapi::remixapi_DrawLightInstance((remixapi_LightHandle) L.api2);
@@ -438,21 +418,6 @@ void sims3PresentSky(Sims3Hook& h) {
       sent = h.sky.shown[b]; set = true;
       ++h.sunChanges;
     }
-    // the trace: every step of a tenth in the sky's light (or 0.02 near the dark), of five degrees, the afterglow's beginning and end, and every two seconds through the dawn's ease
-    const float lum = h.sky.level();
-    const sims3cam::Sun& lead = h.sky.shown[h.sky.body];
-    const bool moved = h.sunLogLum < 0.f || std::fabs(lum - h.sunLogLum) > (h.sunLogLum > 0.2f ? 0.1f * h.sunLogLum : 0.02f) || sims3cam::dot3(lead.dir, h.sunLogDir) < 0.996f || what != 0 || (ease < 1.f && h.frames - h.sunLogFrame >= 120u);
-    if (moved && h.sunLogged < 500) {
-      ++h.sunLogged; h.sunLogLum = lum; h.sunLogFrame = h.frames; for (int q = 0; q < 3; ++q) h.sunLogDir[q] = lead.dir[q];
-      const sims3cam::Sun& s0 = h.sky.shown[0]; const sims3cam::Sun& s1 = h.sky.shown[1];
-      char msg[700];
-      snprintf(msg, sizeof msg, "Sims 3 camera hook: sky at frame %u, clock %.2f h%s: the game's light is the %s's, colour %.3f, %.3f, %.3f (luminance %.3f), the dawn's ease x%.2f; SUN %s colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f; MOON %s colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f; the light of the sky %.3f, the afterglow x%.2f",
-               h.frames, h.clock.known ? h.clock.hour : -1.f, !h.clock.known ? " (unknown)" : (h.clock.night ? " night" : " day"), kBody[h.sky.body], game.col[0], game.col[1], game.col[2], sims3cam::luminance(game.col), ease,
-               !h.sky.showing[0] ? "none," : (h.sky.glowing ? "its afterglow," : "as the game's,"), h.sky.showing[0] ? s0.col[0] : 0.f, h.sky.showing[0] ? s0.col[1] : 0.f, h.sky.showing[0] ? s0.col[2] : 0.f, s0.dir[0], s0.dir[1], s0.dir[2],
-               !h.sky.showing[1] ? "none," : (h.sky.body == 0 ? "kept past sunrise," : "the game's by its share, at least its floor,"), h.sky.showing[1] ? s1.col[0] : 0.f, h.sky.showing[1] ? s1.col[1] : 0.f, h.sky.showing[1] ? s1.col[2] : 0.f, s1.dir[0], s1.dir[1], s1.dir[2],
-               lum, h.sky.glowFade);
-      Logger::info(msg);
-    }
   }
   if (h.sunApi && h.sunSet && h.sky.showing[0] && sims3cam::luminance(h.sun.col) > 0.001f) remixapi::remixapi_DrawLightInstance((remixapi_LightHandle) h.sunApi);   // every frame it gives light (milestone 20b)
   if (h.moonApi && h.moonSet && h.sky.showing[1] && sims3cam::luminance(h.moon.col) > 0.001f) remixapi::remixapi_DrawLightInstance((remixapi_LightHandle) h.moonApi);
@@ -482,26 +447,9 @@ void sims3PresentSky(Sims3Hook& h) {
         snprintf(val, sizeof val, "%.6f", scale);
         remixapi::remixapi_SetConfigVariable("rtx.fogColorScale", val);
         h.fogScaleNow = scale; h.fogScaleFrame = h.frames; ++h.fogScaleSends;
-        const bool step = h.fogScaleLogged < 0.f || std::fabs(scale - h.fogScaleLogged) > 0.2f * h.fogScaleLogged;
-        if (step && h.fogScaleLines < 200u) {
-          h.fogScaleLogged = scale; ++h.fogScaleLines;
-          char msg[300];
-          snprintf(msg, sizeof msg, "Sims 3 camera hook: fog brightness %.6f sent at frame %u (the fog colour's brightest channel %.4f x the light sent over the game's %.3f x fogColourScale %.2f; clock %.2f h)",
-                   scale, h.frames, h.fogBright, h.fogShare, sims3cam::fogColourScale(), h.clock.known ? h.clock.hour : -1.f);
-          Logger::info(msg);
-        }
       }
       h.fogReady = sentBefore;
-      int moved = 0;
-      for (int k = 0; k < 3; ++k) {
-        const int a = (int) ((h.fogColour >> (8 * k)) & 0xFFu), b = (int) ((h.fogLoggedColour >> (8 * k)) & 0xFFu);
-        if ((a > b ? a - b : b - a) > moved) moved = a > b ? a - b : b - a;
-      }
-      // a line when the hue moves 8 of 255 (run 167: at 2 the dawn's drift used up the cap by 5.7 h), the
-      // end a fifth or the curve a quarter (the zoom moves both), and at every mark whatever the cap
-      const bool step = h.fogLoggedEnd < 0.f || moved > 8 || std::fabs(h.fogEnd - h.fogLoggedEnd) > 0.2f * h.fogLoggedEnd || std::fabs(h.fogCurve - h.fogLoggedCurve) > 0.25f;
-      if ((step && h.fogLogged < 200u) || h.markFrame) {
-        h.fogLoggedColour = h.fogColour; h.fogLoggedEnd = h.fogEnd; h.fogLoggedCurve = h.fogCurve; ++h.fogLogged;
+      if (h.markFrame) {   // the game's fog at the mark
         char msg[340];
         snprintf(msg, sizeof msg, "Sims 3 camera hook: the game's fog at frame %u, clock %.2f h: colour %.3f %.3f %.3f, from %.0f to %.0f (curve %.2f) -> the runtime's fog colour %u %u %u of 255 (linear hue), from %.0f to %.0f",
                  h.frames, h.clock.known ? h.clock.hour : -1.f, c2[0], c2[1], c2[2], (1.f - c4[1]) / c4[0], -c4[1] / c4[0], c4[3],

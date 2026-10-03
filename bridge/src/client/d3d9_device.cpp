@@ -2469,15 +2469,6 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
     const bool bZero = h.rsSet[D3DRS_ALPHABLENDENABLE] && rs[D3DRS_ALPHABLENDENABLE] && h.rsSet[D3DRS_SRCBLEND] && h.rsSet[D3DRS_DESTBLEND] && rs[D3DRS_SRCBLEND] == D3DBLEND_ZERO && rs[D3DRS_DESTBLEND] == D3DBLEND_ONE;
     if (cwOff || zNever || aNever || bZero) {
       ++h.invisibleDrawsSkipped;
-      if (h.invisibleLogged < 6) {
-        ++h.invisibleLogged;
-        char msg[300];
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: invisible draw skipped at frame %u -> VS %016llx PS %016llx: colour writes %lu, zfunc %lu, alpha test %lu/%lu, blend %lu %lu/%lu, %u primitives",
-                 h.frames + 1, (unsigned long long) h.vsHash, (unsigned long long) h.psHash,
-                 (unsigned long) rs[D3DRS_COLORWRITEENABLE], (unsigned long) rs[D3DRS_ZFUNC], (unsigned long) rs[D3DRS_ALPHATESTENABLE], (unsigned long) rs[D3DRS_ALPHAFUNC],
-                 (unsigned long) rs[D3DRS_ALPHABLENDENABLE], (unsigned long) rs[D3DRS_SRCBLEND], (unsigned long) rs[D3DRS_DESTBLEND], (unsigned) primCount);
-        Logger::info(msg);
-      }
       SIMS3_END_DRAW();
       return D3D_OK;
     }
@@ -2522,11 +2513,6 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
       for (uint32_t s_ = 1; s_ < caps::MaxStreams; ++s_) if (instStreams_ & (1u << s_)) { SetStreamSource(s_, vb_[s_], off_[s_], stride_[s_]); vb_[s_]->Release(); }
       SetStreamSourceFreq(0, freq0_);
       ++g_sims3.deinstancedDraws; g_sims3.deinstancedInstances += instances_;
-      if (g_sims3.deinstanceLogged < 8) {
-        ++g_sims3.deinstanceLogged; char msg[224];
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: instanced draw split at frame %u -> %u instances, %u primitives each, instance streams %x, VS %016llx PS %016llx", g_sims3.frames + 1, instances_, (unsigned) primCount, instStreams_, (unsigned long long) g_sims3.vsHash, (unsigned long long) g_sims3.psHash);
-        Logger::info(msg);
-      }
     } else {
       // The Sims 3 camera hook: a captured wall draw gets its window and door openings cut into
       // the geometry (milestone 13, sims3_walls.h). The pixel shader's mask test is evaluated on
@@ -2594,12 +2580,6 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
           sims3cam::WallCutStats st; bool built = false;
           Sims3Hook::WallEntry* e = sims3WallEntry(h, this, key, in, st, built);
           ++h.wallDraws;
-          if (built && st.hidden && h.wallHiddenLogged < 8) {
-            ++h.wallHiddenLogged; char m[320];
-            snprintf(m, sizeof m, "Sims 3 camera hook: wall draw with hidden vertices at frame %u -> VS %016llx PS %016llx: %u of %u triangles dropped (%u with mixed corners, %u hidden corners), %u cut, %u removed; cK = (%.2f, %.2f, %.2f)",
-                     h.frames + 1, (unsigned long long) h.vsHash, (unsigned long long) h.psHash, st.hidden, (unsigned) primCount, st.hiddenMixed, st.hiddenCorners, st.cut, st.removed, ck[0], ck[1], ck[2]);
-            Logger::info(m);
-          }
           if (!e || !e->changed) return false;
           ++h.wallCutDraws;
           // the game's buffers are held by a reference of the hook's own while its own are bound
@@ -2615,12 +2595,6 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
           }
           SetStreamSource(0, gvb0, off0, st0); SetStreamSource(1, gvb1, off1, st1); SetIndices(gib);
           gvb0->Release(); gvb1->Release(); gib->Release();
-          if (built && h.wallLogged < 8) {
-            ++h.wallLogged; char m[400];
-            snprintf(m, sizeof m, "Sims 3 camera hook: wall openings cut at frame %u -> VS %016llx PS %016llx: %u triangles -> %u (%u cut, %u removed, %u hidden; %u cells, %u with openings, %u rectangles), %u vertices, mask s%d %ux%u%s, up-ness %.2f..%.2f x%.2f, visible from %.2f, threshold %.2f",
-                     h.frames + 1, (unsigned long long) h.vsHash, (unsigned long long) h.psHash, (unsigned) primCount, e->triangleCount, st.cut, st.removed, st.hidden, st.cells, st.cellsWithOpenings, st.holeRects, e->vertexCount, s, maskW, maskH, thr < 0.f ? " (no opening test)" : mask ? "" : " (none bound: black)", ck[0], ck[1], in.params.kScale, ck[2], thr);
-            Logger::info(m);
-          }
           return true;
         };
         wallDone_ = wallDraw_();
@@ -2942,16 +2916,6 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreateVertexShader(CONST DWORD* pFunc
     sims3cam::analyzeVertexConstantOutputs(pFunction, sims3Count, pLssVertexShader->sims3ConstOut);
     // cards turned to the camera (milestone 136: the trees' leaves)
     sims3cam::analyzeCameraCard(pFunction, sims3Count, pLssVertexShader->sims3Card);
-    if (pLssVertexShader->sims3Normal.hasNormalInput && g_sims3.normalShaderLogged < 80) {
-      ++g_sims3.normalShaderLogged;
-      const sims3cam::VsNormalInfo& ni = pLssVertexShader->sims3Normal;
-      char list[128] = {}; int ln = 0;
-      for (int i = 0; i < 16 && ln < (int) sizeof list - 20; ++i) if (ni.candidates & (1u << i)) ln += snprintf(list + ln, sizeof list - ln, "%sTEXCOORD%d (o%u)", ln ? ", " : "", i, (unsigned) ni.outReg[i]);
-      char msg[288];
-      if (ni.candidates) snprintf(msg, sizeof msg, "Sims 3 camera hook: vertex shader %016llx (vs_%u_0): world normal output %s", (unsigned long long) pLssVertexShader->sims3Hash, (unsigned) ni.version, list);
-      else snprintf(msg, sizeof msg, "Sims 3 camera hook: vertex shader %016llx (vs_%u_0): normal input but no output derived from it alone (input hidden from the capture)", (unsigned long long) pLssVertexShader->sims3Hash, (unsigned) ni.version);
-      Logger::info(msg);
-    }
     // a wall shader (milestone 13): the clamp of the up-ness flag, for the opening cut
     if (sims3cam::analyzeWallVertexShader(pFunction, sims3Count, pLssVertexShader->sims3Wall)) {
       char msg[224];
@@ -3109,7 +3073,6 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetVertexShaderConstantF(UINT StartRe
           Logger::info(msg);
         }
       } else if (kind == sims3cam::Kind::Reflection) {
-        if (!h.camMirrored) h.cameraValidBeforeMirror = h.cameraValid;   // what holds again when the pass is over (milestone 85)
         if (!h.rtIsPrimary) h.reflectionRtId = h.rt0Id;   // the target a reflection camera draws into: the whole pass dropped (milestone 124)
         h.cameraValid = false; h.camMirrored = true;   // a reflection pass: its 3D draws are dropped
         ++h.mirroredUploads;

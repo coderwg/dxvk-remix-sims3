@@ -113,12 +113,6 @@ Sims3Hook::PlateEntry* sims3LotPlateEntry(Sims3Hook& h, Dev* dev, Direct3DVertex
     else { if (e.glowVb) { e.glowVb->Release(); e.glowVb = nullptr; } if (e.glow) { e.glow->Release(); e.glow = nullptr; } e.glowPrims = 0; }
   }
   e.ok = true;
-  if (h.plateLogged < 8) {
-    ++h.plateLogged; char msg[300];
-    snprintf(msg, sizeof msg, "Sims 3 camera hook: low-detail lot model split at frame %u -> %u triangles: %u of the plate's top baked as terrain, %u drawn as the house (%u vertices), %u of them with glowing windows",
-             h.frames, st.in, st.plate, st.house, count, e.glowPrims);
-    Logger::info(msg);
-  }
   return &e;
 }
 

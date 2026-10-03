@@ -2,123 +2,87 @@
 // (sims3OnPresent, called by Present). Included at file scope, after sims3_device_lights.inl and
 // before Present; not a standalone header.
 
-// The Sims 3 camera hook: the statistics line, plus the per-shader capture table since the last
-// table when asked. Also printed once at shutdown (sims3LogFinalStats), so a session that ends
-// before the next periodic line still reports what happened in the lot.
-static void sims3LogStats(bool withTable) {
+// The Sims 3 camera hook (milestone 147): the statistics, one line per system, every 600 frames and
+// once at shutdown (sims3LogFinalStats), so a session that ends before the next one still reports.
+static void sims3LogStats() {
   const Sims3Hook& h = g_sims3;
-  char msg[640];
-  int n = snprintf(msg, sizeof msg, "Sims 3 camera hook: after %u frames -- capture: %u draws, albedo from the table %u, from bytecode %u (%u variants made, %u draws without a candidate), tabled albedo with the coordinate from bytecode %u, %u invisible draws skipped, %u draws with the variant table full; presented stage:",
-                   h.frames, h.capturedDraws, h.overrideDraws, h.autoDraws, h.autoVariantsMade, h.autoNoAlbedo, h.autoTexcoordDraws, h.invisibleDrawsSkipped, h.vsVariantsFull);
+  char msg[900];
+  float fps = 0.f;
+  {
+    const uint64_t nowTick = GetTickCount64();
+    if (g_sims3.statsTick != 0 && nowTick > g_sims3.statsTick && h.frames > g_sims3.statsFrame)
+      fps = (float) ((double) (h.frames - g_sims3.statsFrame) * 1000.0 / (double) (nowTick - g_sims3.statsTick));
+    g_sims3.statsTick = nowTick; g_sims3.statsFrame = h.frames;
+  }
+  int n = snprintf(msg, sizeof msg, "Sims 3 camera hook: after %u frames (%.1f a second) -- capture: %u draws, albedo from the table %u, from bytecode %u (%u variants made, %u draws without a candidate), tabled albedo with the coordinate from bytecode %u, %u invisible draws skipped, %u draws with the variant table full; presented stage:",
+                   h.frames, fps, h.capturedDraws, h.overrideDraws, h.autoDraws, h.autoVariantsMade, h.autoNoAlbedo, h.autoTexcoordDraws, h.invisibleDrawsSkipped, h.vsVariantsFull);
   for (int k = 0; k < 16 && n > 0 && n < (int) sizeof msg - 16; ++k)
     if (h.remapCount[k]) n += snprintf(msg + n, sizeof msg - n, " s%d=%u", k, h.remapCount[k]);
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   normals: %u variants, %u draws with the shader's normal, %u with the input hidden, vs_2_0 rewritten %u (failed %u); instanced draws split %u (%u instances)",
-           h.normalVariantsMade, h.normalDraws, h.normalHiddenDraws, h.vsConverted, h.vsConvertFailed, h.deinstancedDraws, h.deinstancedInstances);
-  Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   state: the game's put back %u times; masked writes emulated %u + %u + %u copied (skipped %u, copy failed %u)",
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   draws: %u normal variants, %u draws with the shader's normal, %u with the input hidden, vs_2_0 rewritten %u (failed %u); instanced draws split %u (%u instances); the game's state put back %u times; masked writes emulated %u + %u + %u copied (skipped %u, copy failed %u)",
+           h.normalVariantsMade, h.normalDraws, h.normalHiddenDraws, h.vsConverted, h.vsConvertFailed, h.deinstancedDraws, h.deinstancedInstances,
            h.restoreCount, h.maskEmuA, h.maskEmuB, h.maskEmuC, h.maskEmuSkipped, h.copyFailed);
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   lights: %u lamp lights held (lit %u times, put out %u times, %u light calls)", h.lamps.n, h.lamps.lit, h.lamps.out, h.lampEvents);
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   cameras: transforms sent %u times, %u uploads without their eye taken as the camera continued, %u sky dome draws; dropped: %u shadow map, %u sky cube, %u water reflection, %u reflection-pass draws in %u frames (%u mirrored uploads), %u of the game's own fakes, %u never-captured 3D draws, %u of the neighbourhood view's lot picture",
+           h.transformSends, h.continuedUploads, h.skyDraws, h.unshownDrops[sims3cam::kShadowMapPass], h.unshownDrops[sims3cam::kSkyCubePass], h.unshownDrops[sims3cam::kWaterReflectionPass],
+           h.reflectionDrops, h.reflectionFrames, h.mirroredUploads, h.fakeDrops, h.neverSentDrops, h.lotPictureDropped);
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   sky: the game's light is the %s's, luminance %.3f; sun %s luminance %.3f toward %.3f, %.3f, %.3f; moon %s luminance %.3f toward %.3f, %.3f, %.3f (share %.2f); the sun's afterglow %s; %u light updates",
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   sky: the game's light record %s (%u frames lit by it); clock %s %.2f h (sunrise %.2f, sunset %.2f); the game's light is the %s's, luminance %.3f; sun %s %.3f toward %.3f, %.3f, %.3f; moon %s %.3f toward %.3f, %.3f, %.3f; afterglow %s; %u light updates; the street lamps at %.3f by the game's night switch",
+           h.lightRec ? "reached" : "NOT reached", h.framesFromGame, !h.clock.known ? "unknown," : (h.clock.night ? "night," : "day,"), h.clock.hour, h.clock.sunrise, h.clock.sunset,
            h.sky.body ? "moon" : "sun", sims3cam::luminance(h.gameLight.col),
-           h.sky.showing[0] ? (h.sky.glowing ? "its afterglow," : "sent,") : "none,", h.sky.showing[0] ? sims3cam::luminance(h.sky.shown[0].col) : 0.f, h.sky.shown[0].dir[0], h.sky.shown[0].dir[1], h.sky.shown[0].dir[2],
-           h.sky.showing[1] ? (h.sky.body == 0 ? "kept," : "sent,") : "none,", h.sky.showing[1] ? sims3cam::luminance(h.sky.shown[1].col) : 0.f, h.sky.shown[1].dir[0], h.sky.shown[1].dir[1], h.sky.shown[1].dir[2], sims3cam::moonShare(),
-           h.sky.glowing ? format_string("at x%.2f", h.sky.glowFade).c_str() : "none", h.sunChanges);
+           h.sky.showing[0] ? (h.sky.glowing ? "its afterglow" : "sent") : "none", h.sky.showing[0] ? sims3cam::luminance(h.sky.shown[0].col) : 0.f, h.sky.shown[0].dir[0], h.sky.shown[0].dir[1], h.sky.shown[0].dir[2],
+           h.sky.showing[1] ? (h.sky.body == 0 ? "kept" : "sent") : "none", h.sky.showing[1] ? sims3cam::luminance(h.sky.shown[1].col) : 0.f, h.sky.shown[1].dir[0], h.sky.shown[1].dir[1], h.sky.shown[1].dir[2],
+           h.sky.glowing ? format_string("at x%.2f", h.sky.glowFade).c_str() : "none", h.sunChanges, h.worldFade);
   Logger::info(msg);
-  {
-    const uint64_t nowTick = GetTickCount64();
-    if (g_sims3.statsTick != 0 && nowTick > g_sims3.statsTick && h.frames > g_sims3.statsFrame) {
-      snprintf(msg, sizeof msg, "Sims 3 camera hook:   frame rate: %.1f frames a second over the last %u frames",
-               (double) (h.frames - g_sims3.statsFrame) * 1000.0 / (double) (nowTick - g_sims3.statsTick), h.frames - g_sims3.statsFrame);
-      Logger::info(msg);
-    }
-    g_sims3.statsTick = nowTick; g_sims3.statsFrame = h.frames;
-  }
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   fog: %s; the runtime's fog hue %u %u %u of 255 at brightness %.6f (the colour's %.4f x the light sent over the game's %.3f; %u sends) from %.0f to %.0f (the game's curve %.2f), on %u terrain draws",
+           !GlobalOptions::getExposeRemixApi() ? "OFF: the Remix API is off" : (h.fogReady ? "the game's own" : "waiting for the game's light record"),
+           (unsigned) ((h.fogColour >> 16) & 0xFFu), (unsigned) ((h.fogColour >> 8) & 0xFFu), (unsigned) (h.fogColour & 0xFFu), h.fogScaleNow, h.fogBright, h.fogShare, h.fogScaleSends, h.fogStart, h.fogEnd, h.fogCurve, h.fogDraws);
+  Logger::info(msg);
   uint32_t lampHandles = 0;
   for (uint32_t k = 0; k < h.lamps.n; ++k) { const sims3cam::Lamp& Lh = h.lamps.lamps[k]; lampHandles += (Lh.api ? 1u : 0u) + (Lh.api2 ? 1u : 0u) + (Lh.api3 ? 1u : 0u); }
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   clock: %s %.2f h, sunrise %.2f, sunset %.2f; the street lamps at %.3f by the game's night switch; %u lit lamps of world lights alone left dark",
-           !h.clock.known ? "unknown," : (h.clock.night ? "night," : "day,"), h.clock.hour, h.clock.sunrise, h.clock.sunset, h.worldFade, h.lampsWorldDark);
-  Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   the game's own light: %s; %u frames lit by it",
-           h.lightRec ? format_string("at %p, through its pointers", (const void*) h.lightRec).c_str() : "not reached", h.framesFromGame);
-  Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   fog: %s; the runtime's fog hue %u %u %u of 255 at brightness %.6f (the colour's %.4f x the light sent over the game's %.3f; %u sends) from %.0f to %.0f (the game's curve %.2f), on %u terrain draws; %u captured draws carried a fog state of the game's own",
-           !GlobalOptions::getExposeRemixApi() ? "OFF: the Remix API is off" : (h.fogReady ? "the game's own, from beside its light record" : "waiting for the game's light record"),
-           (unsigned) ((h.fogColour >> 16) & 0xFFu), (unsigned) ((h.fogColour >> 8) & 0xFFu), (unsigned) (h.fogColour & 0xFFu), h.fogScaleNow, h.fogBright, h.fogShare, h.fogScaleSends, h.fogStart, h.fogEnd, h.fogCurve, h.fogDraws, h.gameFogDraws);
-  Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   lamp reporter: %s; %u lamps reported, %u lit, %u of those without a definition in the light table, %u beyond the budget of %u; %u readings (%u while it was writing), %u searches (the last through %u regions, %u MB)",
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   lamps: the reporter %s; %u reported, %u lit (%u without a definition, %u of world lights alone left dark, %u beyond the budget); %u lights held (lit %u times, put out %u times); API lights %s, %u calls, %u lamp handles; the light table %s",
            h.lampReportLive ? "live" : (g_sims3LampBlock.load() ? "found, no world loaded" : "NOT FOUND: no lamp gives light (the script mod Sims3RtxLamps.package is not in Mods\\Packages, is an older version, or no world has loaded yet)"),
-           h.lampReported, h.lampsOn, h.lampsUndefined, h.lampsBeyondBudget, sims3cam::lampMax(), h.lampReportReads, h.lampReportStale, g_sims3LampScans.load(), g_sims3LampScanRegions.load(), g_sims3LampScanMegabytes.load());
-  Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   api lights: %s; %u calls, sun %s, %u lamp handles; the game's light table: %s",
-           GlobalOptions::getExposeRemixApi() ? "on" : "off (no lights: exposeRemixApi is not set)", h.apiLightCalls, (h.sunApi || h.moonApi) ? (h.sunApi && h.moonApi ? "and moon live" : "or moon live") : "and moon none", lampHandles,
-           !sims3cam::liteTable().models.empty() ? format_string("%u models read from sims3lights.txt", (unsigned) sims3cam::liteTable().models.size()).c_str()
-             : (sims3cam::liteTable().lines ? "sims3lights.txt is of an older format (no lamps; run sims3/tools/lite_table.py)" : "no sims3lights.txt next to the DLL (no lamps; run sims3/tools/lite_table.py)"));
+           h.lampReported, h.lampsOn, h.lampsUndefined, h.lampsWorldDark, h.lampsBeyondBudget, h.lamps.n, h.lamps.lit, h.lamps.out,
+           GlobalOptions::getExposeRemixApi() ? "on" : "OFF (exposeRemixApi is not set: no lights)", h.apiLightCalls, lampHandles,
+           !sims3cam::liteTable().models.empty() ? format_string("%u models", (unsigned) sims3cam::liteTable().models.size()).c_str()
+             : (sims3cam::liteTable().lines ? "of an older format (no lamps; run sims3/tools/lite_table.py)" : "missing next to the DLL (no lamps; run sims3/tools/lite_table.py)"));
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   walls: %u draws, openings cut in %u (%u triangles cut, %u removed, %u hidden dropped; %u geometries built, %u evicted, %u build failures, %u refused; %u without an opening test, %u skipped with no client copy; %u masks decoded)",
            h.wallDraws, h.wallCutDraws, h.wallCutTriangles, h.wallRemovedTriangles, h.wallHiddenTriangles, h.wallBuilt, h.wallEvicted, h.wallBuildFailed, h.wallRefused, h.wallNoOpeningTest, h.wallSkipped, h.wallMasksDecoded);
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   reflections: %u mirrored camera uploads; %u draws dropped in %u frames (%u of them by the stencil mirror's render states alone); %u mirrored passes ended by a draw culling clockwise",
-           h.mirroredUploads, h.reflectionDrops, h.reflectionFrames, h.reflectionDropsByStates, h.mirrorPassEnds);
-  Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   terrain: %u base draws and %u layer passes (%u lot chunk copies) for the baker, %u without a variant; %u pixel shader variants (%u unlit, %u with alpha forced to 1), %u sampler states copied, sRGB sampling turned off %u times, both held across %u terrain blocks (%u holds cancelled by the game, %u uncaptured draws let through); markers %s; %u lot chunk copies dropped",
-           h.terrainBaseDraws, h.terrainLayerDraws, h.terrainLotCopyDraws, h.terrainNoVariant, h.psVariantsMade, h.psVariantsUnlit, h.psVariantsAlpha, h.samplerCopies, h.srgbOffs, h.tblockFlushes, h.tblockCancelled, h.tblockKept, h.markersConfigSent ? "tagged in rtx.conf" : (h.marker[0] ? "made, NOT tagged in rtx.conf" : "not made yet"), h.lotCopyDrops);
-  Logger::info(msg);
   {
     uint32_t ready = 0; uint64_t kept = 0, skirts = 0, flat = 0;
     for (const auto& s : h.squares) if (s.ready) { ++ready; kept += s.kept; skirts += s.skirts; flat += s.flat; }
-    snprintf(msg, sizeof msg, "Sims 3 camera hook:   terrain squares (design B): %u squares known, %u with a merged shape (%llu triangles kept, %llu skirt and %llu flat ones left out); %u merged draws, %u pieces painting only, %u pieces traced as before (no shape yet), %u shapes built (%u failed), %u skipped, %u released",
+    snprintf(msg, sizeof msg, "Sims 3 camera hook:   terrain: %u base draws and %u layer passes (%u lot chunk copies) for the baker, %u without a variant, %u pixel shader variants; markers %s; squares: %u known, %u with a merged shape (%llu triangles kept, %llu skirt and %llu flat ones left out), %u merged draws, %u pieces painting only, %u traced as before, %u shapes built (%u failed), %u skipped, %u released",
+             h.terrainBaseDraws, h.terrainLayerDraws, h.terrainLotCopyDraws, h.terrainNoVariant, h.psVariantsMade,
+             h.markersConfigSent ? "tagged in rtx.conf" : (h.marker[0] ? "made, NOT tagged in rtx.conf" : "not made yet"),
              (unsigned) h.squares.size(), ready, (unsigned long long) kept, (unsigned long long) skirts, (unsigned long long) flat,
              h.mergedDraws, h.mergePaintPieces, h.mergeFallbackPieces, h.mergeBuilds, h.mergeBuildFailed, h.mergeSkipped, h.mergeEvicted);
     Logger::info(msg);
-    snprintf(msg, sizeof msg, "Sims 3 camera hook:   the neighbourhood view's lot picture (milestone 63): %u draws left out", h.lotPictureDropped);
-    Logger::info(msg);
-    snprintf(msg, sizeof msg, "Sims 3 camera hook:   cut-outs (milestones 67-68): %u pixel shaders read with a cut-out on a sampler's alpha; %u captured draws given it as an alpha test; "
-             "fades (milestone 135): %u pixel shaders with alpha = fade - a sampler's alpha; %u captured draws given the test on the alpha; "
-             "leaf cards (milestone 136): %u draws faced outward from their tree, %u whose constants were not the camera's axes; "
-             "trees near the camera (milestone 137): %u draws solid, %u left as the game's; "
-             "plants cut apart (milestone 139): %u draws sent as %u, %u not split (not an indexed draw)",
-             h.cutShaders, h.alphaCutDraws, h.fadeShaders, h.fadeTestDraws, h.cardDraws, h.cardNotCamera, h.solidFadeDraws, h.solidFadeLeft,
-             h.fadeSplitDraws, h.fadeSplitParts, h.fadeSplitUnused);
-    Logger::info(msg);
-    snprintf(msg, sizeof msg, "Sims 3 camera hook:   glass, mirrors and water (milestones 80-114): %u glass draws, %u car glass, %u plumbob, %u mirror; water draws: %u pool, %u pond, %u sea, %u object water; %u wave maps looked at; %u effect draws left out",
-             h.glassDraws[sims3cam::kClearGlass], h.glassDraws[sims3cam::kCarGlass], h.glassDraws[sims3cam::kPlumbob], h.mirrorDraws,
-             h.waterDraws[sims3cam::kWaterPool], h.waterDraws[sims3cam::kWaterPond], h.waterDraws[sims3cam::kWaterSea], h.waterDraws[sims3cam::kWaterObject],
-             h.waveDumped, h.effectsLeftOut);
-    Logger::info(msg);
-    snprintf(msg, sizeof msg, "Sims 3 camera hook:   bumpy glass (milestone 109): %u draws with their own bump map (%u materials in Sims3GlassBumps%s), %u as the clear glass while their bump map has none (%u bump maps seen without one)",
-             h.bumpDraws, (unsigned) h.bumpMaterials.size(), h.bumpModRead ? "" : ", not read yet", h.bumpPending, (unsigned) h.bumpWritten.size());
-    Logger::info(msg);
-    snprintf(msg, sizeof msg, "Sims 3 camera hook:   glass with its object's place (milestone 119): %u draws sent with a WORLD transform following the object, %u not placed (their reasons logged)",
-             h.worldDraws, h.worldFailed);
-    Logger::info(msg);
-    snprintf(msg, sizeof msg, "Sims 3 camera hook:   glass sheets (milestone 104): %u draws sent without their back side (%llu triangles left out), %u draws whose mesh is not read (a second position or an unknown type)",
-             h.glassSideDraws, (unsigned long long) h.glassSideTris, h.glassSideSkipped);
-    Logger::info(msg);
-    snprintf(msg, sizeof msg, "Sims 3 camera hook:   albedo sampler states (milestone 68): %u draws moved an albedo to stage 0 with sampler states differing from stage 0's, %u of them its sRGB flag",
-             h.remapSamplerDraws, h.remapSrgbDraws);
-    Logger::info(msg);
-    snprintf(msg, sizeof msg, "Sims 3 camera hook:   low-detail lots' ground (milestone 69): %s; %u model draws split (%u plate triangles baked as terrain), %u models split, %u with no plate, %u could not be read",
-             "the plate's top as terrain", h.plateDraws, h.plateTriangles, h.plateBuilds - h.plateNone - h.plateFailed, h.plateNone, h.plateFailed);
-    Logger::info(msg);
-    snprintf(msg, sizeof msg, "Sims 3 camera hook:   low-detail lots' window glow (milestones 70-71): %s; %u glow passes (%u triangles, %.0f cm out from the wall), %u models with glowing windows, %u window-only glow textures (%u could not be made)",
-             "on", h.glowDraws, h.glowTriangles, sims3cam::kLotGlowLift * 100.f, h.glowModels, h.glowTexMade, h.glowTexFailed);
-    Logger::info(msg);
   }
   MEMORYSTATUSEX ms = {}; ms.dwLength = sizeof ms; GlobalMemoryStatusEx(&ms);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   lot paint: %u composite second passes, %u lot re-submissions split in two; client copies of surfaces %u MB, address space in use %u of %u MB",
-           h.compositePasses, h.splitDraws, (unsigned) (Direct3DSurface9_LSS::sims3ShadowBytes() >> 20), (unsigned) ((ms.ullTotalVirtual - ms.ullAvailVirtual) >> 20), (unsigned) (ms.ullTotalVirtual >> 20));
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   lots: %u composite second passes, %u re-submissions split in two; low-detail models: %u draws split (%u plate triangles baked as terrain), %u split, %u with no plate, %u could not be read, %u glow passes (%u triangles) on %u models with glowing windows, %u glow textures (%u could not be made); client copies of surfaces %u MB, address space in use %u of %u MB",
+           h.compositePasses, h.splitDraws, h.plateDraws, h.plateTriangles, h.plateBuilds - h.plateNone - h.plateFailed, h.plateNone, h.plateFailed,
+           h.glowDraws, h.glowTriangles, h.glowModels, h.glowTexMade, h.glowTexFailed,
+           (unsigned) (Direct3DSurface9_LSS::sims3ShadowBytes() >> 20), (unsigned) ((ms.ullTotalVirtual - ms.ullAvailVirtual) >> 20), (unsigned) (ms.ullTotalVirtual >> 20));
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   cameras: transforms sent to the runtime %u times; sky dome draws presented as the sky %u; %u main camera uploads without their eye taken as the camera continued",
-           h.transformSends, h.skyDraws, h.continuedUploads);
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   cut-outs: %u pixel shaders read with a cut-out, %u draws given it as an alpha test; trees: %u fade shaders, %u draws given the test on the alpha, %u plant draws sent as %u (%u not split), %u leaf draws faced outward (%u whose constants were not the camera's axes), %u near-camera draws solid (%u left as the game's)",
+           h.cutShaders, h.alphaCutDraws, h.fadeShaders, h.fadeTestDraws, h.fadeSplitDraws, h.fadeSplitParts, h.fadeSplitUnused, h.cardDraws, h.cardNotCamera, h.solidFadeDraws, h.solidFadeLeft);
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   passes Remix never shows (milestone 124): %u shadow map draws, %u sky cube draws, %u water reflection draws dropped; the game's own fakes (milestone 130: shadows, fog, glow, tone curve): %u draws dropped; never-captured 3D draws not sent (milestone 131): %u",
-           h.unshownDrops[sims3cam::kShadowMapPass], h.unshownDrops[sims3cam::kSkyCubePass], h.unshownDrops[sims3cam::kWaterReflectionPass], h.fakeDrops, h.neverSentDrops);
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   glass: %u clear, %u car, %u plumbob, %u mirror; water: %u pool, %u pond, %u sea, %u object; %u effect draws left out; bumpy glass %u draws with their own bump map (%u materials%s, %u still without one); %u placed by their object's WORLD transform (%u not placed); %u sent without their back side (%llu triangles left out, %u meshes not read)",
+           h.glassDraws[sims3cam::kClearGlass], h.glassDraws[sims3cam::kCarGlass], h.glassDraws[sims3cam::kPlumbob], h.mirrorDraws,
+           h.waterDraws[sims3cam::kWaterPool], h.waterDraws[sims3cam::kWaterPond], h.waterDraws[sims3cam::kWaterSea], h.waterDraws[sims3cam::kWaterObject], h.effectsLeftOut,
+           h.bumpDraws, (unsigned) h.bumpMaterials.size(), h.bumpModRead ? "" : ", not read yet", h.bumpPending,
+           h.worldDraws, h.worldFailed, h.glassSideDraws, (unsigned long long) h.glassSideTris, h.glassSideSkipped);
   Logger::info(msg);
-  if (!withTable) return;
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   captured draws per shader pair since the last table (%d pairs%s; textures as first seen, render states as last seen):", h.shaderStatCount, h.shaderStatCount >= Sims3Hook::kShaderStats ? ", table full" : "");
+}
+
+// The captured draws per shader pair of the marked frame (milestone 147: only at the mark; the
+// table is cleared when the key goes down and printed at the end of that frame).
+static void sims3LogShaderTable() {
+  const Sims3Hook& h = g_sims3;
+  char msg[640];
+  snprintf(msg, sizeof msg, "Sims 3 camera hook: the marked frame's captured draws per shader pair (%d pairs%s; render states as last seen):", h.shaderStatCount, h.shaderStatCount >= Sims3Hook::kShaderStats ? ", table full" : "");
   Logger::info(msg);
   for (int i = 0; i < h.shaderStatCount; ++i) {
     const auto& s = h.shaderStats[i];
@@ -141,23 +105,32 @@ static void sims3LogStats(bool withTable) {
     }
     Logger::info(msg);
   }
-  g_sims3.shaderStatCount = 0;
+}
+
+// The options in force, once at the start (milestone 147): every value of sims3hook.txt as read.
+static void sims3LogOptions() {
+  char msg[640];
+  snprintf(msg, sizeof msg, "Sims 3 camera hook: options -- markKey %d; fog brightness x%.2f; sun and moon %.2f degrees wide at x%.2f, the moon %.0f%% of the game's moonlight; dawn eased over %.0f min, the afterglow below %.0f%% over %.0f min; lamps %.3f wide at x%.1f, at most %u, cones x%.2f, softness %.2f, shade glow x%.2f",
+           sims3cam::markKey(), sims3cam::fogColourScale(), sims3cam::sunAngle(), sims3cam::sunRadiance(), sims3cam::moonShare() * 100.f, sims3cam::dawnHours() * 60.f,
+           sims3cam::duskLevel() * 100.f, sims3cam::duskHours() * 60.f, sims3cam::lampRadius(), sims3cam::lampRadiance(), sims3cam::lampMax(),
+           sims3cam::lampConeScale(), sims3cam::lampConeSoftness(), sims3cam::lampShadeGlow());
+  Logger::info(msg);
 }
 
 // Called from the client's shutdown path (d3d9_lss.cpp) so the last stretch of the session is reported.
 void sims3LogFinalStats() {
-  if (sims3cam::enabled() && g_sims3.frames > 0) sims3LogStats(true);
+  if (sims3cam::enabled() && g_sims3.frames > 0) sims3LogStats();
 }
 
-// The frame's end, from Present: the periodic diagnostics (the summary line every 600 frames --
-// short sessions still get one from inside the lot -- and the per-shader capture table every
-// 3600), the frame's bookkeeping and the mark key, then the lamps and the lights of the sky.
+// The frame's end, from Present: the options once, the statistics every 600 frames (short sessions
+// still get one from inside the lot), the marked frame's shader table, the frame's bookkeeping and the
+// mark key, then the lamps and the lights of the sky.
 template<typename Dev>
 void sims3OnPresent(Sims3Hook& h, Dev* dev) {
   ++h.frames;
-  if (h.frames == 300 || h.frames % 600 == 0) {
-    sims3LogStats(h.frames == 300 || h.frames % 3600 == 0);
-  }
+  if (h.frames == 1) sims3LogOptions();
+  if (h.frames == 300 || h.frames % 600 == 0) sims3LogStats();
+  if (h.markFrame) sims3LogShaderTable();   // the frame that ends here was the marked one
   h.frameCamSet = false;
   h.lotCopies.clear();   // the lot meshes drawn this frame (milestone 16)
   h.wallFrameTris.clear();   // the wall triangles kept this frame (milestone 97)
@@ -166,7 +139,7 @@ void sims3OnPresent(Sims3Hook& h, Dev* dev) {
   {
     const bool down = (GetAsyncKeyState(sims3cam::markKey()) & 0x8000) != 0;   // the mark key (sims3hook.txt markKey)
     h.markFrame = down && !h.markDown;   // the frame after the key: the lit lamps and the fog, logged once; the frame's glass (milestone 113)
-    if (h.markFrame) h.markGlassCount = 0;
+    if (h.markFrame) { h.markGlassCount = 0; h.shaderStatCount = 0; }
     h.markDown = down;
   }
   sims3PresentLamps(h);

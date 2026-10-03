@@ -38,7 +38,7 @@ bool sims3LotTerrainCopy(Sims3Hook& h, Dev* dev, bool is3D) {
 template<typename Dev>
 bool sims3ApplyForDraw(Sims3Hook& h, Dev* dev, const DWORD* rs) {
   static const D3DMATRIX kIdentity = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
-  const DWORD zEnable = rs[D3DRS_ZENABLE], stencil = rs[D3DRS_STENCILENABLE], cull = rs[D3DRS_CULLMODE];
+  const DWORD zEnable = rs[D3DRS_ZENABLE];
   // a pass whose result Remix never shows (milestone 124): the shadow map, the sky's cube, the water's reflection
   const int unshown = sims3cam::unshownPass(h.rtIsPrimary, h.rt0W, h.rt0H, rs[D3DRS_COLORWRITEENABLE], h.rtCubeFace, h.rt0Id != 0 && h.rt0Id == h.reflectionRtId);
   if (unshown >= 0) {
@@ -50,21 +50,12 @@ bool sims3ApplyForDraw(Sims3Hook& h, Dev* dev, const DWORD* rs) {
     h.drawDropped = true; ++h.fakeDrops;
     return false;
   }
-  // a mirrored camera's pass is over at the first draw culling clockwise (milestone 85): the main
-  // camera, which a mirrored upload never replaces, holds again
-  if (sims3cam::endsMirroredPass(h.camMirrored, cull)) { h.camMirrored = false; h.cameraValid = h.cameraValidBeforeMirror; ++h.mirrorPassEnds; }
   // a reflection pass's draw (runs 66-68): dropped before it reaches the runtime; the ray tracer
   // renders reflections itself. Nothing is changed on the device for it.
-  h.drawDropped = sims3cam::isReflectionDraw(h.camMirrored, h.declIs3D, zEnable, stencil, cull);
+  h.drawDropped = sims3cam::isReflectionDraw(h.camMirrored, h.declIs3D, zEnable);
   if (h.drawDropped) {
     ++h.reflectionDrops;
-    if (!h.camMirrored) ++h.reflectionDropsByStates;
     if (h.reflectionFrame != h.frames) { h.reflectionFrame = h.frames; ++h.reflectionFrames; }
-    if (h.reflectionLogged < 6) {
-      ++h.reflectionLogged; char msg[240];
-      snprintf(msg, sizeof msg, "Sims 3 camera hook: reflection-pass draw dropped at frame %u -> VS %016llx PS %016llx (camera mirrored %d, stencil %lu, cull %lu, %s target)", h.frames + 1, (unsigned long long) h.vsHash, (unsigned long long) h.psHash, (int) h.camMirrored, (unsigned long) stencil, (unsigned long) cull, h.rtIsPrimary ? "primary" : "offscreen");
-      Logger::info(msg);
-    }
     return false;
   }
   D3DVIEWPORT9 vp = {}; dev->GetViewport(&vp);
@@ -185,15 +176,6 @@ inline void sims3AutoTexcoord(Sims3Hook& h, int k, int tc, bool tabledPs) {
   // bound by sims3BindVariant, which clears autoCapturedUv again if the variant cannot be made
   h.autoCapturedUv = true;
   if (tc > 0 && !h.vsTabled) h.pendingPromote = (uint8_t) tc;
-  if (h.autoLogged < 24) {
-    ++h.autoLogged;
-    char fb[16], msg[256];
-    snprintf(msg, sizeof msg, "Sims 3 camera hook: auto %s -> VS %016llx PS %016llx: stage %d (%s %ux%u) at TEXCOORD%d%s", tabledPs ? "coordinate (tabled albedo, untabled vertex shader)" : "albedo",
-             (unsigned long long) h.vsHash, (unsigned long long) h.psHash, k,
-             sims3FormatName(h.boundFmt[k], fb, sizeof fb), (unsigned) h.boundW[k], (unsigned) h.boundH[k], tc,
-             (tc > 0 && !h.vsTabled) ? ", promoted variant for the draw" : (tc > 0 ? ", vertex shader tabled" : ", captured TEXCOORD0"));
-    Logger::info(msg);
-  }
 }
 
 // The normal the runtime should shade with, for the bound shaders (milestone 11): the register
@@ -254,15 +236,6 @@ void sims3BindVariant(Sims3Hook& h, Dev* dev, uint8_t tc, uint8_t normalOut, boo
             if (SUCCEEDED(hr) && shader) {
               v->variant = shader; ++h.autoVariantsMade;
               if (made != 0xFEu || hidden) ++h.normalVariantsMade;
-              if (h.normalLogged < 16) {
-                ++h.normalLogged;
-                char what[96], msg[224];
-                if (made != 0xFEu) snprintf(what, sizeof what, "world normal (o%u) repeated into NORMAL output o%u", (unsigned) normalOut, (unsigned) made);
-                else if (hidden) snprintf(what, sizeof what, "packed normal input hidden from the capture (triangle normals)");
-                else snprintf(what, sizeof what, "no normal change");
-                snprintf(msg, sizeof msg, "Sims 3 camera hook: shader variant for VS %016llx -> %s%s%s%s%s", (unsigned long long) h.vsHash, outward ? "leaf cards faced outward from their tree, " : "", converted ? "vs_2_0 rewritten as vs_3_0, " : "", tc > 0 ? "texcoord promoted, " : "", what, constRead ? ", c255 read for the per-instance tag" : "");
-                Logger::info(msg);
-              }
             }
           }
         }

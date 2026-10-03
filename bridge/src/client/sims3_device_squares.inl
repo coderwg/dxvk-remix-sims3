@@ -104,12 +104,6 @@ void sims3SquareBuild(Sims3Hook& h, Dev* dev, Sims3Hook::Square& s, const std::v
   s.merged = sims3MakeIndexBuffer(dev, out);
   if (!s.merged) { ++h.mergeBuildFailed; return; }
   s.mergedPrims = (uint32_t) (out.size() / 3); s.minIndex = lo; s.numVertices = hi - lo + 1; s.ready = true;
-  if (h.mergeLogged < 60u) {
-    ++h.mergeLogged; char msg[320];
-    snprintf(msg, sizeof msg, "Sims 3 camera hook: terrain square merged at frame %u -> vertex buffer %u (%u vertices), %u pieces: %u triangles kept, %u skirt and %u flat ones left out%s",
-             h.frames, s.vbId, count, (unsigned) ranges.size(), st.kept, st.skirts, st.flat, st.outside ? " (and some outside the vertices)" : "");
-    Logger::info(msg);
-  }
 }
 // At Present: each square drawn this frame keeps its shape when the frame's pieces are in it;
 // a new piece joins the shape unless it overlaps one already there (the pieces were re-cut:

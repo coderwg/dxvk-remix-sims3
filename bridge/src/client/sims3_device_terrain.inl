@@ -110,12 +110,6 @@ IDirect3DPixelShader9* sims3PsVariant(Sims3Hook& h, Dev* dev, IDirect3DPixelShad
   if (FAILED(hr) || ps == nullptr) return nullptr;
   v.variant = ps; v.freeStage = (uint8_t) free;
   ++h.psVariantsMade; if (unlit) ++h.psVariantsUnlit; if (alpha) ++h.psVariantsAlpha;
-  if (h.psVariantLogged < 12) {
-    ++h.psVariantLogged; char msg[460];
-    int lightMapStage = -1; for (int s = 0; s < 16; ++s) if (h.boundTex[s] && h.boundFmt[s] == 50u && h.boundW[s] == 16 && h.boundH[s] == 16) { lightMapStage = s; break; }
-    snprintf(msg, sizeof msg, "Sims 3 camera hook: terrain variant for PS %016llx (%s) -> stage 0 read from s%d (%s; %u tokens renumbered)%s%s%s", (unsigned long long) hash, alphaMode == 0 ? (forced ? (forced == 4 ? "composite pass 1" : "composite pass 2") : "blended layer passes") : "opaque draws, alpha 1", free, forced >= 1 ? "a paint layer's stage; the black marker takes that layer out" : free == detail ? "the shader's detail stage; the marker's grey stands in for the detail" : "a stage the shader does not declare: reads nothing in-frame", swapped, unlit ? ", lighting and fog removed (albedo output)" : sims3cam::wantsUnlitPatch(hash) ? ", lighting NOT removed (final instruction not the expected mad)" : "", alphaOne ? (alpha ? ", alpha forced to 1" : ", alpha NOT forced (no free constant)") : "", (h.boundFmt[free] == 50u && h.boundW[free] == 16 && h.boundH[free] == 16) ? "; the swapped stage holds the game's 16x16 light map, whose doubled sample becomes the marker's grey = 1" : lightMapStage < 0 ? "; no 16x16 light map bound" : "; NOTE: the 16x16 light map is bound at another stage, so that map is baked");
-    Logger::info(msg);
-  }
   freeStage = free;
   return ps;
 }
@@ -242,10 +236,5 @@ bool sims3BeginTerrainDraw(Sims3Hook& h, Dev* dev, uint8_t kind) {
   h.psRestore = h.psBound; h.psRestore->AddRef();
   h.swappingPs = true; dev->SetPixelShader(variant); h.swappingPs = false;
   if (kind == 2) ++h.terrainLayerDraws; else if (kind != 3) ++h.terrainBaseDraws;   // kind 3 pieces: mergePaintPieces
-  if (h.terrainLogged < 8) {
-    ++h.terrainLogged; char fb[16]; char msg[320];
-    snprintf(msg, sizeof msg, "Sims 3 camera hook: terrain draw for the baker at frame %u -> VS %016llx PS %016llx, %s, game's stage 0 (%s %ux%u) read from s%d, marker at stage 0%s", h.frames + 1, (unsigned long long) h.vsHash, (unsigned long long) h.psHash, kind == 2 ? (h.splitDraw ? (h.lotFurtherCopy ? "lot chunk copy (hidden, two halves)" : "lot re-submission (hidden, two halves)") : "layer pass (hidden)") : kind == 3 ? "square piece (paints only, hidden)" : (h.reissue ? "a square's merged shape" : "base terrain"), (h.boundKind[0] & 0x7F) == 2 ? "CUBE" : sims3FormatName(h.boundFmt[0], fb, sizeof fb), (unsigned) h.boundW[0], (unsigned) h.boundH[0], freeStage, h.markersConfigSent ? "" : " (markers untagged: nothing is baked until they are tagged in the menu)");
-    Logger::info(msg);
-  }
   return true;
 }

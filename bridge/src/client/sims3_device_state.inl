@@ -18,7 +18,7 @@ struct Sims3Hook {
   // there has no hash and would drop the draw).
   bool vsSkyDome = false;              // the bound vertex shader is a sky dome's (isSkyDomeShader)
   bool viewportOurs = false; D3DVIEWPORT9 gameViewport = {};   // the game's viewport while the depth-1 one is set
-  uint32_t skyDraws = 0, skyLogged = 0;
+  uint32_t skyDraws = 0;
   uint32_t frames = 0;                 // Present count, for periodic diagnostics
   uint32_t capturedDraws = 0, overrideDraws = 0, remapCount[16] = {};   // per-stage remap statistics
   bool rtIsPrimary = true;             // render target 0 is backbuffer-sized (the 3D pass)
@@ -33,8 +33,7 @@ struct Sims3Hook {
   // The albedo's own sampler states, moved to stage 0 with it (milestone 68): the runtime reads
   // stage 0's -- the sRGB flag picks the decode, the addressing and filters the sampling.
   DWORD remapSamplerSaved[7] = {}; uint8_t remapSamplerSet = 0;
-  uint32_t remapSamplerDraws = 0, remapSrgbDraws = 0, remapSamplerLogged = 0;
-  uint64_t remapSamplerLoggedPs[24] = {};
+  
   uint32_t cutShaders = 0, cutLogged = 0; uint64_t cutLoggedPs[32] = {};   // pixel shaders analysed with a cut-out; their first draws logged (milestone 68)
   uint32_t fadeShaders = 0, fadeLogged = 0; uint64_t fadeLoggedPs[16] = {};   // pixel shaders whose alpha is "fade - alpha"; their first draws logged (milestone 135)
   bool loggedMain = false, loggedOther = false, loggedDraw3D = false, loggedDraw2D = false, loggedRemap = false;
@@ -46,9 +45,9 @@ struct Sims3Hook {
   uint32_t loggedTintRegs = 0;         // tint registers whose first forwarded value was logged
   uint32_t streetLogged = 0; int streetSaid = -1;   // the street lamps' state as last logged
   bool fogReady = false, fogOurs = false, fogApiWarned = false; DWORD fogSaved[5] = {};   // the game's fog for the runtime (milestone 56)
-  float fogBright = 0.f, fogShare = 0.f, fogScaleNow = -1.f, fogScaleLogged = -1.f; uint32_t fogScaleFrame = 0, fogScaleSends = 0;   // its brightness, lit as the scene is lit (milestone 57)
-  uint32_t fogColour = 0, fogLoggedColour = 0, fogFrameDraws = 0, fogDraws = 0, gameFogDraws = 0, fogLogged = 0;
-  float fogStart = 0.f, fogEnd = 0.f, fogCurve = 1.f, fogLoggedEnd = -1.f, fogLoggedCurve = -1.f; uint32_t fogScaleLines = 0;   // the fog's two log lines, each with its own cap (milestone 58)
+  float fogBright = 0.f, fogShare = 0.f, fogScaleNow = -1.f; uint32_t fogScaleFrame = 0, fogScaleSends = 0;   // its brightness, lit as the scene is lit (milestone 57)
+  uint32_t fogColour = 0, fogFrameDraws = 0, fogDraws = 0;
+  float fogStart = 0.f, fogEnd = 0.f, fogCurve = 1.f; // the fog's two log lines, each with its own cap (milestone 58)
   sims3cam::Sun sun = {}, moon = {};   // the two lights of the sky as the runtime holds them
   bool sunSet = false, moonSet = false, skySet = false, loggedSun = false;
   sims3cam::SkyLights sky;             // the game's one light as the sun's and the moon's, with the sun's afterglow at dusk (milestones 42, 44)
@@ -57,9 +56,9 @@ struct Sims3Hook {
   const float* lightRec = nullptr; uint32_t lightRecLogged = 0, framesFromGame = 0;
   void* moonApi = nullptr; uint32_t twilightLogged = 0;
   uint64_t statsTick = 0; uint32_t statsFrame = 0;   // the last statistics, for the frame rate
-  uint32_t sunChanges = 0, sunLogged = 0, sunLogFrame = 0; float sunLogLum = -1.f, sunLogDir[3] = {};   // the sun trace (milestone 19d)
+  uint32_t sunChanges = 0;
   bool rsSet[256] = {};                              // render states the game has set at least once (the array's initial values are not trusted)
-  uint32_t invisibleDrawsSkipped = 0, invisibleLogged = 0;   // captured draws whose render states make them invisible in-game (colour writes off, ...)
+  uint32_t invisibleDrawsSkipped = 0;   // captured draws whose render states make them invisible in-game (colour writes off, ...)
   bool vsCapturedUv = false;           // bound vertex shader's draws sample with its captured TEXCOORD0 output
   bool uvIndexHidden = false;          // stage 0's D3DTSS_TEXCOORDINDEX currently points at the unused set 7
   bool loggedCapturedUv = false;
@@ -70,10 +69,9 @@ struct Sims3Hook {
   static constexpr int kShaderStats = 96;
   ShaderStat shaderStats[kShaderStats] = {};   // captured draws per (vertex shader, pixel shader) since the last table (further pairs are not recorded)
   int shaderStatCount = 0;
-  uint32_t loggedShapes = 0;   // light kinds whose first shaped lamp has been logged (milestone 32)
   // the lamp reporter's block (milestones 36, 39): this frame's records, as read
   std::vector<float> lampRecords, lampRecordsNext; std::vector<int32_t> lampInts, lampIntsNext;
-  uint32_t lampReported = 0, lampReportReads = 0, lampReportStale = 0, lampReportFails = 0, lampReportScanFrame = 0, lampWordsLogged = 0;
+  uint32_t lampReported = 0, lampReportReads = 0, lampReportFails = 0, lampReportScanFrame = 0;
   uint32_t lampsOn = 0, lampsUndefined = 0, lampsBeyondBudget = 0;   // this frame: reported lit, of those without a definition, of those beyond lampMax; the ways a definition was found so far
   uint64_t lampUndefinedKeys[64] = {}; uint32_t lampUndefinedCount = 0;   // the models without a definition the log has named
   bool lampReportLive = false, lampReportWorld = false, lampReportAnnounced = false;
@@ -101,7 +99,7 @@ struct Sims3Hook {
   const sims3cam::CameraCard* vsCard = nullptr;   // ...and whether it turns cards to the camera (milestone 136)
   uint32_t cardDraws = 0, cardNotCamera = 0;   // leaf draws faced outward / whose constants were not the camera's axes (milestone 136)
   uint8_t pendingPromote = 0;                     // the coordinate to promote for this draw (0 = none), decided before the variant is bound
-  uint32_t normalVariantsMade = 0, normalDraws = 0, normalHiddenDraws = 0, normalLogged = 0, normalShaderLogged = 0;
+  uint32_t normalVariantsMade = 0, normalDraws = 0, normalHiddenDraws = 0;
   uint32_t vsConverted = 0, vsConvertFailed = 0;   // vs_2_x shaders rewritten as vs_3_0 for a NORMAL output (milestone 11b)
   // Hardware-instanced draws (milestone 12): the runtime's vertex capture keeps one slot per
   // vertex, so every instance of an instanced draw overwrites the same slots and the captured
@@ -109,12 +107,12 @@ struct Sims3Hook {
   // draw is therefore issued once per instance, the instance stream offset stepping through
   // the instance data, with the frequency of stream 0 set to one instance for the duration.
   bool drawCaptured = false;                      // this draw is captured (set by sims3BeginDraw)
-  uint32_t deinstancedDraws = 0, deinstancedInstances = 0, deinstanceLogged = 0;
+  uint32_t deinstancedDraws = 0, deinstancedInstances = 0;
   bool creatingVariant = false;                   // our own CreateVertexShader / CreatePixelShader call: no tables, no dump
   bool swappingVs = false;                        // our own SetVertexShader call: the bound-shader facts stay the game's
   IDirect3DVertexShader9* autoVsRestore = nullptr; // the game's shader to re-bind after a swapped draw
   bool autoCapturedUv = false;                    // this draw samples with the captured TEXCOORD0 by the auto decision
-  uint32_t autoDraws = 0, autoVariantsMade = 0, autoNoAlbedo = 0, autoLogged = 0;
+  uint32_t autoDraws = 0, autoVariantsMade = 0, autoNoAlbedo = 0;
   uint32_t autoTexcoordDraws = 0;                 // tabled pixel shader on an untabled vertex shader: coordinate from the bytecode
   // The hook's state changes used to stay on the device after a captured draw -- stage 0's
   // texture-coordinate index at 7, its colour stage rewired to TEXTURE x TFACTOR, the texture factor,
@@ -163,16 +161,14 @@ struct Sims3Hook {
   MaskEntry masks[kMasks]; uint32_t maskUse = 0;
   struct HashEntry { bool used; uint32_t id, version, lastUse; uint64_t hash; };
   HashEntry bufHashes[kBufHashes] = {}; uint32_t bufHashUse = 0;
-  uint32_t wallDraws = 0, wallCutDraws = 0, wallCutTriangles = 0, wallRemovedTriangles = 0, wallHiddenTriangles = 0, wallBuilt = 0, wallEvicted = 0, wallBuildFailed = 0, wallRefused = 0, wallSkipped = 0, wallNoOpeningTest = 0, wallLogged = 0, wallSkipLogged = 0, wallHiddenLogged = 0, wallMasksDecoded = 0;
+  uint32_t wallDraws = 0, wallCutDraws = 0, wallCutTriangles = 0, wallRemovedTriangles = 0, wallHiddenTriangles = 0, wallBuilt = 0, wallEvicted = 0, wallBuildFailed = 0, wallRefused = 0, wallSkipped = 0, wallNoOpeningTest = 0, wallSkipLogged = 0, wallMasksDecoded = 0;
   // Reflection passes (runs 66-68): the ray tracer renders reflections itself, so the 3D draws of
   // every reflection pass -- the sea/pool pass, a wall mirror's stencil pass -- are dropped on the
   // client: those under a mirrored camera upload, and those carrying the stencil mirror's render
   // states (draws whose own constants never reach the classifier).
   bool camMirrored = false;                       // the last classified camera upload was a reflection's
-  bool cameraValidBeforeMirror = false;           // ...and whether the main camera held before it (milestone 85)
   bool drawDropped = false;                       // this draw is a reflection pass's (set by sims3BeginDraw; the draw returns at once)
-  uint32_t mirrorPassEnds = 0;   // mirrored passes ended by a draw culling clockwise (milestone 85)
-  uint32_t mirroredUploads = 0, reflectionDrops = 0, reflectionDropsByStates = 0, reflectionFrames = 0, reflectionFrame = 0xFFFFFFFFu, reflectionLogged = 0;
+  uint32_t mirroredUploads = 0, reflectionDrops = 0, reflectionFrames = 0, reflectionFrame = 0xFFFFFFFFu;
   // The lot terrain drawn once per world chunk (milestone 16, sims3cam::LotCopies): the World
   // rows c4..c6 as last uploaded, the lot meshes drawn this frame, and the copies dropped.
   float rows4to6[12] = {};
@@ -221,7 +217,6 @@ struct Sims3Hook {
   // versions and range), and this frame's kept wall triangles per vertex buffer
   std::unordered_map<uint64_t, std::vector<uint64_t>> wallPieceTris;
   std::unordered_map<uint32_t, std::unordered_set<uint64_t>> wallFrameTris;
-  uint32_t wallBackLogged = 0;
   DWORD blendSaved = 0; bool blendOurs = false;
   uint32_t glassLogged = 0; uint64_t glassLoggedPs[32] = {};
   IDirect3DTexture9* mirrorMarker = nullptr; bool mirrorMarkerFailed = false; uint32_t mirrorDraws = 0;   // mirrors (milestone 101)
@@ -232,7 +227,7 @@ struct Sims3Hook {
   struct GlassSide { IDirect3DIndexBuffer9* ib = nullptr; uint32_t prims = 0, dropped = 0; };
   std::unordered_map<uint64_t, GlassSide> glassSides;
   IDirect3DIndexBuffer9* glassIb = nullptr; uint32_t glassPrims = 0;
-  uint32_t glassSideDraws = 0, glassSideSkipped = 0, glassSideLogged = 0; uint64_t glassSideTris = 0;
+  uint32_t glassSideDraws = 0, glassSideSkipped = 0; uint64_t glassSideTris = 0;
   const D3DVERTEXELEMENT9* declElems = nullptr;   // the bound declaration's elements (its POSITION, for the back side; its inputs, for the place)
   // glass carries its object's place (milestone 119, sims3GlassWorld): the vertex shaders' bytecode by
   // hash, whether this draw has the hook's WORLD transform, counts
@@ -262,7 +257,7 @@ struct Sims3Hook {
   // which the ray tracer gamma-corrects itself.
   DWORD cwRestore = 0; bool cwOurs = false;      // the game's COLORWRITEENABLE while the hook's full mask is set
   DWORD atSaved[3] = {}; bool atOurs = false;    // the game's ALPHATESTENABLE / ALPHAFUNC / ALPHAREF while the hook's alpha test is set (a cut-out, milestones 67-68)
-  uint32_t terrainBaseDraws = 0, terrainLayerDraws = 0, terrainLotCopyDraws = 0, terrainNoVariant = 0, terrainLogged = 0, psVariantsMade = 0, psVariantsUnlit = 0, psVariantsAlpha = 0, psVariantLogged = 0, samplerCopies = 0, srgbOffs = 0;
+  uint32_t terrainBaseDraws = 0, terrainLayerDraws = 0, terrainLotCopyDraws = 0, terrainNoVariant = 0, psVariantsMade = 0, psVariantsUnlit = 0, psVariantsAlpha = 0, psVariantLogged = 0, samplerCopies = 0, srgbOffs = 0;
   // the town ground's squares (milestone 60, design B): per square (one vertex buffer), the
   // opaque pieces the merged shape is made of and the shape's own index buffer
   struct Square {
@@ -290,12 +285,12 @@ struct Sims3Hook {
   struct PlateEntry { uint64_t key = 0; IDirect3DIndexBuffer9* house = nullptr; IDirect3DIndexBuffer9* plate = nullptr; IDirect3DIndexBuffer9* glow = nullptr; IDirect3DVertexBuffer9* glowVb = nullptr; uint32_t houseMin = 0, houseNum = 0, housePrims = 0, plateMin = 0, plateNum = 0, platePrims = 0, glowMin = 0, glowNum = 0, glowPrims = 0, glowStride = 0, lastFrame = 0; bool ok = false; };
   std::vector<PlateEntry> plates;
   IDirect3DPixelShader9* platePs = nullptr; bool platePsFailed = false;
-  uint32_t plateDraws = 0, plateTriangles = 0, plateBuilds = 0, plateNone = 0, plateFailed = 0, plateLogged = 0;
+  uint32_t plateDraws = 0, plateTriangles = 0, plateBuilds = 0, plateNone = 0, plateFailed = 0;
   uint32_t glowDraws = 0, glowTriangles = 0, glowModels = 0;   // the low-detail lots' window glow passes (milestone 70)
   struct GlowTex { uint64_t key = 0; IDirect3DTexture9* tex = nullptr; uint32_t lastFrame = 0; };   // window-only copies of the glow atlases (milestone 71)
   std::vector<GlowTex> glowTexs; uint32_t glowTexMade = 0, glowTexFailed = 0;
   std::vector<Square> squares; int mergePending = -1;
-  uint32_t mergedDraws = 0, mergePaintPieces = 0, mergeFallbackPieces = 0, mergeBuilds = 0, mergeBuildFailed = 0, mergeLogged = 0, mergeEvicted = 0, mergeSkipped = 0;
+  uint32_t mergedDraws = 0, mergePaintPieces = 0, mergeFallbackPieces = 0, mergeBuilds = 0, mergeBuildFailed = 0, mergeEvicted = 0, mergeSkipped = 0;
   bool drawIndexed = false; D3DPRIMITIVETYPE drawType = D3DPT_TRIANGLELIST; INT drawBase = 0; UINT drawStart = 0, drawPrims = 0;   // the indexed draw call's arguments, for the squares
   bool frameCamSet = false;   // the frame's first main camera is in cam; it holds for the frame (milestone 121)
   // the last main camera verified by its eye: the reference for one the game sends without it (milestone 123)
@@ -307,7 +302,6 @@ struct Sims3Hook {
 std::atomic<const uint8_t*> g_sims3LampBlock { nullptr };
 std::atomic<bool> g_sims3LampScanBusy { false };
 std::atomic<uint32_t> g_sims3LampScans { 0 };
-std::atomic<uint32_t> g_sims3LampScanRegions { 0 }, g_sims3LampScanMegabytes { 0 };   // what the last search read through
 
 template<typename Dev> void sims3TerrainBlockEnd(Sims3Hook& h, Dev* dev);   // defined with the terrain path (milestone 18g)
 template<typename Dev> uint8_t sims3SquarePiece(Sims3Hook& h, Dev* dev);    // defined with the squares (milestone 60)

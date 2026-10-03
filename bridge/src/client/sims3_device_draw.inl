@@ -51,7 +51,7 @@ inline void sims3OnReset(Sims3Hook& h) {
   for (int i = 0; i < 16; ++i) { h.boundTex[i] = nullptr; h.boundColor2D[i] = false; h.boundKind[i] = 0; h.boundFmt[i] = 0; h.boundW[i] = h.boundH[i] = 0; }
   for (uint32_t i = 0; i < h.scratchCount; ++i) { if (h.scratch[i].surf) h.scratch[i].surf->Release(); if (h.scratch[i].tex) h.scratch[i].tex->Release(); h.scratch[i] = Sims3Hook::Scratch(); }
   h.scratchCount = 0; h.copyScratch = -1; h.ourDraw = false; h.rt0W = h.rt0H = 0; h.rt0Fmt = 0; h.rt0Id = 0; h.reflectionRtId = 0; h.rtCubeFace = false;
-  h.held = sims3cam::Held(); h.cameraValid = false; h.camMirrored = false; h.cameraValidBeforeMirror = false; h.drawDropped = false; h.rtIsPrimary = true;
+  h.held = sims3cam::Held(); h.cameraValid = false; h.camMirrored = false; h.drawDropped = false; h.rtIsPrimary = true;
   h.frameCamSet = false; h.eyeCamSet = false;
   h.tssOurs = 0; h.uvIndexHidden = false; h.factorOurs = false; h.sentFactor = 0xFFFFFFFFu; h.gameFactor = 0xFFFFFFFFu;
   h.gameTss0[0] = D3DTOP_MODULATE; h.gameTss0[1] = D3DTA_TEXTURE; h.gameTss0[2] = D3DTA_CURRENT; h.gameTss0[3] = 0;
@@ -101,11 +101,6 @@ bool sims3WallBackSide(Sims3Hook& h, Dev* dev) {
   auto& kept = h.wallFrameTris[vbId];
   uint32_t matched = 0;
   if (sims3cam::isWallBackSide(it->second, kept, matched)) {
-    if (h.wallBackLogged < 12u) {
-      ++h.wallBackLogged;
-      Logger::info(format_string("Sims 3 camera hook: wall back side left out at frame %u -> VS %016llx PS %016llx, vertex buffer %u base %d: %u triangles, all on planes an earlier piece faces the other way",
-                                 h.frames + 1, (unsigned long long) h.vsHash, (unsigned long long) h.psHash, vbId, (int) h.drawBase, (unsigned) h.drawPrims));
-    }
     return true;
   }
   for (uint64_t k : it->second) if (k) kept.insert(k);
@@ -288,11 +283,6 @@ void sims3GlassOneSide(Sims3Hook& h, Dev* dev) {
         side.ib = sims3MakeIndexBuffer(dev, kept);
         side.prims = h.drawPrims - side.dropped;
       }
-      if (side.dropped && h.glassSideLogged < 12u) {
-        ++h.glassSideLogged;
-        Logger::info(format_string("Sims 3 camera hook: glass with a back side at frame %u -> VS %016llx PS %016llx: %u of %u triangles face away on a plane the sheet already covers, left out%s",
-                                   h.frames + 1, (unsigned long long) h.vsHash, (unsigned long long) h.psHash, side.dropped, h.drawPrims, side.ib ? "" : " -- not sent (no index buffer)"));
-      }
     }
     it = h.glassSides.emplace(key, side).first;
   }
@@ -369,7 +359,7 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
   }
   int k = -1;
   ++h.capturedDraws;
-  if (rs[D3DRS_FOGENABLE] && (rs[D3DRS_FOGTABLEMODE] != D3DFOG_NONE || rs[D3DRS_FOGVERTEXMODE] != D3DFOG_NONE)) ++h.gameFogDraws;   // a fog state of the game's own (milestone 56: none expected)
+  if (rs[D3DRS_FOGENABLE] && (rs[D3DRS_FOGTABLEMODE] != D3DFOG_NONE || rs[D3DRS_FOGVERTEXMODE] != D3DFOG_NONE))   // a fog state of the game's own (milestone 56: none expected)
   h.autoCapturedUv = false; h.pendingPromote = 0; h.drawGlass = false;
   // a terrain draw (milestone 17): handed to the runtime's terrain baker with the marker at
   // stage 0 and the game's pixel shader variant; no albedo stage, no vertex shader variant
@@ -565,12 +555,6 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
     D3DVIEWPORT9 vp = h.gameViewport; vp.MinZ = 1.f; vp.MaxZ = 1.f;
     dev->SetViewport(&vp);
     h.viewportOurs = true; ++h.skyDraws;
-    if (h.skyLogged < 3) {
-      ++h.skyLogged; char fb[16]; char msg[288];
-      snprintf(msg, sizeof msg, "Sims 3 camera hook: sky dome draw presented as the runtime's sky at frame %u -> VS %016llx PS %016llx, viewport depth 1, stage 0 %s (%s %ux%u)", h.frames + 1, (unsigned long long) h.vsHash, (unsigned long long) h.psHash, k > 0 ? "presented from stage" : "as bound", k > 0 ? sims3FormatName(h.boundFmt[k], fb, sizeof fb) : sims3FormatName(h.boundFmt[0], fb, sizeof fb), (unsigned) h.boundW[k > 0 ? k : 0], (unsigned) h.boundH[k > 0 ? k : 0]);
-      if (k > 0) { const size_t l = strlen(msg); snprintf(msg + l, sizeof msg - l, " s%d", k); }
-      Logger::info(msg);
-    }
   }
   if (k > 0) {
     if (!h.loggedRemap) { h.loggedRemap = true; char msg[192]; snprintf(msg, sizeof msg, "Sims 3 camera hook: first captured draw whose albedo is not at stage 0; presenting stage %d as the albedo for such draws", k); Logger::info(msg); }
@@ -579,21 +563,6 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
     h.inRemap = true; dev->SetTexture(0, h.boundTex[k]); h.inRemap = false;
     // its sampler states go with it (milestone 68); the game's stage 0 states come back in sims3EndDraw
     h.remapSamplerSet = sims3SamplerStatesTo0(h, dev, (DWORD) k, h.remapSamplerSaved);
-    if (h.remapSamplerSet) {
-      ++h.remapSamplerDraws; if (h.remapSamplerSet & (1u << 5)) ++h.remapSrgbDraws;
-      bool seen = false; for (uint32_t i = 0; i < h.remapSamplerLogged; ++i) if (h.remapSamplerLoggedPs[i] == h.psHash) seen = true;
-      if (!seen && h.remapSamplerLogged < 24) {
-        h.remapSamplerLoggedPs[h.remapSamplerLogged++] = h.psHash;
-        static const char* const kNames[Sims3Hook::kSamplerCopies] = { "addressU", "addressV", "mag", "min", "mip", "sRGB", "anisotropy" };
-        char msg[512]; int n = snprintf(msg, sizeof msg, "Sims 3 camera hook: albedo at stage %d keeps its sampler states at stage 0 for VS %016llx PS %016llx:", k, (unsigned long long) h.vsHash, (unsigned long long) h.psHash);
-        for (int i = 0; i < Sims3Hook::kSamplerCopies && n > 0 && n < (int) sizeof msg; ++i) {
-          if (!(h.remapSamplerSet & (1u << i))) continue;
-          DWORD vk = 0; dev->GetSamplerState(0, kSims3SamplerCopy[i], &vk);
-          n += snprintf(msg + n, sizeof msg - n, " %s %lu (stage 0 had %lu)", kNames[i], (unsigned long) vk, (unsigned long) h.remapSamplerSaved[i]);
-        }
-        Logger::info(msg);
-      }
-    }
   }
   return true;
 }
