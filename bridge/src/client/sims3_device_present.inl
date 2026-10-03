@@ -116,8 +116,11 @@ static void sims3LogStats(bool withTable) {
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   lot paint: %u composite second passes, %u lot re-submissions split in two; client copies of surfaces %u MB, address space in use %u of %u MB",
            h.compositePasses, h.splitDraws, (unsigned) (Direct3DSurface9_LSS::sims3ShadowBytes() >> 20), (unsigned) ((ms.ullTotalVirtual - ms.ullAvailVirtual) >> 20), (unsigned) (ms.ullTotalVirtual >> 20));
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   cameras: transforms sent to the runtime %u times; sky dome draws presented as the sky %u; %u captured draws before the frame's camera upload (in %u frames: placed with the previous frame's camera); %u main camera uploads without their eye taken as the camera continued",
-           h.transformSends, h.skyDraws, h.staleCameraDraws, h.staleCameraFrames, h.continuedUploads);
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   cameras: transforms sent to the runtime %u times; sky dome draws presented as the sky %u; %u main camera uploads without their eye taken as the camera continued",
+           h.transformSends, h.skyDraws, h.continuedUploads);
+  Logger::info(msg);
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   passes Remix never shows (milestone 124): %u shadow map draws, %u sky cube draws, %u water reflection draws dropped",
+           h.unshownDrops[sims3cam::kShadowMapPass], h.unshownDrops[sims3cam::kSkyCubePass], h.unshownDrops[sims3cam::kWaterReflectionPass]);
   Logger::info(msg);
   if (!withTable) return;
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   captured draws per shader pair since the last table (%d pairs%s; textures as first seen, render states as last seen):", h.shaderStatCount, h.shaderStatCount >= Sims3Hook::kShaderStats ? ", table full" : "");

@@ -252,6 +252,16 @@ int main() {
   Camera S = {}; const Kind kS = classify(kShadow, 12, S);
   CHECK(kS == Kind::None, "90-degree square shadow camera: %s", kindName(kS));
 
+  // --- the passes Remix never shows (milestone 124), from the in-world trace's targets
+  CHECK(unshownPass(false, 2048, 2048, 0, false, false) == kShadowMapPass, "a 2048x2048 offscreen target written with colour writes off: the shadow map");
+  CHECK(unshownPass(true, 1920, 1080, 0, false, false) == -1, "the screen with colour writes off (a stencil or depth pass of the main view): kept");
+  CHECK(unshownPass(false, 2048, 2048, 0xF, false, false) == -1, "a square offscreen target written with colour: not the shadow map");
+  CHECK(unshownPass(false, 128, 128, 0, false, false) == -1 && unshownPass(false, 128, 128, 1, false, false) == -1, "the 128x128 target (colour writes 1 in the trace): kept");
+  CHECK(unshownPass(false, 1024, 512, 0, false, false) == -1, "a depth-only pass into a non-square offscreen target: kept");
+  CHECK(unshownPass(false, 64, 64, 0xF, true, false) == kSkyCubePass, "a cube map's face: the sky's environment cube");
+  CHECK(unshownPass(false, 512, 512, 0xF, false, true) == kWaterReflectionPass && unshownPass(false, 512, 512, 7, false, true) == kWaterReflectionPass, "the target a reflection camera drew into: the water's reflection, whatever its draws write");
+  CHECK(unshownPass(true, 1920, 1080, 0xF, true, true) == -1, "nothing on the screen is ever an unshown pass");
+
   // --- draw-time decision (milestone 1d): position layout and depth test
   const D3DVERTEXELEMENT9 mesh[]   = { {0,0,D3DDECLTYPE_FLOAT3,0,D3DDECLUSAGE_POSITION,0}, {0,12,D3DDECLTYPE_FLOAT3,0,D3DDECLUSAGE_NORMAL,0}, D3DDECL_END() };
   const D3DVERTEXELEMENT9 packed[] = { {0,0,D3DDECLTYPE_SHORT4,0,D3DDECLUSAGE_POSITION,0}, {0,8,D3DDECLTYPE_SHORT4,0,D3DDECLUSAGE_TEXCOORD,0}, D3DDECL_END() };

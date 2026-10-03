@@ -50,7 +50,7 @@ inline void sims3OnReset(Sims3Hook& h) {
   h.declIs3D = false; h.drawCaptured = false; h.autoCapturedUv = false;
   for (int i = 0; i < 16; ++i) { h.boundTex[i] = nullptr; h.boundColor2D[i] = false; h.boundKind[i] = 0; h.boundFmt[i] = 0; h.boundW[i] = h.boundH[i] = 0; }
   for (uint32_t i = 0; i < h.scratchCount; ++i) { if (h.scratch[i].surf) h.scratch[i].surf->Release(); if (h.scratch[i].tex) h.scratch[i].tex->Release(); h.scratch[i] = Sims3Hook::Scratch(); }
-  h.scratchCount = 0; h.copyScratch = -1; h.ourDraw = false; h.rt0W = h.rt0H = 0; h.rt0Fmt = 0;
+  h.scratchCount = 0; h.copyScratch = -1; h.ourDraw = false; h.rt0W = h.rt0H = 0; h.rt0Fmt = 0; h.rt0Id = 0; h.reflectionRtId = 0; h.rtCubeFace = false;
   h.held = sims3cam::Held(); h.cameraValid = false; h.camMirrored = false; h.cameraValidBeforeMirror = false; h.drawDropped = false; h.rtIsPrimary = true;
   h.frameCamSet = false; h.eyeCamSet = false;
   h.tssOurs = 0; h.uvIndexHidden = false; h.factorOurs = false; h.sentFactor = 0xFFFFFFFFu; h.gameFactor = 0xFFFFFFFFu;

@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-123).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-124).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -36,7 +36,9 @@
  *
  * The ray tracer renders reflections itself, so nothing of a reflection pass is sent on: its
  * 3D draws are dropped on the client (recognised by the mirrored camera, or by the stencil
- * mirror's render states for draws whose own constants never reach the classifier). Any
+ * mirror's render states for draws whose own constants never reach the classifier). The
+ * passes whose result Remix never shows -- the shadow map, the sky's environment cube, the
+ * water's reflection target -- are dropped whole (milestone 124, unshownPass). Any
  * other draw that is not captured gets the identity transforms, i.e. plain rasterization, so
  * it looks exactly as it did without the hook.
  *
@@ -329,6 +331,22 @@ inline bool endsMirroredPass(bool cameraMirrored, DWORD cullMode) { return camer
 // upload was a mirrored one, or the draw carries the stencil mirror's render states.
 inline bool isReflectionDraw(bool cameraMirrored, bool declIs3D, DWORD zEnable, DWORD stencilEnable, DWORD cullMode) {
   return declIs3D && zEnable != D3DZB_FALSE && (cameraMirrored || isMirrorPass(stencilEnable, cullMode));
+}
+
+// A pass whose result Remix never shows (milestone 124): the ray tracer makes its own shadows, sky
+// light and reflections, so these draws are dropped whole. The in-world trace, per frame: the shadow
+// map (a 2048x2048 target written with colour writes off: depth only) ~72 draws, the water's
+// reflection (its own 512x512 target, the one a reflection camera draws into) ~53, one face of the
+// sky's environment cube (64x64, a cube map's face) ~5-12; the screen ~226. Only offscreen targets.
+// The game's shadow setting stays on: with it off the game draws its terrain with other shaders,
+// the ones the sun is read from.
+enum UnshownPass { kShadowMapPass = 0, kSkyCubePass = 1, kWaterReflectionPass = 2, kUnshownPasses = 3 };
+inline int unshownPass(bool rtIsPrimary, unsigned rtW, unsigned rtH, DWORD colourWrites, bool rtCubeFace, bool rtReflection) {
+  if (rtIsPrimary) return -1;
+  if (rtCubeFace) return kSkyCubePass;
+  if (rtReflection) return kWaterReflectionPass;
+  if ((colourWrites & 0xF) == 0 && rtW == rtH && rtW >= 256) return kShadowMapPass;
+  return -1;
 }
 
 // A 3D draw of the main pass: a verified camera, a 3D position layout, depth testing on, the

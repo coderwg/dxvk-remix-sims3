@@ -141,6 +141,9 @@ struct Sims3Hook {
   static constexpr uint32_t kScratch = 4;
   Scratch scratch[kScratch]; uint32_t scratchCount = 0;
   uint16_t rt0W = 0, rt0H = 0; uint32_t rt0Fmt = 0;   // render target 0 as the game set it
+  // milestone 124: render target 0's bridge id and whether it is a cube map's face; the id of the target a
+  // reflection camera drew into; the draws of the passes Remix never shows, dropped (sims3cam::UnshownPass)
+  size_t rt0Id = 0, reflectionRtId = 0; bool rtCubeFace = false; uint32_t unshownDrops[sims3cam::kUnshownPasses] = {};
   uint8_t copyMask = 0; int copyScratch = -1; uint32_t maskEmuC = 0, maskEmuCopyLogged = 0, copyFailed = 0;
   // Wall openings (milestone 13): the windows and doors the wall pixel shaders cut with a mask
   // are cut into the triangles on the client (sims3_walls.h) and the cut geometry, in the
@@ -297,9 +300,6 @@ struct Sims3Hook {
   // the last main camera verified by its eye: the reference for one the game sends without it (milestone 123)
   sims3cam::Camera eyeCam; bool eyeCamSet = false; uint32_t continuedUploads = 0;
   uint32_t transformSends = 0;
-  // a measure (milestones 120-121): captured draws before the frame's main camera upload (placed with the
-  // previous frame's camera) and the frames they fell in
-  uint32_t staleCameraDraws = 0, staleCameraFrames = 0, staleCameraFrame = 0xFFFFFFFFu;
 } g_sims3;
 
 // the lamp reporter's block (milestone 36): where it was found, and the search for it

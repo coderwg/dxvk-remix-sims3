@@ -1011,8 +1011,14 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetRenderTarget(DWORD RenderTargetInd
   // The Sims 3 camera hook: is render target 0 the backbuffer-sized target (the 3D pass)?
   if (sims3cam::enabled() && RenderTargetIndex == 0) {
     bool primary = true;
-    g_sims3.rt0W = g_sims3.rt0H = 0; g_sims3.rt0Fmt = 0;
+    g_sims3.rt0W = g_sims3.rt0H = 0; g_sims3.rt0Fmt = 0; g_sims3.rt0Id = 0; g_sims3.rtCubeFace = false;
     if (pLssRenderTarget != nullptr) {
+      // which target this is (milestone 124): its bridge id (never reused), and whether it is a cube map's face
+      g_sims3.rt0Id = pLssRenderTarget->getId();
+      if (IUnknown* const parent = pLssRenderTarget->getParent()) {
+        void* cube = nullptr;
+        if (SUCCEEDED(parent->QueryInterface(__uuidof(IDirect3DCubeTexture9), &cube)) && cube) { g_sims3.rtCubeFace = true; static_cast<IUnknown*>(cube)->Release(); }
+      }
       D3DSURFACE_DESC d = {};
       if (SUCCEEDED(pLssRenderTarget->GetDesc(&d))) {
         g_sims3.rt0W = (uint16_t) d.Width; g_sims3.rt0H = (uint16_t) d.Height; g_sims3.rt0Fmt = (uint32_t) d.Format;
@@ -3094,6 +3100,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetVertexShaderConstantF(UINT StartRe
         }
       } else if (kind == sims3cam::Kind::Reflection) {
         if (!h.camMirrored) h.cameraValidBeforeMirror = h.cameraValid;   // what holds again when the pass is over (milestone 85)
+        if (!h.rtIsPrimary) h.reflectionRtId = h.rt0Id;   // the target a reflection camera draws into: the whole pass dropped (milestone 124)
         h.cameraValid = false; h.camMirrored = true;   // a reflection pass: its 3D draws are dropped
         ++h.mirroredUploads;
         if (!h.loggedOther) {

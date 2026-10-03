@@ -38,6 +38,13 @@ template<typename Dev>
 bool sims3ApplyForDraw(Sims3Hook& h, Dev* dev, const DWORD* rs) {
   static const D3DMATRIX kIdentity = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
   const DWORD zEnable = rs[D3DRS_ZENABLE], stencil = rs[D3DRS_STENCILENABLE], cull = rs[D3DRS_CULLMODE];
+  // a pass whose result Remix never shows (milestone 124): the shadow map, the sky's cube, the water's reflection
+  const int unshown = sims3cam::unshownPass(h.rtIsPrimary, h.rt0W, h.rt0H, rs[D3DRS_COLORWRITEENABLE], h.rtCubeFace, h.rt0Id != 0 && h.rt0Id == h.reflectionRtId);
+  if (unshown >= 0) {
+    static const char* const kWhy[sims3cam::kUnshownPasses] = { "shadow map", "sky cube", "water reflection" };
+    h.drawDropped = true; h.dropWhy = kWhy[unshown]; ++h.unshownDrops[unshown];
+    return false;
+  }
   // a mirrored camera's pass is over at the first draw culling clockwise (milestone 85): the main
   // camera, which a mirrored upload never replaces, holds again
   if (sims3cam::endsMirroredPass(h.camMirrored, cull)) { h.camMirrored = false; h.cameraValid = h.cameraValidBeforeMirror; ++h.mirrorPassEnds; }
@@ -59,21 +66,6 @@ bool sims3ApplyForDraw(Sims3Hook& h, Dev* dev, const DWORD* rs) {
   const bool is3D = sims3cam::drawIs3D(h.cameraValid, h.declIs3D, zEnable, h.rtIsPrimary);
   if (sims3LotTerrainCopy(h, dev, is3D)) return false;   // a lot chunk copy without the baker's markers: dropped (milestone 16)
   const bool want = is3D && !sims3cam::neverCaptureDraw(h.vsNeverCapture, rs[D3DRS_ALPHABLENDENABLE]);
-  // a measure (milestones 120-121): a captured draw before the frame's first main camera upload is placed
-  // with the previous frame's camera; the first of such a frame is named at the 1st, 2nd, 4th, 8th ... one
-  if (want && !h.frameCamSet) {
-    ++h.staleCameraDraws;
-    if (h.staleCameraFrame != h.frames) {
-      h.staleCameraFrame = h.frames; ++h.staleCameraFrames;
-      if ((h.staleCameraFrames & (h.staleCameraFrames - 1)) == 0) {
-        char msg[256];
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: a captured draw before the frame's camera upload at frame %u (such frame %u) -> VS %016llx PS %016llx, %s %u primitives, cull %lu, blend %lu, target %ux%u, reflection draws dropped earlier in the frame %d",
-                 h.frames + 1, h.staleCameraFrames, (unsigned long long) h.vsHash, (unsigned long long) h.psHash, h.drawIndexed ? "indexed" : "not indexed", h.drawIndexed ? h.drawPrims : 0u,
-                 (unsigned long) cull, (unsigned long) rs[D3DRS_ALPHABLENDENABLE], (unsigned) h.rt0W, (unsigned) h.rt0H, (int) (h.reflectionFrame == h.frames));
-        Logger::info(msg);
-      }
-    }
-  }
   if (want) {
     if (h.held.kind != sims3cam::Kind::Main || !sims3cam::similarMatrix(h.held.view, h.cam.view, 1e-5f) || !sims3cam::similarMatrix(h.held.proj, h.cam.proj, 1e-5f)) {
       h.held.kind = sims3cam::Kind::Main; h.held.view = h.cam.view; h.held.proj = h.cam.proj;
