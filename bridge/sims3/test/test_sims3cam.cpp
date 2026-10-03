@@ -505,6 +505,71 @@ int main() {
     } else SKIP("ps_00230c49e1b880b6 dump not found");
   }
 
+  // --- leaf cards fixed in the world (milestone 136): the leaf shaders run for a card's four corners
+  // under two cameras; the game's turn with the camera, the variant's stay put, flat, facing out from
+  // the tree's origin, level, the card's size kept
+  {
+    // the camera of a traced frame (c117-c120 its view-projection, c121-c123 the leaves' axes) and a second one
+    const float vp[16] = { -1.70502f, -3.597459e-08f, 1.709191f, 0.f, 2.875988f, 1.385067f, 2.868971f, 0.f,
+                           0.2284907f, -0.9465755f, 0.2279332f, -0.2500208f, 0.2284716f, -0.9464967f, 0.2279142f, 0.f };
+    const float camA[12] = { -0.7062426f, 0.6700911f, -0.2284716f, 1117.602f, 0.f, 0.3227137f, 0.9464967f, 75.21104f, 0.7079699f, 0.6684562f, -0.2279142f, 1022.205f };
+    const float camB[12] = { 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f };
+    Camera traced = {};
+    CHECK(decompose(fromRows(vp), traced) && cardBasisIsCamera(camA, traced) && !cardBasisIsCamera(camB, traced),
+          "cards: the traced leaves' c121-c123 are the traced camera's axes; another basis is not");
+    struct Leaf { const char* name; uint16_t basis; };
+    const Leaf leaves[3] = { { "vs_799a26fa907d36d7", 121 }, { "vs_e0c97675a334022e", 134 }, { "vs_1b5224b7e9bee689", 121 } };
+    for (const Leaf& L : leaves) {
+      std::vector<DWORD> vs;
+      if (!loadShader(L.name, vs)) { SKIP("%s dump not found", L.name); continue; }
+      CameraCard cc;
+      CHECK(analyzeCameraCard(vs.data(), vs.size(), cc) && cc.basisReg == L.basis, "cards: %s turns its leaves to the camera with c%u-c%u (found c%u)", L.name, (unsigned) L.basis, (unsigned) L.basis + 2u, (unsigned) cc.basisReg);
+      std::vector<DWORD> out = vs;
+      const bool made = makeOutwardCards(out);
+      static float bank[256][4];
+      // one corner of a leaf centred at (2, 5, 1) of a tree at (10, 0, 20), unturned, unscaled, no wind, no rocking
+      auto run = [&](const std::vector<DWORD>& t, const float* cam, int corner, float p[4]) -> bool {
+        memset(bank, 0, sizeof bank);
+        const float c0[4] = { 10.f, 0.f, 20.f, 1.f }, c1[4] = { 1.f, 0.f, 0.f, 0.f }, c2[4] = { 1.f, 0.33f, 1.f, 1.f }, rock[4] = { 1.f, 0.f, 1.f, 0.f };
+        memcpy(bank[0], c0, 16); memcpy(bank[1], c1, 16); memcpy(bank[2], c2, 16);
+        for (int i = 0; i < 3; ++i) bank[81 + i][i] = 1.f;
+        memcpy(bank[105], rock, 16); memcpy(bank[114], rock, 16);
+        for (int i = 0; i < 4; ++i) { bank[117 + i][i] = 1.f; bank[130 + i][i] = 1.f; }
+        memcpy(bank[L.basis], cam, 48);
+        float in[16][4] = {};
+        const float v0[4] = { 2.f, 5.f, 1.f, 1.f }, v1[4] = { 127.f, 127.f, 255.f, 127.f }, v3[4] = { 1.f, 1.f, 1.f, 1.f }, v4[4] = { 0.f, 0.f, 0.f, 1.f };
+        memcpy(in[0], v0, 16); memcpy(in[1], v1, 16); memcpy(in[3], v3, 16); memcpy(in[4], v4, 16);
+        in[5][2] = (float) corner;
+        VsConstants kc; kc.f = &bank[0][0]; VsRun r;
+        return evalVsPosition(t.data(), t.size(), in, kc, p, r);
+      };
+      const float centre[3] = { 12.f, 5.f, 21.f }, nl = std::sqrt(30.f), n[3] = { 2.f / nl, 5.f / nl, 1.f / nl };
+      bool ran = true, turns = false, fixed = made, flat = made, sized = made;
+      float corners[4][4] = {};
+      for (int k = 0; k < 4 && ran; ++k) {
+        float a[4], b[4], pa[4], pb[4];
+        if (!run(vs, camA, k, a) || !run(vs, camB, k, b)) { ran = false; break; }
+        if (std::fabs(a[0] - b[0]) + std::fabs(a[1] - b[1]) + std::fabs(a[2] - b[2]) > 1e-3f) turns = true;
+        if (!made) continue;
+        if (!run(out, camA, k, pa) || !run(out, camB, k, pb)) { ran = false; break; }
+        if (std::fabs(pa[0] - pb[0]) + std::fabs(pa[1] - pb[1]) + std::fabs(pa[2] - pb[2]) > 1e-4f) fixed = false;
+        const float d[3] = { pa[0] - centre[0], pa[1] - centre[1], pa[2] - centre[2] }, od[3] = { b[0] - centre[0], b[1] - centre[1], b[2] - centre[2] };
+        if (std::fabs(d[0] * n[0] + d[1] * n[1] + d[2] * n[2]) > 1e-4f) flat = false;
+        if (std::fabs(std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) - std::sqrt(od[0] * od[0] + od[1] * od[1] + od[2] * od[2])) > 1e-4f) sized = false;
+        memcpy(corners[k], pa, sizeof pa);
+      }
+      const bool level = made && ran && std::fabs(corners[1][1] - corners[0][1]) < 1e-4f && std::fabs(corners[1][0] - corners[0][0]) + std::fabs(corners[1][2] - corners[0][2]) > 0.5f;
+      CHECK(ran && turns, "cards: %s as the game has it turns its leaf with the camera", L.name);
+      CHECK(made && ran && fixed && flat && sized && level,
+            "cards: %s's variant holds the leaf still under both cameras (%d), flat across the centre's direction from the tree (%d), its top edge level (%d), its size kept (%d)", L.name, (int) fixed, (int) flat, (int) level, (int) sized);
+    }
+    std::vector<DWORD> branch, obj;
+    if (loadShader("vs_854fd850257ee36f", branch) && loadShader("vs_0ba6ddb9aa01913c", obj)) {
+      CameraCard a, b;
+      CHECK(!analyzeCameraCard(branch.data(), branch.size(), a) && !analyzeCameraCard(obj.data(), obj.size(), b), "cards: the branches' VS 854fd850 and an object's VS 0ba6ddb9 build no camera-facing cards");
+    } else SKIP("vs_854fd850 / vs_0ba6ddb9 dumps not found");
+  }
+
   // --- the world normal from the vertex shader (milestone 11), on the in-game shader dumps
   {
     std::vector<DWORD> obj, sim, wallsB3, roof, floors, psObj;

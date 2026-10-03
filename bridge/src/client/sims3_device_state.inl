@@ -93,12 +93,14 @@ struct Sims3Hook {
   uint8_t psMajor = 0;                            // the bound pixel shader's major version (milestone 56)
   IDirect3DVertexShader9* vsBound = nullptr;      // the vertex shader the game bound (for the variant swap)
   bool vsTabled = false;                          // it has a captured-UV or never-capture entry: no auto coordinate, no variants
-  struct VsVariant { IDirect3DVertexShader9* base; uint64_t hash; uint8_t texcoord; uint8_t normalOut; bool constRead; IDirect3DVertexShader9* variant; };
+  struct VsVariant { IDirect3DVertexShader9* base; uint64_t hash; uint8_t texcoord; uint8_t normalOut; bool constRead; bool outward; IDirect3DVertexShader9* variant; };
   static constexpr uint32_t kVsVariants = 512;
-  VsVariant vsVariants[kVsVariants] = {};         // one per (shader, coordinate, normal, c255 read); keyed by pointer AND hash (an address may be reused); variant null = could not be made
+  VsVariant vsVariants[kVsVariants] = {};         // one per (shader, coordinate, normal, c255 read, outward cards); keyed by pointer AND hash (an address may be reused); variant null = could not be made
   uint32_t vsVariantCount = 0, vsVariantsFull = 0;   // ...and the draws that found the table full
   const sims3cam::VsNormalInfo* vsNormal = nullptr;   // the bound (game) vertex shader's normal facts
   const sims3cam::VsConstantOutputs* vsConstOut = nullptr;   // ...and the constants it hands the pixel shader (milestone 135)
+  const sims3cam::CameraCard* vsCard = nullptr;   // ...and whether it turns cards to the camera (milestone 136)
+  uint32_t cardDraws = 0, cardNotCamera = 0, cardLogged = 0; uint64_t cardLoggedVs[8] = {};   // leaf draws faced outward / whose constants were not the camera's axes (milestone 136)
   uint8_t pendingPromote = 0;                     // the coordinate to promote for this draw (0 = none), decided before the variant is bound
   uint32_t normalVariantsMade = 0, normalDraws = 0, normalHiddenDraws = 0, normalLogged = 0, normalShaderLogged = 0;
   uint32_t vsConverted = 0, vsConvertFailed = 0;   // vs_2_x shaders rewritten as vs_3_0 for a NORMAL output (milestone 11b)

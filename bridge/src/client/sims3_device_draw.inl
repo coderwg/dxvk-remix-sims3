@@ -43,7 +43,7 @@ inline void sims3OnReset(Sims3Hook& h) {
   h.compositePass = 0; h.extraActive = false; h.splitDraw = false; h.ourConsts = false; h.reissue = false; h.reissueKind = 0; h.compositeSecond = false;
   for (int i = 0; i < 2; ++i) { if (h.extraRestore[i]) h.extraRestore[i]->Release(); h.extraRestore[i] = nullptr; }
   h.remapActive = false; h.maskEmu = 0; h.viewportOurs = false; h.vsSkyDome = false;
-  h.vsBound = nullptr; h.vsTabled = false; h.vsNormal = nullptr; h.vsConstOut = nullptr; h.pendingPromote = 0; h.vsHash = 0;
+  h.vsBound = nullptr; h.vsTabled = false; h.vsNormal = nullptr; h.vsConstOut = nullptr; h.vsCard = nullptr; h.pendingPromote = 0; h.vsHash = 0;
   h.patch = nullptr; h.vsNeverCapture = 0; h.vsCapturedUv = false;
   h.lotCopies.clear();
   h.psAuto = nullptr; h.psAlbedoStage = -1; h.psTintReg = -1; h.psHash = 0; h.psNeverCapture = 0;
@@ -456,10 +456,11 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
     // instance's, read from the constant the vertex shader hands over
     if (k >= 0 && h.psAuto && h.psAuto->valid && h.psAuto->fadeSampler == k && rs[D3DRS_ALPHATESTENABLE] && !h.atOurs && h.vsConstOut) {
       const int fc = h.vsConstOut->c[h.psAuto->fadeInput];
+      const DWORD gameFunc = rs[D3DRS_ALPHAFUNC], gameRef = rs[D3DRS_ALPHAREF];
       float v[4] = {};
       if (fc >= 0) dev->GetVertexShaderConstantF((UINT) (fc >> 2), v, 1);
       const float fade = fc >= 0 ? v[fc & 3] : 0.f;
-      uint32_t ref = 0; const uint32_t func = fc >= 0 ? sims3cam::fadeAlphaTest(rs[D3DRS_ALPHAFUNC], rs[D3DRS_ALPHAREF], fade, ref) : 0u;
+      uint32_t ref = 0; const uint32_t func = fc >= 0 ? sims3cam::fadeAlphaTest(gameFunc, gameRef, fade, ref) : 0u;
       if (func) {
         dev->GetRenderState(D3DRS_ALPHATESTENABLE, &h.atSaved[0]); dev->GetRenderState(D3DRS_ALPHAFUNC, &h.atSaved[1]); dev->GetRenderState(D3DRS_ALPHAREF, &h.atSaved[2]);
         h.atOurs = true; h.ourState = true;
@@ -473,14 +474,32 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
         const int in = h.psAuto->fadeInput, sem = in >> 2;
         snprintf(msg, sizeof msg, "Sims 3 camera hook: fade of PS %016llx (VS %016llx): alpha = %s%d.%c - alpha(s%d); the vertex shader's c%d.%c = %.4f there; the game's test (func %u, ref %u) -> %s %u",
                  (unsigned long long) h.psHash, (unsigned long long) h.vsHash, sem >= sims3cam::kSemColor0 ? "COLOR" : "TEXCOORD", sem >= sims3cam::kSemColor0 ? sem - sims3cam::kSemColor0 : sem, "xyzw"[in & 3], k,
-                 fc >> 2, fc >= 0 ? "xyzw"[fc & 3] : '?', fade, (unsigned) rs[D3DRS_ALPHAFUNC], (unsigned) rs[D3DRS_ALPHAREF],
+                 fc >> 2, fc >= 0 ? "xyzw"[fc & 3] : '?', fade, (unsigned) gameFunc, (unsigned) gameRef,
                  fc < 0 ? "no constant: left as the game's" : func == D3DCMP_GREATEREQUAL ? "alpha test >=" : func == D3DCMP_LESSEQUAL ? "alpha test <=" : func == D3DCMP_NEVER ? "never drawn" : "left as the game's", ref);
         Logger::info(msg);
       }
     }
     // the vertex shader variant for the draw: the promoted coordinate and/or the world normal as a
     // NORMAL output, and on a hardware-instanced draw (split per instance) a read of c255 for the tag
-    sims3BindVariant(h, dev, h.pendingPromote, sims3NormalChoice(h), (freq0 & D3DSTREAMSOURCE_INDEXEDDATA) && (freq0 & 0x3FFFFFFFu) > 1u);
+    // leaves turned to the camera (milestone 136): faced outward from their tree when the shader's
+    // three constants are the frame camera's axes
+    bool outward = false;
+    if (h.vsCard && h.vsCard->valid && h.cameraValid) {
+      float basis[12] = {};
+      dev->GetVertexShaderConstantF(h.vsCard->basisReg, basis, 3);
+      outward = sims3cam::cardBasisIsCamera(basis, h.cam);
+      if (outward) ++h.cardDraws; else ++h.cardNotCamera;
+      bool seen = false; for (uint32_t i = 0; i < h.cardLogged; ++i) if (h.cardLoggedVs[i] == h.vsHash) seen = true;
+      if (!seen && h.cardLogged < 8) {
+        h.cardLoggedVs[h.cardLogged++] = h.vsHash; char msg[320];
+        snprintf(msg, sizeof msg, "Sims 3 camera hook: leaf cards of VS %016llx: c%u-c%u columns (%.3f %.3f %.3f) (%.3f %.3f %.3f) (%.3f %.3f %.3f), the camera's right (%.3f %.3f %.3f) -> %s",
+                 (unsigned long long) h.vsHash, (unsigned) h.vsCard->basisReg, (unsigned) h.vsCard->basisReg + 2u,
+                 basis[0], basis[4], basis[8], basis[1], basis[5], basis[9], basis[2], basis[6], basis[10], h.cam.view._11, h.cam.view._21, h.cam.view._31,
+                 outward ? "the camera's axes: faced outward from their tree" : "not the camera's axes: left as the game draws them");
+        Logger::info(msg);
+      }
+    }
+    sims3BindVariant(h, dev, h.pendingPromote, sims3NormalChoice(h), (freq0 & D3DSTREAMSOURCE_INDEXEDDATA) && (freq0 & 0x3FFFFFFFu) > 1u, outward);
   }
   if (k >= 0 && k < 16) ++h.remapCount[k];
   sims3NoteCapture(h, k, rs, freq0);

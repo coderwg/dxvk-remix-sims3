@@ -216,27 +216,31 @@ inline uint8_t sims3NormalChoice(const Sims3Hook& h) {
 }
 
 // The variant of the bound vertex shader for this draw -- the promoted coordinate, the normal
-// output and/or the c255 read -- made once per (shader, coordinate, normal, read) through the
+// output, the c255 read and/or leaf cards faced outward from their tree (milestone 136) -- made
+// once per (shader, coordinate, normal, read, outward) through the
 // device and re-bound to the game's shader after the draw (sims3EndDraw). The game's shader is
 // held by a reference of the hook's own until then: binding the variant drops the device
 // state's reference to it.
 template<typename Dev>
-void sims3BindVariant(Sims3Hook& h, Dev* dev, uint8_t tc, uint8_t normalOut, bool constRead) {
-  if (!h.vsBound || (tc == 0 && normalOut == 0xFE && !constRead)) return;
+void sims3BindVariant(Sims3Hook& h, Dev* dev, uint8_t tc, uint8_t normalOut, bool constRead, bool outward) {
+  if (!h.vsBound || (tc == 0 && normalOut == 0xFE && !constRead && !outward)) return;
   Sims3Hook::VsVariant* v = nullptr;
   for (uint32_t i = 0; i < h.vsVariantCount; ++i)
-    if (h.vsVariants[i].base == h.vsBound && h.vsVariants[i].hash == h.vsHash && h.vsVariants[i].texcoord == tc && h.vsVariants[i].normalOut == normalOut && h.vsVariants[i].constRead == constRead) { v = &h.vsVariants[i]; break; }
+    if (h.vsVariants[i].base == h.vsBound && h.vsVariants[i].hash == h.vsHash && h.vsVariants[i].texcoord == tc && h.vsVariants[i].normalOut == normalOut && h.vsVariants[i].constRead == constRead
+        && h.vsVariants[i].outward == outward) { v = &h.vsVariants[i]; break; }
   if (!v) {
     if (h.vsVariantCount >= Sims3Hook::kVsVariants) { ++h.vsVariantsFull; }
     else {
       v = &h.vsVariants[h.vsVariantCount++];
-      *v = { h.vsBound, h.vsHash, tc, normalOut, constRead, nullptr };
+      *v = { h.vsBound, h.vsHash, tc, normalOut, constRead, outward, nullptr };
       UINT size = 0;
       if (SUCCEEDED(h.vsBound->GetFunction(nullptr, &size)) && size >= 8) {
         std::vector<DWORD> t(size / 4 + 1);
         if (SUCCEEDED(h.vsBound->GetFunction(t.data(), &size))) {
           t.resize(sims3cam::shaderTokenCount(t.data(), t.size()));
           bool good = t.size() >= 2, hidden = false, converted = false; uint32_t made = 0xFEu;
+          // leaf cards faced outward from their tree (milestone 136), on the game's own bytecode
+          if (good && outward) good = sims3cam::makeOutwardCards(t);
           // a vs_2_x shader cannot declare a NORMAL output: rewritten as vs_3_0 first (the
           // promotion then takes the vs_3_0 path on it)
           if (good && normalOut < 0xFE && h.vsNormal && h.vsNormal->version < 3) { converted = sims3cam::convertVs2To3(t); if (converted) ++h.vsConverted; else ++h.vsConvertFailed; }
@@ -262,7 +266,7 @@ void sims3BindVariant(Sims3Hook& h, Dev* dev, uint8_t tc, uint8_t normalOut, boo
                 if (made != 0xFEu) snprintf(what, sizeof what, "world normal (o%u) repeated into NORMAL output o%u", (unsigned) normalOut, (unsigned) made);
                 else if (hidden) snprintf(what, sizeof what, "packed normal input hidden from the capture (triangle normals)");
                 else snprintf(what, sizeof what, "no normal change");
-                snprintf(msg, sizeof msg, "Sims 3 camera hook: shader variant for VS %016llx -> %s%s%s%s", (unsigned long long) h.vsHash, converted ? "vs_2_0 rewritten as vs_3_0, " : "", tc > 0 ? "texcoord promoted, " : "", what, constRead ? ", c255 read for the per-instance tag" : "");
+                snprintf(msg, sizeof msg, "Sims 3 camera hook: shader variant for VS %016llx -> %s%s%s%s%s", (unsigned long long) h.vsHash, outward ? "leaf cards faced outward from their tree, " : "", converted ? "vs_2_0 rewritten as vs_3_0, " : "", tc > 0 ? "texcoord promoted, " : "", what, constRead ? ", c255 read for the per-instance tag" : "");
                 Logger::info(msg);
               }
             }

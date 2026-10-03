@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-135).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-136).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -861,6 +861,163 @@ inline bool analyzeVertexConstantOutputs(const DWORD* tokens, size_t count, VsCo
   });
   if (flow) out = VsConstantOutputs();
   return !flow;
+}
+
+// ---- leaf cards fixed in the world (milestone 136) -----------------------------------------
+// SpeedTree's leaves are cards turned to the camera. The vertex shader takes each corner's offset
+// in the card's own plane and turns it into the world with the camera's three axes -- one DP3 per
+// world axis against three consecutive constants, each the camera's right, up and back for that
+// axis (VS 799a26fa: dp3 r2.x / r2.y / r2.z, r1.xwyw, c121 / c122 / c123) -- then adds it to the
+// leaf's centre (add r1.xyz, r2, r1). Traced, every leaf turns as the camera turns: its shadow
+// and reflections move with the view and the denoiser smears the turning cards (run 240). The
+// variant turns the offset with a basis of the leaf's own: the card faces outward from its tree
+// -- its back axis the centre's direction from the tree's origin, its right axis level -- the same
+// for the card's four corners, fixed in the world. The pattern is read from the bytecode
+// (findCameraCard); at draw time the three constants must be the frame camera's axes
+// (cardBasisIsCamera) before the variant is used.
+struct CameraCard { bool valid = false; uint16_t basisReg = 0; };
+struct CardSite {
+  size_t dp3[3] = {}, consumer = 0;   // token positions: the DP3s writing x, y, z; the ADD that takes the offset
+  uint32_t offsetSrc = 0;             // the DP3s' common source token: the corner's offset in the card's plane, swizzled
+  uint32_t dst = 0, centre = 0;       // the offset's temp register; the centre's, the ADD's other operand
+  uint16_t basisReg = 0;              // the first of the three constants
+  uint32_t freeTemp[4] = {};          // four temps the shader never names (of vs_2_0's r0-r11)
+  uint32_t freeConst = 0;             // a constant it never names (below c255, the hook's tag read)
+};
+inline bool findCameraCard(const DWORD* t, size_t n, CardSite& s) {
+  s = CardSite();
+  if (!dxsoIsVertexShader(t, n, 2)) return false;
+  bool usedTemp[12] = {}, usedConst[256] = {}, flow = false;
+  struct Dp3 { size_t pos; uint32_t dst, comp, src, c; };
+  Dp3 dps[64]; uint32_t ndp = 0;
+  auto plainSrc = [](uint32_t p) { return ((p >> 24) & 0xFu) == 0u && !(p & (1u << 13)); };   // no modifier, no relative address
+  dxsoForEach(t, n, [&](size_t pos, uint32_t op, uint32_t len) {
+    if (op == kDxsoOpDcl) return true;
+    if (dxsoIsDef(op)) { if (op == 0x51u && len >= 1 && dxsoRegNum(t[pos + 1]) < 256) usedConst[dxsoRegNum(t[pos + 1])] = true; return true; }
+    if ((op >= 0x19u && op <= 0x1Eu) || (op >= 0x26u && op <= 0x2Du) || op == 0x60u) flow = true;
+    for (uint32_t i = 1; i <= len; ++i) {
+      const uint32_t p = t[pos + i];
+      if (!(p & 0x80000000u)) continue;
+      const uint32_t ty = dxsoRegType(p), r = dxsoRegNum(p);
+      if (ty == kDxsoRegTemp && r < 12) usedTemp[r] = true;
+      else if (ty == 2u && r < 256) usedConst[r] = true;
+    }
+    if (op == 0x08u && len == 3 && ndp < 64) {                        // DP3 rD.<x|y|z>, rS.<swizzle>, c#
+      const uint32_t d = t[pos + 1], a = t[pos + 2], b = t[pos + 3], m = (d >> 16) & 0xFu;
+      if (dxsoRegType(d) == kDxsoRegTemp && dxsoRegNum(d) < 12 && ((d >> 20) & 0xFu) == 0u && (m == 1u || m == 2u || m == 4u)
+          && dxsoRegType(a) == kDxsoRegTemp && plainSrc(a) && dxsoRegType(b) == 2u && plainSrc(b) && ((b >> 16) & 0xFFu) == 0xE4u)
+        dps[ndp++] = { pos, dxsoRegNum(d), m == 1u ? 0u : m == 2u ? 1u : 2u, a, dxsoRegNum(b) };
+    }
+    return true;
+  });
+  if (flow) return false;
+  // three DP3s into one temp's x, y, z, from one source, against c[B], c[B+1], c[B+2]
+  int found[3] = { -1, -1, -1 };
+  for (uint32_t i = 0; i < ndp && found[0] < 0; ++i) {
+    if (dps[i].comp != 0u) continue;
+    int f[3] = { (int) i, -1, -1 };
+    for (uint32_t j = 0; j < ndp; ++j)
+      for (uint32_t k = 1; k < 3; ++k)
+        if (dps[j].comp == k && dps[j].dst == dps[i].dst && dps[j].src == dps[i].src && dps[j].c == dps[i].c + k && f[k] < 0) f[k] = (int) j;
+    if (f[1] >= 0 && f[2] >= 0) { found[0] = f[0]; found[1] = f[1]; found[2] = f[2]; }
+  }
+  if (found[0] < 0) return false;
+  for (int k = 0; k < 3; ++k) s.dp3[k] = dps[found[k]].pos;
+  s.dst = dps[found[0]].dst; s.offsetSrc = dps[found[0]].src; s.basisReg = (uint16_t) dps[found[0]].c;
+  const uint32_t srcReg = dxsoRegNum(s.offsetSrc);
+  const size_t first = (std::min)(s.dp3[0], (std::min)(s.dp3[1], s.dp3[2])), last = (std::max)(s.dp3[0], (std::max)(s.dp3[1], s.dp3[2]));
+  // between them the source is not written; until the ADD the offset's x, y, z are neither read nor written
+  bool ok = true;
+  auto readsXyz = [](uint32_t p) { for (uint32_t c = 0; c < 4; ++c) if (((p >> (16 + 2 * c)) & 3u) < 3u) return true; return false; };
+  dxsoForEach(t, n, [&](size_t pos, uint32_t op, uint32_t len) {
+    if (pos <= first || op == kDxsoOpDcl || dxsoIsDef(op) || len < 1) return true;
+    if (pos == s.dp3[0] || pos == s.dp3[1] || pos == s.dp3[2]) return true;
+    const uint32_t d = t[pos + 1];
+    const bool writesTemp = (d & 0x80000000u) && dxsoRegType(d) == kDxsoRegTemp;
+    if (pos < last && writesTemp && dxsoRegNum(d) == srcReg) { ok = false; return false; }
+    bool reads = false;
+    for (uint32_t i = 2; i <= len; ++i) { const uint32_t p = t[pos + i]; if ((p & 0x80000000u) && dxsoRegType(p) == kDxsoRegTemp && dxsoRegNum(p) == s.dst && readsXyz(p)) reads = true; }
+    if (reads) {
+      if (pos < last || op != 0x02u || len != 3) { ok = false; return false; }
+      const uint32_t a = t[pos + 2], b = t[pos + 3];
+      const uint32_t other = dxsoRegNum(a) == s.dst ? b : a, mine = dxsoRegNum(a) == s.dst ? a : b;
+      if (!writesTemp || ((d >> 16) & 7u) != 7u || ((d >> 20) & 0xFu) != 0u || !plainSrc(mine) || ((mine >> 16) & 0xFFu) != 0xE4u
+          || dxsoRegType(other) != kDxsoRegTemp || !plainSrc(other) || ((other >> 16) & 0xFFu) != 0xE4u || dxsoRegNum(other) == s.dst) { ok = false; return false; }
+      s.consumer = pos; s.centre = dxsoRegNum(other);
+      return false;
+    }
+    if (writesTemp && dxsoRegNum(d) == s.dst && (((d >> 16) & 7u) != 0u)) { ok = false; return false; }
+    return true;
+  });
+  if (!ok || s.consumer == 0) return false;
+  uint32_t nf = 0;
+  for (int r = 11; r >= 0 && nf < 4; --r) if (!usedTemp[r]) s.freeTemp[nf++] = (uint32_t) r;
+  if (nf < 4) return false;
+  for (int c = 254; c >= 0; --c) if (!usedConst[c]) { s.freeConst = (uint32_t) c; return true; }
+  return false;
+}
+inline bool analyzeCameraCard(const DWORD* t, size_t n, CameraCard& out) {
+  out = CameraCard();
+  CardSite s;
+  if (!findCameraCard(t, n, s)) return false;
+  out.valid = true; out.basisReg = s.basisReg;
+  return true;
+}
+// Rewrites the stream so the card faces outward from its tree. The first DP3 keeps the offset
+// (mov rT.xyz, rS.<swizzle>), the other two go; before the ADD: n = normalize(centre), right =
+// normalize((n.z, 0, -n.x) + (1e-5, 0, 0)) (level; the small x settles a leaf straight above the
+// origin), up = n x right, and the offset = right * T.x + up * T.y + n * T.z -- the camera's right,
+// up and back replaced by the leaf's own. Returns false (stream untouched) when the pattern is not there.
+inline bool makeOutwardCards(std::vector<DWORD>& t) {
+  CardSite s;
+  if (!findCameraCard(t.data(), t.size(), s)) return false;
+  const uint32_t T = s.freeTemp[0], N = s.freeTemp[1], Rr = s.freeTemp[2], U = s.freeTemp[3], D = s.dst, C = s.centre, K = s.freeConst;
+  auto dstT = [](uint32_t r, uint32_t mask) -> DWORD { return 0x80000000u | (mask << 16) | r; };
+  auto srcT = [](uint32_t r, uint32_t swz) -> DWORD { return 0x80000000u | (swz << 16) | r; };
+  auto srcC = [](uint32_t r, uint32_t swz) -> DWORD { return 0xA0000000u | (swz << 16) | r; };
+  const size_t first = (std::min)(s.dp3[0], (std::min)(s.dp3[1], s.dp3[2]));
+  std::vector<DWORD> r; r.reserve(t.size() + 48);
+  r.push_back(t[0]);
+  const float k[4] = { 1.f, 0.f, -1.f, 1e-5f };
+  r.push_back(0x05000051u); r.push_back(0xA00F0000u | K);              // def c<K>, 1, 0, -1, 1e-5
+  for (float f : k) { DWORD w; std::memcpy(&w, &f, 4); r.push_back(w); }
+  const size_t n = t.size();
+  size_t pos = 1;
+  while (pos < n) {
+    const uint32_t tok = t[pos];
+    if (tok == kDxsoEnd) break;
+    const uint32_t op = tok & 0xFFFFu;
+    if (op == 0xFFFEu) { const size_t len = 1 + ((tok >> 16) & 0x7FFFu); if (pos + len > n) return false; r.insert(r.end(), t.begin() + pos, t.begin() + pos + len); pos += len; continue; }
+    const uint32_t len = (tok >> 24) & 0xFu;
+    if (pos + len >= n) return false;
+    if (pos == first) {
+      r.insert(r.end(), { 0x02000001u, dstT(T, 7u), s.offsetSrc });                         // mov rT.xyz, rS.<swizzle>
+    } else if (pos == s.dp3[0] || pos == s.dp3[1] || pos == s.dp3[2]) {
+      // the other two DP3s go
+    } else {
+      if (pos == s.consumer) {
+        r.insert(r.end(), { 0x02000024u, dstT(N, 7u), srcT(C, 0xE4u) });                     // nrm rN.xyz, rC
+        r.insert(r.end(), { 0x03000005u, dstT(D, 7u), srcT(N, 0xC6u), srcC(K, 0xE4u) });     // mul rD.xyz, rN.zyxw, cK  (n.z, 0, -n.x)
+        r.insert(r.end(), { 0x03000002u, dstT(D, 1u), srcT(D, 0x00u), srcC(K, 0xFFu) });     // add rD.x, rD.x, cK.w
+        r.insert(r.end(), { 0x02000024u, dstT(Rr, 7u), srcT(D, 0xE4u) });                    // nrm rR.xyz, rD     (right)
+        r.insert(r.end(), { 0x03000021u, dstT(U, 7u), srcT(N, 0xE4u), srcT(Rr, 0xE4u) });    // crs rU.xyz, rN, rR (up)
+        r.insert(r.end(), { 0x03000005u, dstT(D, 7u), srcT(Rr, 0xE4u), srcT(T, 0x00u) });    // mul rD.xyz, rR, rT.x
+        r.insert(r.end(), { 0x04000004u, dstT(D, 7u), srcT(U, 0xE4u), srcT(T, 0x55u), srcT(D, 0xE4u) });   // mad rD.xyz, rU, rT.y, rD
+        r.insert(r.end(), { 0x04000004u, dstT(D, 7u), srcT(N, 0xE4u), srcT(T, 0xAAu), srcT(D, 0xE4u) });   // mad rD.xyz, rN, rT.z, rD
+      }
+      r.insert(r.end(), t.begin() + pos, t.begin() + pos + 1 + len);
+    }
+    pos += 1 + len;
+  }
+  while (pos < n) r.push_back(t[pos++]);
+  t.swap(r);
+  return true;
+}
+// The three constants (12 floats from c[basisReg]) hold the camera's right, up and back as their
+// columns: row i is row i of the camera's view rotation (Camera::view, the transpose of V).
+inline bool cardBasisIsCamera(const float c[12], const Camera& cam) {
+  for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) if (std::fabs(c[i * 4 + j] - cam.view.m[i][j]) > 0.02f) return false;
+  return true;
 }
 
 // ---- per-pixel-shader albedo stage (milestone 2c) -----------------------------------------

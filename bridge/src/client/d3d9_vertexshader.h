@@ -48,6 +48,7 @@ public:
   uint64_t sims3Hash = 0;     // FNV-1a-64 of the original bytecode (diagnostics)
   sims3cam::VsNormalInfo sims3Normal;   // where the world-space normal leaves this shader (milestone 11)
   sims3cam::VsConstantOutputs sims3ConstOut;   // the constants it hands the pixel shader unchanged (milestone 135: the trees' fade)
+  sims3cam::CameraCard sims3Card;       // it turns cards to the camera with three constants (milestone 136: the trees' leaves)
   sims3cam::WallVsInfo sims3Wall;       // a wall shader's clamp of the up-ness flag, for the opening cut (milestone 13)
 
   /*** IUnknown methods ***/
