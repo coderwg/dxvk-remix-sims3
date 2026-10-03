@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-127).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-128).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -1235,14 +1235,6 @@ inline uint8_t terrainDrawKind(const TerrainShader* t, DWORD alphaBlendEnable, b
 inline const uint64_t kUnlitPatches[] = { 0x17eabad58f650687ull, 0x670dbe0fa52c4650ull, 0x98062e8d4d12af7dull, 0xd63bf505ec4a44a0ull,
                                          0x072c2bbd4fdeb89bull };   // the coarse ground's shader (milestone 61): the same final mad
 inline bool wantsUnlitPatch(uint64_t psHash) { for (uint64_t h : kUnlitPatches) if (h == psHash) return true; return false; }
-// The same four are the lit terrain shaders: light = shadow x dot(normal, c1) x c0 + light map x
-// c7.x + probe x c8.x, so c0 is the directional light's colour (sun or moon) and c1 the unit
-// direction toward it, as the game hands them over for the draw (read from the disassembly,
-// milestone 40; the terrain is outdoors, so nothing attenuates it as a room does an object's
-// light). The hook's sun is this light (skyLightFrom, milestone 41).
-inline bool isLitTerrainPs(uint64_t psHash) {   // the four only: the coarse ground's c4 is not the fog's (milestone 61)
-  return psHash == 0x17eabad58f650687ull || psHash == 0x670dbe0fa52c4650ull || psHash == 0x98062e8d4d12af7dull || psHash == 0xd63bf505ec4a44a0ull;
-}
 
 // ---- the town ground's squares (milestone 60, design B) ----------------------------------
 // Each 256-unit square of the town ground goes to the ray tracer as ONE shape, the union of the
@@ -1273,37 +1265,22 @@ inline bool rangesOverlap(uint64_t r, uint64_t q) {
   const uint64_t a0 = r >> 32, a1 = a0 + 3ull * (uint32_t) r, b0 = q >> 32, b1 = b0 + 3ull * (uint32_t) q;
   return a0 < b1 && b0 < a1;
 }
-// ---- the game's own light in its memory (milestone 49) ----------------------------------
+// ---- the game's own light in its memory (milestones 49, 127, 128) -----------------------
 // The game keeps the light it computes in a record of eight floats: the direction toward the
-// light, 0, the colour, 1 (run 161's search: a record that kept moving with the clock in the
-// neighbourhood view, where no lit terrain is drawn, and agreed with the terrain to five
-// decimals on the lot). The hook finds it by what the terrain is handed (lightRecord); once found
-// it is the sky's light in every view (milestone 51, for simplicity: one source), the terrain
-// standing in only until then.
+// light, 0, the colour, 1 (run 161: a record that kept moving with the clock in every view and
+// agreed with the lit terrain's c0 / c1 to five decimals). The hook reaches it through the game's
+// own pointers (kLightChains) and takes the sky's light, the night switch and the fog from it:
+// one source, in every view, from the first frame of a live world.
 // (Not-a-number and infinite floats are told by their bits: the compiler may assume none exist.)
 inline bool finiteFloats(const float* q, int n) {
   for (int k = 0; k < n; ++k) { uint32_t u; std::memcpy(&u, q + k, 4); if ((u & 0x7f800000u) == 0x7f800000u) return false; }
   return true;
 }
 inline bool floatBits(const float* q, uint32_t bits) { uint32_t u; std::memcpy(&u, q, 4); return u == bits; }
-// Three floats within tol of a direction (+1), or of its opposite (-1); 0 otherwise.
-inline int tripletMatch(const float* q, const float* t, float tol) {
-  if (!finiteFloats(q, 3)) return 0;
-  if (std::fabs(q[0] - t[0]) < tol && std::fabs(q[1] - t[1]) < tol && std::fabs(q[2] - t[2]) < tol) return 1;
-  if (std::fabs(q[0] + t[0]) < tol && std::fabs(q[1] + t[1]) < tol && std::fabs(q[2] + t[2]) < tol) return -1;
-  return 0;
-}
-// Eight floats are the game's light record holding this direction and colour (each within tol).
-inline bool lightRecord(const float* q, const float* dir, const float* col, float tol) {
-  if (!finiteFloats(q, 8) || !floatBits(q + 3, 0u) || !floatBits(q + 7, 0x3f800000u)) return false;
-  if (tripletMatch(q, dir, tol) != 1) return false;
-  for (int k = 0; k < 3; ++k) if (!(std::fabs(q[4 + k] - col[k]) < tol)) return false;
-  return true;
-}
 
 // The game's night switch (runs 163, 164): the float 28 before its light record, 0 by day and 1 at
 // night, taking about eight game minutes to change at either end (19 h and 5 h in Sunset Valley);
-// handed to the lit terrain as c7.x, the scale of its lamp light map. A value outside 0..1, or not
+// the lit terrain's c7.x, the scale of its lamp light map. A value outside 0..1, or not
 // a number, is not the switch (nothing is written then).
 inline bool nightSwitchValue(const float* q, float* out) {
   if (!finiteFloats(q, 1) || !(*q >= 0.f && *q <= 1.f)) return false;
@@ -1532,10 +1509,10 @@ inline bool isSkyDomeShader(const DWORD* tokens, size_t count) {
 
 inline float luminance(const float* c) { return 0.2126f*c[0] + 0.7152f*c[1] + 0.0722f*c[2]; }
 
-// ---- the sun and the moon: the terrain's light (milestone 41) -----------------------------
-// The lit terrain shaders are handed the game's directional light with every draw: c0 its
-// colour, c1 the unit direction toward it (isLitTerrainPs). It is the sun by day and the moon
-// by night. Run 152 (a whole game day): the colour follows the game's timeline by the hour
+// ---- the sun and the moon: the game's light (milestones 41, 128) -------------------------
+// The game's one directional light, its colour and the unit direction toward it, as its light
+// record holds it (and as it hands it to the lit terrain shaders, c0 and c1). It is the sun by
+// day and the moon by night. Run 152 (a whole game day): the colour follows the game's timeline by the hour
 // (SunMoonLight of the sky's light file / 255, linear between its keys), it is zero at 19 h and
 // at 6 h, the direction changes sides at 19 h and at 5 h and never stands lower than 45
 // degrees. The hook forwards it as it is, as a distant light.
@@ -1546,8 +1523,8 @@ inline float luminance(const float* c) { return 0.2126f*c[0] + 0.7152f*c[1] + 0.
 // whole sunrise -- while the terrain's direction equalled the shadow map's in every sample.)
 struct Sun { float dir[3]; float col[3]; };   // dir: unit, toward the light; col: the game's colour, 1 = full
 
-// A colour and a direction toward the light -- the terrain's two constants, or the game's own
-// light record -- as the sky's light. False when they are not a light's: the direction is not a
+// A colour and a direction toward the light -- the game's own light record -- as the sky's
+// light. False when they are not a light's: the direction is not a
 // unit vector from above, or a colour is not a number, negative or beyond any light's.
 inline bool skyLightFrom(const float* c0, const float* c1, Sun& out) {
   const float n = len3(c1);
@@ -1560,10 +1537,8 @@ inline bool skyLightFrom(const float* c0, const float* c1, Sun& out) {
 // The game's light record reached through the game's own pointers (milestone 127): record =
 // [[TS3.exe + base] + member] + offset. Found by the M126 diagnostic in runs 231-232: the same five
 // chains in two fresh sessions while the record lay elsewhere each time (1DDA6C00, 30D3BF20); two
-// statics (0xdda2d4, 0xe46c54) hold the same object. Valid for that TS3.exe build only (its PE
-// build stamp); any other build is left to the search.
+// statics (0xdda2d4, 0xe46c54) hold the same object. Offsets of TS3.exe build stamp 6707155c.
 struct LightChain { uint32_t base, member, offset; };
-inline constexpr uint32_t kLightChainStamp = 0x6707155Cu;
 inline constexpr LightChain kLightChains[] = {
   { 0xe2ad10, 0xd0, 0x5e0 }, { 0xdda2d4, 0x64, 0x7f0 }, { 0xe46c54, 0x64, 0x7f0 }, { 0xdda2d4, 0x58, 0xa10 }, { 0xe46c54, 0x58, 0xa10 },
 };

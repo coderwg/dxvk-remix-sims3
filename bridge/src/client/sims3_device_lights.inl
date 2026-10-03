@@ -39,48 +39,6 @@ static void sims3LampScan() {
   ++g_sims3LampScans;
   g_sims3LampScanBusy = false;
 }
-// The search for the game's own light in its memory (milestones 48, 49). Every committed writable
-// region of the process is searched for the game's light record holding the direction and colour
-// the terrain was handed (within 0.02: the light moves while the search runs), except the hook's
-// own state and the bridge's shared memory (mapped regions: the command queue to the server holds
-// copies of every upload). What is found is then confirmed against the terrain (in Present).
-static void sims3LightScanRegion(const uint8_t* base, size_t size, uint32_t& count) {
-  __try {
-    if (size < 16) return;
-    const float* q = (const float*) base;
-    const float* end = (const float*) (base + (size & ~(size_t) 3)) - 8;
-    const float* t = g_sims3LightTarget;
-    for (; q <= end; ++q) {
-      if (!sims3cam::lightRecord(q, t, t + 3, 0.02f)) continue;
-      const uint8_t* at = (const uint8_t*) q;
-      bool own = false;
-      for (int k = 0; k < 2; ++k) if (at >= g_sims3LightExcludeFrom[k] && at < g_sims3LightExcludeTo[k]) own = true;
-      if (own) continue;
-      if (count < kSims3LightHitsMax) { g_sims3LightHitAt[count] = q; ++count; }
-      else ++g_sims3LightHitOverflow;
-    }
-  } __except (EXCEPTION_EXECUTE_HANDLER) { }
-}
-static void sims3LightScan() {
-  const uint8_t* a = (const uint8_t*) 0x10000;
-  MEMORY_BASIC_INFORMATION mbi;
-  uint32_t regions = 0, count = 0, mapped = 0; uint64_t bytes = 0;
-  while (VirtualQuery(a, &mbi, sizeof mbi) == sizeof mbi) {
-    const DWORD prot = mbi.Protect & 0xFF;
-    const bool writable = prot == PAGE_READWRITE || prot == PAGE_EXECUTE_READWRITE || prot == PAGE_WRITECOPY || prot == PAGE_EXECUTE_WRITECOPY;
-    if (mbi.State == MEM_COMMIT && writable && !(mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS))) {
-      if (mbi.Type == MEM_MAPPED) ++mapped;
-      else { ++regions; bytes += mbi.RegionSize; sims3LightScanRegion((const uint8_t*) mbi.BaseAddress, mbi.RegionSize, count); }
-    }
-    const uint8_t* next = (const uint8_t*) mbi.BaseAddress + mbi.RegionSize;
-    if (next <= a) break;
-    a = next;
-  }
-  g_sims3LightScanRegions = regions; g_sims3LightScanMegabytes = (uint32_t) (bytes >> 20); g_sims3LightSkippedMapped = mapped;
-  g_sims3LightHitCount = count;
-  g_sims3LightScanDone = true;
-  g_sims3LightScanBusy = false;
-}
 // Floats read from a place found, or false when it cannot be read any more.
 static bool sims3LightRead(const float* p, float* out, int n) {
   __try {
@@ -112,16 +70,9 @@ static void sims3DescribeAddress(const void* p, char* out, size_t cap) {
 
 // The game's light record through the game's own pointers (milestone 127, sims3cam::kLightChains):
 // every chain read with guarded reads, each end checked as a record, the address at least two agree
-// on. The exe's build stamp decides once whether the chains apply at all.
+// on.
 static bool sims3ReadWord(uintptr_t at, uint32_t& out) {
   __try { out = *(const uint32_t*) at; return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
-}
-static uint32_t sims3ExeStamp() {
-  __try {
-    const uint8_t* img = (const uint8_t*) GetModuleHandleA(nullptr);
-    const IMAGE_NT_HEADERS32* nt = (const IMAGE_NT_HEADERS32*) (img + ((const IMAGE_DOS_HEADER*) img)->e_lfanew);
-    return nt->FileHeader.TimeDateStamp;
-  } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
 }
 static const float* sims3LightByChains(int& votes) {
   const uintptr_t img = (uintptr_t) GetModuleHandleA(nullptr);
@@ -133,6 +84,25 @@ static const float* sims3LightByChains(int& votes) {
       at[k] = (uintptr_t) ptr + c.offset;
   }
   return (const float*) sims3cam::lightChainVote(at, sims3cam::kLightChainCount, votes);
+}
+// The game's light record this frame (milestone 128): through its pointers while a world is live,
+// else none. Logged when it is first reached, when it moves (a world loaded anew) and when it is lost.
+static void sims3UpdateLightRecord(Sims3Hook& h) {
+  int votes = 0;
+  const float* rec = h.lampReportLive ? sims3LightByChains(votes) : nullptr;
+  if (rec != h.lightRec && h.lightRecLogged < 40u) {
+    ++h.lightRecLogged;
+    char msg[300];
+    if (rec) {
+      char where[160]; sims3DescribeAddress(rec, where, sizeof where);
+      snprintf(msg, sizeof msg, "Sims 3 camera hook: the game's own light at %p (%s) through its pointers (%d of %d chains agree), frame %u: the sky's light, the night switch and the fog from it",
+               (const void*) rec, where, votes, sims3cam::kLightChainCount, h.frames);
+    } else {
+      snprintf(msg, sizeof msg, "Sims 3 camera hook: the game's own light not reached at frame %u (%s)", h.frames, h.lampReportLive ? "its pointers do not agree" : "no world live");
+    }
+    Logger::info(msg);
+  }
+  h.lightRec = rec;
 }
 
 // The block read whole: its head checked, its records copied, and its sequence the same before and
@@ -266,22 +236,21 @@ static void sims3PresentLamps(Sims3Hook& h) {
       Logger::info(msg);
     }
   }
+  // the game's light record (milestone 128): the sky's light, the night switch and the fog
+  sims3UpdateLightRecord(h);
   // the game's clock; the world lights (a street lamp's) are reported on around the clock (run 151).
   // Their light is scaled by the game's own night switch (milestones 54, 55: the fade the game
-  // shows its lamp glow on the ground by, kept next to its light record, run 163; it takes about
-  // eight game minutes, run 164); until the record is found they are on while the game's word for
-  // night holds
+  // shows its lamp glow on the ground by, 28 floats before its light record, run 163; it takes
+  // about eight game minutes, run 164); without the record they are dark
   h.clock = h.lampReportLive ? sims3cam::clockFromRecord(h.lampRecords.data()) : sims3cam::GameClock {};
-  float worldFade = -1.f;   // the game's night switch, 0..1; -1 not read
-  if (h.lightState == 3 && !h.nightSwitchBad) {
+  float worldFade = 0.f;   // the game's night switch, 0..1
+  if (h.lightRec) {
     float sw = -1.f;
-    if (sims3LightRead(h.lightPlaces[h.lightUse].p - 28, &sw, 1)) sims3cam::nightSwitchValue(&sw, &worldFade);
+    if (sims3LightRead(h.lightRec - 28, &sw, 1)) sims3cam::nightSwitchValue(&sw, &worldFade);
   }
-  const bool bySwitch = worldFade >= 0.f;
-  if (!bySwitch) worldFade = h.clock.known && h.clock.night ? 1.f : 0.f;
   if (!sims3cam::lampWorldLights()) worldFade = 0.f;
   const bool worldLights = worldFade > 0.f;
-  h.worldFade = worldFade; h.worldBySwitch = bySwitch;
+  h.worldFade = worldFade;
   if (h.clock.known && (!h.clockSaid || h.clock.night != h.clockNight) && h.clockLogged < 80u) {
     h.clockSaid = true; h.clockNight = h.clock.night; ++h.clockLogged;
     char msg[200];
@@ -290,13 +259,12 @@ static void sims3PresentLamps(Sims3Hook& h) {
     Logger::info(msg);
   }
   {
-    const int street = (worldFade <= 0.f ? 0 : (worldFade < 1.f ? 1 : 2)) + (bySwitch ? 3 : 0);
-    if ((h.clock.known || bySwitch) && street != h.streetSaid && h.streetLogged < 120u) {
+    const int street = worldFade <= 0.f ? 0 : (worldFade < 1.f ? 1 : 2);
+    if (h.lightRec && street != h.streetSaid && h.streetLogged < 120u) {
       h.streetSaid = street; ++h.streetLogged;
-      char msg[280];
-      snprintf(msg, sizeof msg, "Sims 3 camera hook: the street lamps are %s (%.3f) from frame %u, clock %.2f h, by %s",
-               !sims3cam::lampWorldLights() ? "dark (lampWorldLights 0)" : (worldFade <= 0.f ? "dark" : (worldFade < 1.f ? "FADING" : "LIT")), worldFade, h.frames, h.clock.known ? h.clock.hour : -1.f,
-               bySwitch ? "the game's own night switch" : "the game's word for night (its night switch not found yet)");
+      char msg[240];
+      snprintf(msg, sizeof msg, "Sims 3 camera hook: the street lamps are %s (%.3f) from frame %u, clock %.2f h, by the game's night switch",
+               !sims3cam::lampWorldLights() ? "dark (lampWorldLights 0)" : (worldFade <= 0.f ? "dark" : (worldFade < 1.f ? "FADING" : "LIT")), worldFade, h.frames, h.clock.known ? h.clock.hour : -1.f);
       Logger::info(msg);
     }
   }
@@ -429,168 +397,17 @@ static void sims3PresentLamps(Sims3Hook& h) {
   }
 }
 
-// The Sims 3 camera hook: the lights of the sky. The game's one directional light, as the lit
-// terrain shaders were handed it in this frame, is the sun's or the moon's by the game's clock;
-// the moon's is scaled by the user's share, and at dusk and at dawn the two are cross-faded in
-// equal parts (sims3cam::SkyLights, milestones 42 to 46). A frame without a lit terrain draw
-// keeps the lights the runtime holds.
+// The Sims 3 camera hook: the lights of the sky. The game's one directional light, read from its
+// light record (milestone 128), is the sun's or the moon's by the game's clock; the moon's is
+// scaled by the user's share, and at dusk and at dawn the two are cross-faded in equal parts
+// (sims3cam::SkyLights, milestones 42 to 46). Without the record the lights the runtime holds stay.
 template<typename Dev>
 void sims3PresentSky(Sims3Hook& h, Dev* dev) {
   static const char* const kBody[2] = { "sun", "moon" };
   sims3cam::Sun game = {};
-  bool fresh = false;
-  if (h.terrainSunDraws > 0) {
-    fresh = sims3cam::skyLightFrom(h.terrainSunCol, h.terrainSunDir, game);
-    if (!fresh && ++h.sunRefused <= 20u) {
-      char msg[260];
-      snprintf(msg, sizeof msg, "Sims 3 camera hook: sun: the terrain's constants at frame %u are not a light's and are left aside: c0 %.3f, %.3f, %.3f, c1 %.3f, %.3f, %.3f (%u draws)",
-               h.frames, h.terrainSunCol[0], h.terrainSunCol[1], h.terrainSunCol[2], h.terrainSunDir[0], h.terrainSunDir[1], h.terrainSunDir[2], h.terrainSunDraws);
-      Logger::info(msg);
-    }
-  }
-  const bool readTerrain = fresh;
-  // The game's own light in its memory (milestone 49). Two seconds after a world is live, on the
-  // lot, a search finds the records holding what the terrain is handed (sims3cam::lightRecord);
-  // five seconds of agreement with the terrain confirm one; it is then the sky's light in every
-  // view (milestone 51), checked against the terrain whenever the lot shows it, and searched for
-  // again when it stops agreeing or a world is loaded anew.
-  if (h.lampReportLive) ++h.lightLiveFrames;
-  else { h.lightLiveFrames = 0; h.lightFromChains = false; if (h.lightState != 1) { h.lightState = 0; h.lightUse = -1; } }
-  // The game's light through its own pointers (milestone 127): for the TS3.exe build the chains were
-  // found in, from the first frame of a live world, in every view, with neither the terrain nor the
-  // search; at least two chains must agree on a record. Any other build, or chains whose record stops
-  // agreeing with the terrain, leave it to the search below.
-  if (h.lightChainBuild < 0) {
-    const uint32_t stamp = sims3ExeStamp();
-    h.lightChainBuild = stamp == sims3cam::kLightChainStamp ? 1 : 0;
-    char msg[200];
-    snprintf(msg, sizeof msg, "Sims 3 camera hook: the game's exe build stamp %08x: %s", stamp, h.lightChainBuild ? "its light read through the game's own pointers (milestone 127)" : "not the build the pointers were found in -- its light by the search");
-    Logger::info(msg);
-  }
-  if (h.lampReportLive && h.lightChainBuild == 1 && !h.lightChainBad) {
-    int votes = 0;
-    const float* p = sims3LightByChains(votes);
-    if (p && !(h.lightState == 3 && h.lightFromChains && h.lightPlaces[0].p == p)) {
-      h.lightPlaces[0] = Sims3Hook::LightPlace(); h.lightPlaces[0].p = p; h.lightPlaceN = 1; h.lightUse = 0; h.lightState = 3; h.lightDisagree = 0; h.lightFromChains = true;
-      ++h.lightChainSets;
-      if (h.lightChainSets <= 8u) {
-        char msg[220];
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: the game's own light through its pointers at %p (%d of %d chains agree) at frame %u: the sky's light from now on, in every view",
-                 (const void*) p, votes, sims3cam::kLightChainCount, h.frames);
-        Logger::info(msg);
-      }
-    }
-  }
-  if ((h.lightState == 0 || (h.lightState == 4 && h.frames - h.lightRetryFrame > 600u)) && readTerrain && h.clock.known && h.lightLiveFrames > 120u && !g_sims3LightScanBusy.load()) {
-    h.lightState = 1; ++h.lightSearches;
-    for (int q = 0; q < 3; ++q) { g_sims3LightTarget[q] = h.terrainSunDir[q]; g_sims3LightTarget[3 + q] = h.terrainSunCol[q]; }
-    g_sims3LightExcludeFrom[0] = (const uint8_t*) &g_sims3; g_sims3LightExcludeTo[0] = (const uint8_t*) (&g_sims3 + 1);
-    g_sims3LightExcludeFrom[1] = (const uint8_t*) dev; g_sims3LightExcludeTo[1] = (const uint8_t*) (dev + 1);
-    g_sims3LightHitOverflow = 0; g_sims3LightScanDone = false; g_sims3LightScanBusy = true;
-    std::thread(sims3LightScan).detach();
-  }
-  if (h.lightState == 1 && g_sims3LightScanDone.load()) {
-    h.lightPlaceN = g_sims3LightHitCount.load();
-    for (uint32_t k = 0; k < h.lightPlaceN; ++k) { h.lightPlaces[k].p = g_sims3LightHitAt[k]; h.lightPlaces[k].checked = h.lightPlaces[k].matched = 0; }
-    h.lightConfirmFrames = 0;
-    if (h.lightPlaceN) h.lightState = 2; else { h.lightState = 4; h.lightRetryFrame = h.frames; }
-    char msg[300];
-    snprintf(msg, sizeof msg, "Sims 3 camera hook: the game's own light: search %u done at frame %u, clock %.2f h: %u records holding the terrain's light (%u more not kept) in %u regions, %u MB",
-             h.lightSearches, h.frames, h.clock.known ? h.clock.hour : -1.f, h.lightPlaceN, g_sims3LightHitOverflow.load(), g_sims3LightScanRegions.load(), g_sims3LightScanMegabytes.load());
-    Logger::info(msg);
-  }
-  if (h.lightState == 2 && readTerrain) {
-    ++h.lightConfirmFrames;
-    for (uint32_t k = 0; k < h.lightPlaceN; ++k) {
-      float v[8];
-      ++h.lightPlaces[k].checked;
-      if (sims3LightRead(h.lightPlaces[k].p, v, 8) && sims3cam::lightRecord(v, h.terrainSunDir, h.terrainSunCol, 0.001f)) ++h.lightPlaces[k].matched;
-    }
-    if (h.lightConfirmFrames >= 300u) {
-      uint32_t confirmed = 0; h.lightUse = -1;
-      for (uint32_t k = 0; k < h.lightPlaceN; ++k)
-        if (h.lightPlaces[k].checked && h.lightPlaces[k].matched * 10u >= h.lightPlaces[k].checked * 9u) { ++confirmed; if (h.lightUse < 0) h.lightUse = (int) k; }
-      char msg[360];
-      if (h.lightUse >= 0) {
-        h.lightState = 3; h.lightDisagree = 0;
-        const Sims3Hook::LightPlace& L = h.lightPlaces[h.lightUse];
-        char where[160]; sims3DescribeAddress(L.p, where, sizeof where);
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: the game's own light FOUND at %p (%s): it agreed with the terrain in %u of %u frames (%u of %u records agreed); the sky's light from now on, in every view",
-                 (const void*) L.p, where, L.matched, L.checked, confirmed, h.lightPlaceN);
-      } else {
-        h.lightState = 4; h.lightRetryFrame = h.frames;
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: the game's own light: none of the %u records agreed with the terrain for five seconds; searched for again in ten seconds", h.lightPlaceN);
-      }
-      Logger::info(msg);
-    }
-  }
-  if (h.lightState == 3 && readTerrain) {
-    float v[8];
-    const bool agree = sims3LightRead(h.lightPlaces[h.lightUse].p, v, 8) && sims3cam::lightRecord(v, h.terrainSunDir, h.terrainSunCol, 0.002f);
-    if (agree) h.lightDisagree = 0;
-    else if (++h.lightDisagree > 120u) {
-      h.lightState = 0; h.lightUse = -1;
-      const bool chains = h.lightFromChains;
-      if (chains) { h.lightChainBad = true; h.lightFromChains = false; }   // the pointers are not trusted again this session
-      char msg[220];
-      snprintf(msg, sizeof msg, "Sims 3 camera hook: the game's own light%s stopped agreeing with the terrain at frame %u: searched for again", chains ? " (through its pointers)" : "", h.frames);
-      Logger::info(msg);
-    }
-  }
-  // The game's night switch, next to its light record (run 163: 28 floats before it), is handed
-  // to the lit terrain as c7.x: checked whenever the terrain is drawn; if they ever disagree for
-  // two seconds the street lamps go back to the game's word for night.
-  if (h.lightState == 3 && readTerrain && !h.nightSwitchBad) {
-    float sw = -1.f;
-    uint32_t want; memcpy(&want, &h.terrainNightSwitch, 4);
-    if (sims3LightRead(h.lightPlaces[h.lightUse].p - 28, &sw, 1) && sims3cam::floatBits(&sw, want)) h.nightSwitchDisagree = 0;
-    else if (++h.nightSwitchDisagree > 120u) {
-      h.nightSwitchBad = true;
-      char msg[260];
-      snprintf(msg, sizeof msg, "Sims 3 camera hook: the game's night switch next to its light record (%.3f) does not agree with the terrain's (%.3f): the street lamps follow the game's word for night instead",
-               sw, h.terrainNightSwitch);
-      Logger::info(msg);
-    }
-  }
-  // The game's fog next to its light record (run 163: its colour 64 floats before it, its range 20
-  // before it) is handed to the lit terrain as c2 and c4: checked in the same way; if they ever
-  // disagree for two seconds the fog is left off for the session.
-  if (sims3cam::fogFromGame() && h.lightState == 3 && readTerrain && !h.fogBad) {
-    const float* rec = h.lightPlaces[h.lightUse].p;
-    float fog[8] = {};
-    const bool same = sims3LightRead(rec - 64, fog, 4) && sims3LightRead(rec - 20, fog + 4, 4) &&
-                      std::memcmp(fog, h.terrainFog, 3 * sizeof(float)) == 0 && std::memcmp(fog + 4, h.terrainFog + 4, 4 * sizeof(float)) == 0;
-    if (same) h.fogDisagree = 0;
-    else if (++h.fogDisagree > 120u) {
-      h.fogBad = true; h.fogReady = false;
-      char msg[320];
-      snprintf(msg, sizeof msg, "Sims 3 camera hook: the game's fog next to its light record (colour %.3f %.3f %.3f, c4 %.6f %.4f) does not agree with the terrain's (%.3f %.3f %.3f, %.6f %.4f): the fog is left off",
-               fog[0], fog[1], fog[2], fog[4], fog[5], h.terrainFog[0], h.terrainFog[1], h.terrainFog[2], h.terrainFog[4], h.terrainFog[5]);
-      Logger::info(msg);
-    }
-  }
-  // the sky's light: the game's own record once found, in every view; until then the lit terrain;
-  // without either the last light holds
-  bool fromGame = false;
-  if (!fresh) ++h.framesNoTerrainSun;
-  if (h.lightState == 3) {
-    sims3cam::Sun rec = {};
-    if (sims3ReadGameLight(h.lightPlaces[h.lightUse].p, rec)) { game = rec; fresh = true; fromGame = true; ++h.framesFromGame; }
-  }
-  {
-    // where the light comes from, logged when it has changed for half a second
-    const int src = fromGame ? 1 : (readTerrain ? 0 : 2);
-    if (src == h.skySrcCand) ++h.skySrcFrames; else { h.skySrcCand = src; h.skySrcFrames = 1; }
-    if (h.skySrcFrames == 30u && src != h.skySrcLogged && h.skySrcLogs < 100u) {
-      ++h.skySrcLogs; h.skySrcLogged = src;
-      static const char* const kSrc[3] = { "the lit terrain (the game's light record not found yet)", "the game's own light in its memory", "nowhere: held at its last value (no lit terrain drawn, the game's light record not found yet)" };
-      char msg[320];
-      snprintf(msg, sizeof msg, "Sims 3 camera hook: the sky's light comes from %s since frame %u, clock %.2f h",
-               kSrc[src], h.frames - 29u, h.clock.known ? h.clock.hour : -1.f);
-      Logger::info(msg);
-    }
-  }
+  const bool fresh = h.lightRec && sims3ReadGameLight(h.lightRec, game);
   if (fresh) {
+    ++h.framesFromGame;
     // the dawn eased (milestone 43): the game's sunrise is steep, so for dawnMinutes after sunrise the sun's light is scaled up from nothing
     sims3cam::Sun eased = game;
     const float ease = sims3cam::clockMoonTime(h.clock) ? 1.f : sims3cam::dawnEase(h.clock, sims3cam::dawnHours());
@@ -599,8 +416,8 @@ void sims3PresentSky(Sims3Hook& h, Dev* dev) {
     h.skySet = true; h.gameLight = game;
     if (!h.loggedSun) {
       h.loggedSun = true; char msg[400];
-      snprintf(msg, sizeof msg, "Sims 3 camera hook: the lights of the sky are the terrain's light: first taken at frame %u from %u terrain draws, colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f; the moon's share of the game's moonlight %.2f (moonLight); the dawn eased over %.0f minutes (dawnMinutes); the sun's afterglow from %.3f over %.0f minutes (duskLevel, duskMinutes)",
-               h.frames, h.terrainSunDraws, game.col[0], game.col[1], game.col[2], game.dir[0], game.dir[1], game.dir[2], sims3cam::moonShare(), sims3cam::dawnHours() * 60.f, sims3cam::duskLevel(), sims3cam::duskHours() * 60.f);
+      snprintf(msg, sizeof msg, "Sims 3 camera hook: the lights of the sky are the game's own light: first taken at frame %u, colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f; the moon's share of the game's moonlight %.2f (moonLight); the dawn eased over %.0f minutes (dawnMinutes); the sun's afterglow from %.3f over %.0f minutes (duskLevel, duskMinutes)",
+               h.frames, game.col[0], game.col[1], game.col[2], game.dir[0], game.dir[1], game.dir[2], sims3cam::moonShare(), sims3cam::dawnHours() * 60.f, sims3cam::duskLevel(), sims3cam::duskHours() * 60.f);
       Logger::info(msg);
     }
     if (what != 0 && h.twilightLogged < 60u) {
@@ -640,15 +457,14 @@ void sims3PresentSky(Sims3Hook& h, Dev* dev) {
       ++h.sunLogged; h.sunLogLum = lum; h.sunLogFrame = h.frames; for (int q = 0; q < 3; ++q) h.sunLogDir[q] = lead.dir[q];
       const sims3cam::Sun& s0 = h.sky.shown[0]; const sims3cam::Sun& s1 = h.sky.shown[1];
       char msg[700];
-      snprintf(msg, sizeof msg, "Sims 3 camera hook: sky at frame %u, clock %.2f h%s: the game's light%s is the %s's, colour %.3f, %.3f, %.3f (luminance %.3f), the dawn's ease x%.2f; SUN %s colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f; MOON %s colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f; the light of the sky %.3f, the afterglow x%.2f; sky level %.3f",
-               h.frames, h.clock.known ? h.clock.hour : -1.f, !h.clock.known ? " (unknown)" : (h.clock.night ? " night" : " day"), fromGame ? "" : (readTerrain ? " (from the terrain: the game's record not found yet)" : ""), kBody[h.sky.body], game.col[0], game.col[1], game.col[2], sims3cam::luminance(game.col), ease,
+      snprintf(msg, sizeof msg, "Sims 3 camera hook: sky at frame %u, clock %.2f h%s: the game's light is the %s's, colour %.3f, %.3f, %.3f (luminance %.3f), the dawn's ease x%.2f; SUN %s colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f; MOON %s colour %.3f, %.3f, %.3f toward %.3f, %.3f, %.3f; the light of the sky %.3f, the afterglow x%.2f; sky level %.3f",
+               h.frames, h.clock.known ? h.clock.hour : -1.f, !h.clock.known ? " (unknown)" : (h.clock.night ? " night" : " day"), kBody[h.sky.body], game.col[0], game.col[1], game.col[2], sims3cam::luminance(game.col), ease,
                !h.sky.showing[0] ? "none," : (h.sky.glowing ? "its afterglow," : "as the game's,"), h.sky.showing[0] ? s0.col[0] : 0.f, h.sky.showing[0] ? s0.col[1] : 0.f, h.sky.showing[0] ? s0.col[2] : 0.f, s0.dir[0], s0.dir[1], s0.dir[2],
                !h.sky.showing[1] ? "none," : (h.sky.body == 0 ? "kept past sunrise," : "the game's by its share, at least its floor,"), h.sky.showing[1] ? s1.col[0] : 0.f, h.sky.showing[1] ? s1.col[1] : 0.f, h.sky.showing[1] ? s1.col[2] : 0.f, s1.dir[0], s1.dir[1], s1.dir[2],
                lum, h.sky.glowFade, h.skyLevel);
       Logger::info(msg);
     }
   }
-  h.terrainSunDrawsLast = h.terrainSunDraws; h.terrainSunDraws = 0;
   const bool haveSky = h.skySet;   // for the night below
   if (h.sunApi && h.sunSet && h.sky.showing[0] && sims3cam::luminance(h.sun.col) > 0.001f) remixapi::remixapi_DrawLightInstance((remixapi_LightHandle) h.sunApi);   // every frame it gives light (milestone 20b)
   if (h.moonApi && h.moonSet && h.sky.showing[1] && sims3cam::luminance(h.moon.col) > 0.001f) remixapi::remixapi_DrawLightInstance((remixapi_LightHandle) h.moonApi);
@@ -700,10 +516,10 @@ void sims3PresentSky(Sims3Hook& h, Dev* dev) {
   // night's moon; run 166 saw a blue veil with the game's full fog colour against a 2 % moon). The
   // fog waits until its first brightness has been sent.
   h.fogReady = false; h.fogFrameDraws = 0;
-  if (sims3cam::fogFromGame() && h.lightState == 3 && !h.fogBad && !GlobalOptions::getExposeRemixApi()) {
+  if (sims3cam::fogFromGame() && h.lightRec && !GlobalOptions::getExposeRemixApi()) {
     if (!h.fogApiWarned) { h.fogApiWarned = true; Logger::warn("Sims 3 camera hook: the game's fog is not sent: the Remix API is off (its brightness goes through it)"); }
-  } else if (sims3cam::fogFromGame() && h.lightState == 3 && !h.fogBad) {
-    const float* rec = h.lightPlaces[h.lightUse].p;
+  } else if (sims3cam::fogFromGame() && h.lightRec) {
+    const float* rec = h.lightRec;
     float c2[4] = {}, c4[4] = {};
     if (sims3LightRead(rec - 64, c2, 4) && sims3LightRead(rec - 20, c4, 4) &&
         sims3cam::fogColourFromGame(c2, &h.fogColour, &h.fogBright) && sims3cam::fogRangeFromGame(c4, &h.fogStart, &h.fogEnd)) {

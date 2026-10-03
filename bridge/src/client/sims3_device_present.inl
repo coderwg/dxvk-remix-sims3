@@ -21,11 +21,11 @@ static void sims3LogStats(bool withTable) {
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   lights: %u lamp lights held (lit %u times, put out %u times, %u light calls)", h.lamps.n, h.lamps.lit, h.lamps.out, h.lampEvents);
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   sky: the game's light is the %s's, luminance %.3f; sun %s luminance %.3f toward %.3f, %.3f, %.3f; moon %s luminance %.3f toward %.3f, %.3f, %.3f (share %.2f); the sun's afterglow %s; %u light updates, %u terrain draws in the last frame, %u frames without one, %u refused",
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   sky: the game's light is the %s's, luminance %.3f; sun %s luminance %.3f toward %.3f, %.3f, %.3f; moon %s luminance %.3f toward %.3f, %.3f, %.3f (share %.2f); the sun's afterglow %s; %u light updates",
            h.sky.body ? "moon" : "sun", sims3cam::luminance(h.gameLight.col),
            h.sky.showing[0] ? (h.sky.glowing ? "its afterglow," : "sent,") : "none,", h.sky.showing[0] ? sims3cam::luminance(h.sky.shown[0].col) : 0.f, h.sky.shown[0].dir[0], h.sky.shown[0].dir[1], h.sky.shown[0].dir[2],
            h.sky.showing[1] ? (h.sky.body == 0 ? "kept," : "sent,") : "none,", h.sky.showing[1] ? sims3cam::luminance(h.sky.shown[1].col) : 0.f, h.sky.shown[1].dir[0], h.sky.shown[1].dir[1], h.sky.shown[1].dir[2], sims3cam::moonShare(),
-           h.sky.glowing ? format_string("at x%.2f", h.sky.glowFade).c_str() : "none", h.sunChanges, h.terrainSunDrawsLast, h.framesNoTerrainSun, h.sunRefused);
+           h.sky.glowing ? format_string("at x%.2f", h.sky.glowFade).c_str() : "none", h.sunChanges);
   Logger::info(msg);
   {
     const uint64_t nowTick = GetTickCount64();
@@ -41,20 +41,14 @@ static void sims3LogStats(bool withTable) {
   Logger::info(msg);
   uint32_t lampHandles = 0;
   for (uint32_t k = 0; k < h.lamps.n; ++k) { const sims3cam::Lamp& Lh = h.lamps.lamps[k]; lampHandles += (Lh.api ? 1u : 0u) + (Lh.api2 ? 1u : 0u) + (Lh.api3 ? 1u : 0u); }
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   clock: %s %.2f h, sunrise %.2f, sunset %.2f; the street lamps at %.3f by %s; %u lit lamps of world lights alone left dark",
-           !h.clock.known ? "unknown," : (h.clock.night ? "night," : "day,"), h.clock.hour, h.clock.sunrise, h.clock.sunset, h.worldFade,
-           h.worldBySwitch ? "the game's night switch" : "the game's word for night", h.lampsWorldDark);
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   clock: %s %.2f h, sunrise %.2f, sunset %.2f; the street lamps at %.3f by the game's night switch; %u lit lamps of world lights alone left dark",
+           !h.clock.known ? "unknown," : (h.clock.night ? "night," : "day,"), h.clock.hour, h.clock.sunrise, h.clock.sunset, h.worldFade, h.lampsWorldDark);
   Logger::info(msg);
-  {
-    static const char* const kLightState[5] = { "not searched yet", "searching", "confirming against the terrain", "found", "none found (searched again later)" };
-    snprintf(msg, sizeof msg, "Sims 3 camera hook:   the game's own light: %s%s; %u searches, %u records at the last, %u frames taken from it; through its pointers: %s (%u times set)",
-             kLightState[h.lightState < 0 || h.lightState > 4 ? 0 : h.lightState], h.lightState == 3 ? format_string(" at %p", (const void*) h.lightPlaces[h.lightUse].p).c_str() : "",
-             h.lightSearches, h.lightPlaceN, h.framesFromGame,
-             h.lightChainBuild == 0 ? "another build" : h.lightChainBad ? "stopped agreeing with the terrain" : h.lightFromChains ? "in use" : "not yet", h.lightChainSets);
-  }
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   the game's own light: %s; %u frames lit by it",
+           h.lightRec ? format_string("at %p, through its pointers", (const void*) h.lightRec).c_str() : "not reached", h.framesFromGame);
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   fog: %s; the runtime's fog hue %u %u %u of 255 at brightness %.6f (the colour's %.4f x the light sent over the game's %.3f; %u sends) from %.0f to %.0f (the game's curve %.2f), on %u terrain draws; %u captured draws carried a fog state of the game's own",
-           !sims3cam::fogFromGame() ? "off (fogFromGame 0)" : (h.fogBad ? "OFF: the game's fog did not agree with the terrain's" : (!GlobalOptions::getExposeRemixApi() ? "OFF: the Remix API is off" : (h.fogReady ? "the game's own, from beside its light record" : "waiting for the game's light record"))),
+           !sims3cam::fogFromGame() ? "off (fogFromGame 0)" : (!GlobalOptions::getExposeRemixApi() ? "OFF: the Remix API is off" : (h.fogReady ? "the game's own, from beside its light record" : "waiting for the game's light record")),
            (unsigned) ((h.fogColour >> 16) & 0xFFu), (unsigned) ((h.fogColour >> 8) & 0xFFu), (unsigned) (h.fogColour & 0xFFu), h.fogScaleNow, h.fogBright, h.fogShare, h.fogScaleSends, h.fogStart, h.fogEnd, h.fogCurve, h.fogDraws, h.gameFogDraws);
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   lamp reporter: %s; %u lamps reported, %u lit, %u of those without a definition in the light table, %u beyond the budget of %u; %u readings (%u while it was writing), %u searches (the last through %u regions, %u MB)",

@@ -2462,17 +2462,6 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
   LogFunctionCall();
   if (sims3cam::enabled()) { g_sims3.drawIndexed = true; g_sims3.drawType = Type; g_sims3.drawBase = BaseVertexIndex; g_sims3.drawStart = startIndex; g_sims3.drawPrims = primCount; }   // for the squares (milestone 60)
   SIMS3_BEGIN_DRAW();
-  // The Sims 3 camera hook: the directional light a lit terrain shader is handed for this draw, c0
-  // its colour and c1 the direction toward it: the sun, or the moon (milestone 41). Present
-  // forwards what the frame's last such draw was given.
-  if (sims3cam::enabled() && primCount > 0 && sims3cam::isLitTerrainPs(g_sims3.psHash)) {
-    memcpy(g_sims3.terrainSunCol, &m_state.pixelConstants.fConsts[0], sizeof g_sims3.terrainSunCol);
-    memcpy(g_sims3.terrainSunDir, &m_state.pixelConstants.fConsts[1], sizeof g_sims3.terrainSunDir);
-    g_sims3.terrainNightSwitch = m_state.pixelConstants.fConsts[7].data[0];   // c7.x: the game's night switch (milestone 54)
-    memcpy(g_sims3.terrainFog, &m_state.pixelConstants.fConsts[2], 4 * sizeof(float));       // c2: the game's fog colour (milestone 56)
-    memcpy(g_sims3.terrainFog + 4, &m_state.pixelConstants.fConsts[4], 4 * sizeof(float));   // c4: the game's fog range and curve
-    ++g_sims3.terrainSunDraws;
-  }
   // The Sims 3 camera hook: a captured draw whose render states make it invisible in-game
   // (colour writes off, a depth test that never passes, an alpha test that never passes, a
   // blend of zero source and one destination) contributes nothing to the game's image, so

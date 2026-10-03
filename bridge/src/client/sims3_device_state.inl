@@ -42,30 +42,20 @@ struct Sims3Hook {
   uint32_t sentFactor = 0xFFFFFFFFu;   // D3DRS_TEXTUREFACTOR the runtime currently holds
   uint8_t tssOurs = 0;                 // stage 0's COLOROP / COLORARG1 / COLORARG2 (bits 0..2) currently hold the hook's TFACTOR modulation
   uint32_t loggedTintRegs = 0;         // tint registers whose first forwarded value was logged
-  // the sun (milestone 41): the directional light the lit terrain shaders were handed, c0 and c1 at the last such draw
-  float terrainSunCol[3] = {}, terrainSunDir[3] = {}; uint32_t terrainSunDraws = 0, terrainSunDrawsLast = 0;
-  float terrainNightSwitch = 0.f;      // the lit terrain's c7.x: the game's night switch as handed to the terrain (milestone 54)
-  uint32_t nightSwitchDisagree = 0, streetLogged = 0; int streetSaid = -1; bool nightSwitchBad = false;   // the night switch next to the light record, checked against it
-  float terrainFog[8] = {};            // the lit terrain's c2 and c4: the game's fog as handed to the terrain (milestone 56)
-  bool fogReady = false, fogOurs = false, fogBad = false, fogApiWarned = false; DWORD fogSaved[5] = {};   // the game's fog for the runtime (milestone 56)
+  uint32_t streetLogged = 0; int streetSaid = -1;   // the street lamps' state as last logged
+  bool fogReady = false, fogOurs = false, fogApiWarned = false; DWORD fogSaved[5] = {};   // the game's fog for the runtime (milestone 56)
   float fogBright = 0.f, fogShare = 0.f, fogScaleNow = -1.f, fogScaleLogged = -1.f; uint32_t fogScaleFrame = 0, fogScaleSends = 0;   // its brightness, lit as the scene is lit (milestone 57)
-  uint32_t fogColour = 0, fogLoggedColour = 0, fogFrameDraws = 0, fogDraws = 0, gameFogDraws = 0, fogLogged = 0, fogDisagree = 0;
+  uint32_t fogColour = 0, fogLoggedColour = 0, fogFrameDraws = 0, fogDraws = 0, gameFogDraws = 0, fogLogged = 0;
   float fogStart = 0.f, fogEnd = 0.f, fogCurve = 1.f, fogLoggedEnd = -1.f, fogLoggedCurve = -1.f; uint32_t fogScaleLines = 0;   // the fog's two log lines, each with its own cap (milestone 58)
   sims3cam::Sun sun = {}, moon = {};   // the two lights of the sky as the runtime holds them
   bool sunSet = false, moonSet = false, skySet = false, loggedSun = false;
   sims3cam::SkyLights sky;             // the game's one light as the sun's and the moon's, with the sun's afterglow at dusk (milestones 42, 44)
   sims3cam::Sun gameLight = {};        // the game's light as last handed over
-  uint32_t skySrcFrames = 0, skySrcLogs = 0; int skySrcCand = -1, skySrcLogged = -1;   // where the sky's light comes from, for the log
-  // the game's own light in its memory (milestone 49): the records a search found, how well each agreed with the terrain, the one in use
-  struct LightPlace { const float* p; uint32_t checked, matched; };
-  LightPlace lightPlaces[64] = {}; uint32_t lightPlaceN = 0, lightConfirmFrames = 0, lightDisagree = 0, lightLiveFrames = 0, lightRetryFrame = 0, lightSearches = 0, framesFromGame = 0;
-  int lightState = 0, lightUse = -1;   // 0 not searched, 1 searching, 2 confirming against the terrain, 3 found, 4 none found (searched again later)
-  // milestone 127: the record through the game's own pointers (sims3cam::kLightChains): whether the exe is their build
-  // (-1 not checked yet), whether the record in use came that way, whether they failed the terrain this session
-  int lightChainBuild = -1; bool lightFromChains = false, lightChainBad = false; uint32_t lightChainSets = 0;
+  // the game's light record this frame, through its own pointers (milestones 127, 128), and the frames it lit the sky
+  const float* lightRec = nullptr; uint32_t lightRecLogged = 0, framesFromGame = 0;
   void* moonApi = nullptr; uint32_t twilightLogged = 0; float skyLoggedB = -1.f;
   uint64_t statsTick = 0; uint32_t statsFrame = 0;   // the last statistics, for the frame rate
-  uint32_t sunChanges = 0, sunLogged = 0, framesNoTerrainSun = 0, sunRefused = 0, sunLogFrame = 0; float sunLogLum = -1.f, sunLogDir[3] = {};   // the sun trace (milestone 19d)
+  uint32_t sunChanges = 0, sunLogged = 0, sunLogFrame = 0; float sunLogLum = -1.f, sunLogDir[3] = {};   // the sun trace (milestone 19d)
   bool rsSet[256] = {};                              // render states the game has set at least once (the array's initial values are not trusted)
   uint32_t invisibleDrawsSkipped = 0, invisibleLogged = 0;   // captured draws whose render states make them invisible in-game (colour writes off, ...)
   bool vsCapturedUv = false;           // bound vertex shader's draws sample with its captured TEXCOORD0 output
@@ -87,7 +77,7 @@ struct Sims3Hook {
   bool lampReportLive = false, lampReportWorld = false, lampReportAnnounced = false;
   // the game's clock (milestone 40), and the world lights it keeps dark by day
   sims3cam::GameClock clock = {}; bool clockSaid = false, clockNight = false; uint32_t clockLogged = 0, lampsWorldDark = 0;
-  float worldFade = 0.f; bool worldBySwitch = false;   // the street lamps' fade, 0..1, and whether it is the game's night switch (milestone 55)
+  float worldFade = 0.f;   // the street lamps' fade, 0..1: the game's night switch (milestones 54, 55, 128)
   uint32_t markDump = 0;               // frames left to log after the mark key
   sims3cam::Lamps lamps;               // the game's own lamps, forwarded as Remix API lights
   uint32_t lampEvents = 0;             // API light creations and destructions made for lamps
@@ -310,15 +300,6 @@ std::atomic<const uint8_t*> g_sims3LampBlock { nullptr };
 std::atomic<bool> g_sims3LampScanBusy { false };
 std::atomic<uint32_t> g_sims3LampScans { 0 };
 std::atomic<uint32_t> g_sims3LampScanRegions { 0 }, g_sims3LampScanMegabytes { 0 };   // what the last search read through
-
-// the search for the game's own light in its memory (milestone 49): the direction and colour the
-// terrain was handed when the search began, the hook's own memory not to be counted, what was found
-constexpr uint32_t kSims3LightHitsMax = 64;
-std::atomic<bool> g_sims3LightScanBusy { false }, g_sims3LightScanDone { false };
-float g_sims3LightTarget[6] = {};
-const uint8_t* g_sims3LightExcludeFrom[2] = {}; const uint8_t* g_sims3LightExcludeTo[2] = {};
-const float* g_sims3LightHitAt[kSims3LightHitsMax] = {};
-std::atomic<uint32_t> g_sims3LightHitCount { 0 }, g_sims3LightHitOverflow { 0 }, g_sims3LightScanRegions { 0 }, g_sims3LightScanMegabytes { 0 }, g_sims3LightSkippedMapped { 0 };
 
 template<typename Dev> void sims3TerrainBlockEnd(Sims3Hook& h, Dev* dev);   // defined with the terrain path (milestone 18g)
 template<typename Dev> uint8_t sims3SquarePiece(Sims3Hook& h, Dev* dev);    // defined with the squares (milestone 60)
