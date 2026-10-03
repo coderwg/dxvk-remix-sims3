@@ -694,7 +694,7 @@ int main() {
     const AlbedoStage* ao = findAlbedoStage(0x0c19795eb80e2e96ull); const AlbedoStage* af = findAlbedoStage(0x17eabad58f650687ull);
     CHECK(ao && ao->stage == 3 && af && af->stage == 2 && findAlbedoStage(0x1234ull) == nullptr, "albedo stage: object PS -> 3, floor PS -> 2, unknown -> none");
     CHECK(findTexcoordPromote(0x0ba6ddb9aa01913cull) && findTexcoordPromote(0x0ba6ddb9aa01913cull)->texcoordIndex == 2 && findTexcoordPromote(0x55c99586fb17cd1cull) == nullptr, "promotions: objects promote 2; the terrain paint no longer promotes");
-    CHECK(findNeverCapture(0xc79615c0181b5ef1ull) && findNeverCapture(0x5a2deada1e077b44ull), "never-capture: the drop-shadow decals and the grass sprites are never sent");
+    CHECK(findNeverCapture(0xc79615c0181b5ef1ull) && !findNeverCapture(0x5a2deada1e077b44ull), "never-capture: the drop-shadow decals are never sent; the grass sprites are (milestone 138)");
     CHECK(!findNeverCapture(0xab38a73070378739ull) && findGameFake(0x11227d6d7bba5802ull), "never-capture: the Sim black overlay pass is not listed: its pixel shader 11227d6d is a game fake (milestone 131)");
     const NeverCapture* hair = findNeverCapture(0x57a5a049ffa47770ull); const NeverCapture* hair2 = findNeverCapture(0x00e85de9a42890fbull);
     CHECK(hair && hair2 && hair->blendedOnly && hair2->blendedOnly && neverCaptureDraw(neverCaptureMode(hair), TRUE) && !neverCaptureDraw(neverCaptureMode(hair), FALSE) && !findNeverCapture(0xe12c352d135375f2ull),

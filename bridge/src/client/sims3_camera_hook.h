@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-137).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-138).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -1115,11 +1115,13 @@ struct NeverCapture { uint64_t hash; const char* name; bool blendedOnly; };   //
 inline const NeverCapture kNeverCapture[] = {
   // from the run-15 shader dump
   { 0xc79615c0181b5ef1ull, "drop-shadow decals (instanced quads multiplied over the ground)", false },
-  // Close-range grass and flower sprites: camera-relative, faded by distance (hidden
-  // instances collapse to the origin), one of four axis orientations per instance, two
-  // wind-animated frames blended, alpha cut by texkill. Whole quads under capture -- the
-  // "green walls" that pop up as the camera comes close.
-  { 0x5a2deada1e077b44ull, "grass/flower detail sprites (distance-faded, wind-animated, alpha-cut)", false },
+  // (The close-range grass and flower sprites, VS 5a2deada / PS e8daded2, were listed here from
+  // milestone 3l to 138: whole quads under capture then -- the "green walls" -- before the hook
+  // gave the runtime the shader's own texture coordinates (milestones 7-8). Their cards stand in
+  // one of four fixed axis orientations; the PS's texkill never fires (it tests the sheet's alpha,
+  // never below 0) -- the cut is the game's alpha test on that alpha, which the runtime applies to
+  // the albedo it samples. A hidden sprite collapses to clip (0, 0, 0, 0): its captured corners
+  // are not finite and the triangle is inactive; the bounds come from the raw vertex buffer.)
   // (The Sims' soft shadow blob, VS b7d550c6, and their black overlay pass, VS ab38a730, were listed here
   // until milestone 131: their pixel shaders are the game's own fakes now, kGameFakes.)
   // The Sims' hair soft-edge pass (milestones 131, 133; found in run 171): each Sim's hair is drawn
