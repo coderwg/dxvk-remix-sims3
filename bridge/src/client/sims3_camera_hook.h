@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-147).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-148).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -35,12 +35,11 @@
  *                camera and un-project correctly, or fail the per-draw 3D tests
  *
  * The ray tracer renders reflections itself, so nothing of a reflection pass is sent on: its
- * 3D draws are dropped on the client (recognised by the mirrored camera, or by the stencil
- * mirror's render states for draws whose own constants never reach the classifier). The
- * passes whose result Remix never shows -- the shadow map, the sky's environment cube, the
- * water's reflection target -- are dropped whole (milestone 124, unshownPass), and so are the
- * game's own fakes (milestone 130, kGameFakes) and the 3D draws the ray tracer must not have
- * (milestone 131, kNeverCapture). Any other draw that is not captured gets the identity
+ * 3D draws are dropped on the client (recognised by the mirrored camera). The passes whose
+ * result Remix never shows -- the shadow map, the sky's environment cube, the water's
+ * reflection target -- are dropped whole (milestone 124, unshownPass), and so are the draws
+ * named in kDropPs by their pixel shader (milestone 148): the game's own fakes and the blended
+ * copies drawn in the world. Any other draw that is not captured gets the identity
  * transforms: into another target, or after the interface, the runtime rasterizes it as the
  * game drew it. (A 3D draw on the screen before the interface the runtime does NOT rasterize:
  * it traces it with an unknown camera, rtx.skipObjectsWithUnknownCamera being off -- junk at the
@@ -1090,84 +1089,65 @@ inline uint32_t packTint(const float* rgb) {
   return 0xFF000000u | (to8(rgb[0]) << 16) | (to8(rgb[1]) << 8) | to8(rgb[2]);   // D3DCOLOR ARGB
 }
 
-// ---- draws never to capture (milestone 2c; populated in 2f; blended-only entries in 16) ----
-// The 3D draws of the listed vertex shaders -- or pixel shaders (milestone 133) -- are never sent to
-// the runtime (milestone 131; until then they went out with the identity transforms, which the
-// runtime traced at the world origin): passes the ray tracer cannot represent. An entry marked
-// blendedOnly drops only the shader's alpha-blended draws and captures its opaque ones.
-struct NeverCapture { uint64_t hash; const char* name; bool blendedOnly; };   // hash: the vertex or the pixel shader's
-
-inline const NeverCapture kNeverCapture[] = {
-  // (The drop-shadow decals, the lot overlays and the buildings' shadow shapes on the ground, the
-  // lot-sized sheets of the top-down view and the town ground's lighting pass -- vertex shaders
-  // c79615c0, 8e7f4f65, d55820f9, 1139e30a, 23072b72, 53422654, 19c4591d, 3c837e49 -- were listed here
-  // until milestone 144: each only ever draws with a pixel shader kGameFakes drops.)
-  // (The close-range grass and flower sprites, VS 5a2deada / PS e8daded2, were listed here from
-  // milestone 3l to 138: whole quads under capture then -- the "green walls" -- before the hook
-  // gave the runtime the shader's own texture coordinates (milestones 7-8). Their cards stand in
-  // one of four fixed axis orientations; the PS's texkill never fires (it tests the sheet's alpha,
-  // never below 0) -- the cut is the game's alpha test on that alpha, which the runtime applies to
-  // the albedo it samples. A hidden sprite collapses to clip (0, 0, 0, 0): its captured corners
-  // are not finite and the triangle is inactive; the bounds come from the raw vertex buffer.)
-  // The Sims' hair soft-edge pass (milestones 131, 133; found in run 171): each Sim's hair is drawn
-  // twice -- alpha-tested and opaque, then the same mesh blended (SRCALPHA / INVSRCALPHA, no depth
-  // write) for its soft edges. The vertex shader differs from Sim to Sim (e12c352d, a4ca9554, a77613ea:
-  // the skinning and morph variants -- M131 keyed it by one of them); the PIXEL shader is the hair's:
-  // 57a5a049 and 00e85de9 indoors, 45c7a7cd outdoors (the same shader with the sun's shadow map s5 and
-  // the fog; run 238 -- until milestone 134 it was taken for a parked car's windows, M102, and its
-  // hair went out as car glass). Captured, the second copy was see-through, and the runtime gives
-  // see-through surfaces no motion: it trailed behind a walking Sim (run 237). The opaque pass is the hair.
-  { 0x57a5a049ffa47770ull, "the Sims' hair soft-edge pass (pixel shader; the blended copy of the alpha-tested hair)", true },
-  { 0x00e85de9a42890fbull, "the Sims' hair soft-edge pass (pixel shader; the blended copy of the alpha-tested hair)", true },
-  { 0x45c7a7cd511b5233ull, "the Sims' hair soft-edge pass outdoors (pixel shader with the sun's shadow map; the blended copy)", true },
-  // Effect cards (milestone 91): PS 7304aaea and kin -- texture x vertex colour, alpha = texture alpha
-  // x vertex alpha, a constant-direction cube glint, no culling. The runtime drops the vertex colour
-  // (rtx.ignoreAllVertexColorBakedLighting), so a faint blended effect became an unshaded white sheet:
-  // the light beams over the downtown lot (run 173) and a pond's surface effect, drawn through the
-  // water's stencil mask (the stencil the runtime does not see) -- the "flat white" pond of runs
-  // 194-198, over the water. Its alpha-tested opaque draws stay captured.
-  { 0x6cb3b47f30712201ull, "effect cards (texture x vertex colour; blended: light beams, a pond's surface effect)", true },
-};
-
-inline const NeverCapture* findNeverCapture(uint64_t hash) { return findByHash(kNeverCapture, hash); }
-
-// ---- the game's own fakes, dropped (milestone 130) --------------------------------------
-// What the game paints because it cannot trace light: its shadows, its fog, its glow and its tone
-// curve. Remix makes each of them itself, so these draws are dropped before they reach the runtime,
-// by pixel shader -- the effect is what the shader computes (run 234 counted what still reached the
-// runtime uncaptured; the shaders disassembled; none of these pixel shaders is ever captured). Before
-// the interface they were never seen in Remix (uncaptured, the identity transforms put them at the
-// world origin) but cost the bridge and the runtime; the tone curve, after the interface, was laid
-// over the ray-traced picture.
-struct GameFake { uint64_t hash; const char* name; };   // hash: the pixel shader's
-inline const GameFake kGameFakes[] = {
+// ---- draws never sent to the runtime, by pixel shader (milestones 130, 131, 133; one table since 148) -
+// What the pixel shader computes decides it. kGameFake: what the game paints because it cannot trace
+// light -- its shadows, its fog, its glow and its tone curve -- which Remix makes itself: every draw of
+// the shader is left out (run 234 counted what still reached the runtime uncaptured; the shaders
+// disassembled; none of these is ever captured). Before the interface they cost the bridge and the
+// runtime for nothing; the tone curve, after the interface, was laid over the ray-traced picture.
+// kBlendedCopy: the blended copy of an alpha-tested surface -- the same mesh drawn again for soft edges,
+// or a faint effect over it: its blended world draws are left out (see-through, the runtime gives them
+// no motion and drops their vertex colour); its opaque draws are captured, and its draws outside the
+// world (the action menu's portrait, a partial viewport) are rasterized as the game draws them.
+// (Until milestone 148 a second table, kNeverCapture, named some of these by vertex shader: its entries
+// whose vertex shader only ever drew with a fake went in milestone 144, and the effect cards' vertex
+// shader 6cb3b47f, which only ever draws with 7304aaea and 7865aa44, became those two here.)
+enum : uint8_t { kGameFake = 0, kBlendedCopy = 1 };
+struct DropPs { uint64_t hash; const char* name; uint8_t kind; };   // hash: the pixel shader's
+inline const DropPs kDropPs[] = {
   // the screen copied in 256x256 tiles after the interface and drawn back through x (1 + c0) / (x + c0)
-  { 0xbac911e069b2ee21ull, "the game's tone curve" },
+  { 0xbac911e069b2ee21ull, "the game's tone curve", kGameFake },
   // the glow: the scene's copy shrunk into 512x512, blurred back into 1024x1024, added onto the screen
-  { 0x5b275a5c0a5eb82eull, "the game's glow (shrink)" },
-  { 0x596c432012619e82ull, "the game's glow (blur)" },
-  { 0x353ed3fb56cf16f1ull, "the game's glow (blur; added onto the screen)" },
+  { 0x5b275a5c0a5eb82eull, "the game's glow (shrink)", kGameFake },
+  { 0x596c432012619e82ull, "the game's glow (blur)", kGameFake },
+  { 0x353ed3fb56cf16f1ull, "the game's glow (blur; added onto the screen)", kGameFake },
   // the Sims' soft shadows: each Sim's silhouette in a channel of a 512x512 target, blurred down to
   // 64x64 and back, laid over the ground as blobs (VS b7d550c6)
-  { 0x06640070ab99ca77ull, "the Sims' shadow silhouettes" },
-  { 0x4e0b4fe50a3af4eaull, "the Sims' shadows (blur)" },
-  { 0x2db6dcdb34d42a11ull, "the Sims' shadows (box filter)" },
-  { 0xe602e4157960f7adull, "the Sims' shadows (blur)" },
-  { 0x6cc68b13e65b5a73ull, "the Sims' shadow blobs on the ground" },
-  { 0x92a300ed9b662005ull, "the Sims' shadow blobs on the ground (multiplied)" },
-  { 0x7f79fba967877d64ull, "a shadow blob on the ground" },
+  { 0x06640070ab99ca77ull, "the Sims' shadow silhouettes", kGameFake },
+  { 0x4e0b4fe50a3af4eaull, "the Sims' shadows (blur)", kGameFake },
+  { 0x2db6dcdb34d42a11ull, "the Sims' shadows (box filter)", kGameFake },
+  { 0xe602e4157960f7adull, "the Sims' shadows (blur)", kGameFake },
+  { 0x6cc68b13e65b5a73ull, "the Sims' shadow blobs on the ground", kGameFake },
+  { 0x92a300ed9b662005ull, "the Sims' shadow blobs on the ground (multiplied)", kGameFake },
+  { 0x7f79fba967877d64ull, "a shadow blob on the ground", kGameFake },
   // shadows and light painted onto the ground, the lot and the Sims
-  { 0x6c1867be86538473ull, "building shadows on the ground (the shadow map, four taps, multiplied)" },
-  { 0x9b8f4e2b9fbb9bb1ull, "the town ground's light (the shadow map, multiplied over the paint)" },
-  { 0x00d76427fc9ede0cull, "a shadow decal on the ground (multiplied)" },
-  { 0xff810e83c3f21f0bull, "drop-shadow decals (multiplied)" },
-  { 0x11227d6d7bba5802ull, "the Sims' darkening overlay (black by the composite's alpha)" },
-  { 0x8133bb57435ab6eeull, "the lot's shading sheets in the top-down view (a colour, alpha by height)" },
+  { 0x6c1867be86538473ull, "building shadows on the ground (the shadow map, four taps, multiplied)", kGameFake },
+  { 0x9b8f4e2b9fbb9bb1ull, "the town ground's light (the shadow map, multiplied over the paint)", kGameFake },
+  { 0x00d76427fc9ede0cull, "a shadow decal on the ground (multiplied)", kGameFake },
+  { 0xff810e83c3f21f0bull, "drop-shadow decals (multiplied)", kGameFake },
+  { 0x11227d6d7bba5802ull, "the Sims' darkening overlay (black by the composite's alpha)", kGameFake },
+  { 0x8133bb57435ab6eeull, "the lot's shading sheets in the top-down view (a colour, alpha by height)", kGameFake },
   // the fog painted over the lot (the runtime's fog comes from the game's light record)
-  { 0xd33629855723d2bcull, "the game's fog over the lot" },
-  { 0xd09db2967daf6d1full, "the game's fog over the lot" },
+  { 0xd33629855723d2bcull, "the game's fog over the lot", kGameFake },
+  { 0xd09db2967daf6d1full, "the game's fog over the lot", kGameFake },
+  // The Sims' hair soft-edge pass (milestones 131, 133; found in run 171): each Sim's hair is drawn twice --
+  // alpha-tested and opaque, then the same mesh blended (SRCALPHA / INVSRCALPHA, no depth write) for its
+  // soft edges; the vertex shader differs from Sim to Sim, the pixel shader is the hair's: 57a5a049 and
+  // 00e85de9 indoors, 45c7a7cd outdoors (with the sun's shadow map s5 and the fog; taken for a parked
+  // car's windows until milestone 134). Captured, the see-through copy trailed behind a walking Sim (run 237).
+  { 0x57a5a049ffa47770ull, "the Sims' hair soft-edge pass (the blended copy of the alpha-tested hair)", kBlendedCopy },
+  { 0x00e85de9a42890fbull, "the Sims' hair soft-edge pass (the blended copy of the alpha-tested hair)", kBlendedCopy },
+  { 0x45c7a7cd511b5233ull, "the Sims' hair soft-edge pass outdoors (with the sun's shadow map; the blended copy)", kBlendedCopy },
+  // The effect cards (milestone 91, VS 6cb3b47f): texture x vertex colour, alpha = texture alpha x vertex
+  // alpha, a constant-direction cube glint, no culling. The runtime drops the vertex colour, so a faint
+  // blended effect became an unshaded white sheet: the light beams over the downtown lot (run 173) and a
+  // pond's surface effect drawn through the water's stencil mask -- the "flat white" pond of runs 194-198.
+  { 0x7304aaea6a75fb3full, "effect cards (blended: light beams, a pond's surface effect)", kBlendedCopy },
+  { 0x7865aa449e279d1dull, "effect cards (blended; the stage-0 variant)", kBlendedCopy },
 };
-inline const GameFake* findGameFake(uint64_t psHash) { return findByHash(kGameFakes, psHash); }
+inline const DropPs* findDropPs(uint64_t psHash) { return findByHash(kDropPs, psHash); }
+// Whether a draw of the bound pixel shader is left out (is3D: a world draw, see drawIs3D).
+inline bool dropsDraw(const DropPs* d, bool is3D, DWORD alphaBlendEnable) { return d && (d->kind == kGameFake || (is3D && alphaBlendEnable != 0)); }
 
 // ---- trees near the camera drawn solid (milestone 137) -------------------------------------
 // When the camera comes close the game draws a whole tree blended instead of opaque: its own pixel
@@ -1186,10 +1166,6 @@ inline const SolidFade kSolidFades[] = {
   { 0xca3faba5c3d2dbc2ull, "a tree's fronds near the camera (VS 01729eeb)", 1, kSemColor0 * 4 + 3 },
 };
 inline const SolidFade* findSolidFade(uint64_t psHash) { return findByHash(kSolidFades, psHash); }
-// The mode a vertex shader carries from its table entry: 0 captured, 1 never captured, 2 not
-// captured when alpha blending is on.
-inline uint8_t neverCaptureMode(const NeverCapture* n) { return n ? (n->blendedOnly ? 2 : 1) : 0; }
-inline bool neverCaptureDraw(uint8_t mode, DWORD alphaBlendEnable) { return mode == 1 || (mode == 2 && alphaBlendEnable != 0); }
 
 // ---- the lot terrain drawn once per world chunk (milestone 16) ----------------------------
 // A lot's ground mesh is drawn once for every 256-unit world chunk it overlaps, with that chunk's

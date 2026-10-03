@@ -2899,12 +2899,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreateVertexShader(CONST DWORD* pFunc
       snprintf(msg, sizeof msg, "Sims 3 camera hook: shader recognised -> %s", pLssVertexShader->sims3Patch->name);
       Logger::info(msg);
     }
-    if (const sims3cam::NeverCapture* n = sims3cam::findNeverCapture(pLssVertexShader->sims3Hash)) {
-      pLssVertexShader->sims3NeverCapture = sims3cam::neverCaptureMode(n);
-      char msg[224];
-      snprintf(msg, sizeof msg, "Sims 3 camera hook: %s of this shader are never captured -> %s", n->blendedOnly ? "alpha-blended draws" : "draws", n->name);
-      Logger::info(msg);
-    } else if (sims3cam::isSkyDomeShader(pFunction, sims3Count)) {
+    if (sims3cam::isSkyDomeShader(pFunction, sims3Count)) {
       pLssVertexShader->sims3SkyDome = true;
       char msg[224];
       snprintf(msg, sizeof msg, "Sims 3 camera hook: vertex shader %016llx pins its position's z to w (a sky dome) -> its draws are presented to the runtime as the sky", (unsigned long long) sims3Hash);

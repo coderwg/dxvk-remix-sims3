@@ -44,9 +44,9 @@ inline void sims3OnReset(Sims3Hook& h) {
   for (int i = 0; i < 2; ++i) { if (h.extraRestore[i]) h.extraRestore[i]->Release(); h.extraRestore[i] = nullptr; }
   h.remapActive = false; h.maskEmu = 0; h.viewportOurs = false; h.vsSkyDome = false;
   h.vsBound = nullptr; h.vsTabled = false; h.vsNormal = nullptr; h.vsConstOut = nullptr; h.vsCard = nullptr; h.pendingPromote = 0; h.vsHash = 0;
-  h.patch = nullptr; h.vsNeverCapture = 0; h.vsCapturedUv = false;
+  h.patch = nullptr; h.vsCapturedUv = false;
   h.lotCopies.clear();
-  h.psAuto = nullptr; h.psAlbedoStage = -1; h.psTintReg = -1; h.psHash = 0; h.psNeverCapture = 0;
+  h.psAuto = nullptr; h.psAlbedoStage = -1; h.psTintReg = -1; h.psHash = 0; h.psDrop = nullptr;
   h.declIs3D = false; h.drawCaptured = false; h.autoCapturedUv = false;
   for (int i = 0; i < 16; ++i) { h.boundTex[i] = nullptr; h.boundColor2D[i] = false; h.boundKind[i] = 0; h.boundFmt[i] = 0; h.boundW[i] = h.boundH[i] = 0; }
   for (uint32_t i = 0; i < h.scratchCount; ++i) { if (h.scratch[i].surf) h.scratch[i].surf->Release(); if (h.scratch[i].tex) h.scratch[i].tex->Release(); h.scratch[i] = Sims3Hook::Scratch(); }

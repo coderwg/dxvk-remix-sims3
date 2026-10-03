@@ -45,11 +45,6 @@ bool sims3ApplyForDraw(Sims3Hook& h, Dev* dev, const DWORD* rs) {
     h.drawDropped = true; ++h.unshownDrops[unshown];
     return false;
   }
-  // the game's own fakes (milestone 130): its shadows, fog, glow and tone curve, which Remix makes itself
-  if (const sims3cam::GameFake* fake = sims3cam::findGameFake(h.psHash)) {
-    h.drawDropped = true; ++h.fakeDrops;
-    return false;
-  }
   // a reflection pass's draw (runs 66-68): dropped before it reaches the runtime; the ray tracer
   // renders reflections itself. Nothing is changed on the device for it.
   h.drawDropped = sims3cam::isReflectionDraw(h.camMirrored, h.declIs3D, zEnable);
@@ -61,13 +56,14 @@ bool sims3ApplyForDraw(Sims3Hook& h, Dev* dev, const DWORD* rs) {
   D3DVIEWPORT9 vp = {}; dev->GetViewport(&vp);
   const bool fullViewport = h.rt0W == 0 || (vp.X == 0 && vp.Y == 0 && vp.Width == h.rt0W && vp.Height == h.rt0H);   // milestone 133
   const bool is3D = sims3cam::drawIs3D(h.cameraValid, h.declIs3D, zEnable, h.rtIsPrimary, fullViewport);
-  if (sims3LotTerrainCopy(h, dev, is3D)) return false;   // a lot chunk copy without the baker's markers: dropped (milestone 16)
-  // a 3D draw the ray tracer must not have (kNeverCapture): never sent (milestone 131) -- with the
-  // identity transforms the runtime would trace it with an unknown camera, at the world origin
-  if (is3D && (sims3cam::neverCaptureDraw(h.vsNeverCapture, rs[D3DRS_ALPHABLENDENABLE]) || sims3cam::neverCaptureDraw(h.psNeverCapture, rs[D3DRS_ALPHABLENDENABLE]))) {
-    h.drawDropped = true; ++h.neverSentDrops;
+  // a draw the runtime must not have (milestone 148, kDropPs): the game's own fakes -- its shadows, fog, glow
+  // and tone curve, which Remix makes itself -- and the blended copies drawn in the world
+  if (sims3cam::dropsDraw(h.psDrop, is3D, rs[D3DRS_ALPHABLENDENABLE])) {
+    h.drawDropped = true;
+    if (h.psDrop->kind == sims3cam::kGameFake) ++h.fakeDrops; else ++h.blendedCopyDrops;
     return false;
   }
+  if (sims3LotTerrainCopy(h, dev, is3D)) return false;   // a lot chunk copy without the baker's markers: dropped (milestone 16)
   const bool want = is3D;
   if (want) {
     if (h.held.kind != sims3cam::Kind::Main || !sims3cam::similarMatrix(h.held.view, h.cam.view, 1e-5f) || !sims3cam::similarMatrix(h.held.proj, h.cam.proj, 1e-5f)) {

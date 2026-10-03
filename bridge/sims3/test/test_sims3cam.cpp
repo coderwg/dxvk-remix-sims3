@@ -272,10 +272,20 @@ int main() {
   }
 
   // --- the game's own fakes (milestone 130): dropped by pixel shader
-  CHECK(findGameFake(0xbac911e069b2ee21ull) && findGameFake(0x353ed3fb56cf16f1ull) && findGameFake(0x9b8f4e2b9fbb9bb1ull) && findGameFake(0xd33629855723d2bcull),
-        "game fakes: the tone curve, the glow's composite, the town ground's light, the fog over the lot");
-  CHECK(!findGameFake(0x5aee1186d554dbc4ull) && !findGameFake(0x7304aaea6a75fb3full) && !findGameFake(0x7ba9f578d1a1ebb2ull) && !findGameFake(0x52d5e6267a915d34ull) && !findGameFake(0),
-        "game fakes: not the objects' shader, the effect cards (their opaque draws are captured), the interface, the cursor's depth pick");
+  {
+    auto fake = [](uint64_t ps) { const DropPs* d = findDropPs(ps); return d && d->kind == kGameFake; };
+    auto copy = [](uint64_t ps) { const DropPs* d = findDropPs(ps); return d && d->kind == kBlendedCopy; };
+    CHECK(fake(0xbac911e069b2ee21ull) && fake(0x353ed3fb56cf16f1ull) && fake(0x9b8f4e2b9fbb9bb1ull) && fake(0xd33629855723d2bcull) && fake(0xff810e83c3f21f0bull) && fake(0x11227d6d7bba5802ull)
+          && fake(0x6cc68b13e65b5a73ull) && fake(0x92a300ed9b662005ull),
+          "drop table: the game's fakes -- the tone curve, the glow's composite, the town ground's light, the fog over the lot, the drop-shadow decals, the Sims' darkening overlay, the Sims' shadow blobs");
+    CHECK(copy(0x57a5a049ffa47770ull) && copy(0x00e85de9a42890fbull) && copy(0x45c7a7cd511b5233ull) && copy(0x7304aaea6a75fb3full) && copy(0x7865aa449e279d1dull),
+          "drop table (M148): the blended copies -- the Sims' hair indoors and out, the effect cards by their two pixel shaders");
+    CHECK(!findDropPs(0x5aee1186d554dbc4ull) && !findDropPs(0x7ba9f578d1a1ebb2ull) && !findDropPs(0x52d5e6267a915d34ull) && !findDropPs(0xe8daded2c199a6e2ull) && !findDropPs(0),
+          "drop table: not the objects' shader, the interface, the cursor's depth pick, the grass sprites (sent since milestone 138)");
+    const DropPs* f = findDropPs(0xbac911e069b2ee21ull); const DropPs* hair = findDropPs(0x57a5a049ffa47770ull);
+    CHECK(dropsDraw(f, false, FALSE) && dropsDraw(f, true, TRUE) && dropsDraw(hair, true, TRUE) && !dropsDraw(hair, true, FALSE) && !dropsDraw(hair, false, TRUE) && !dropsDraw(nullptr, true, TRUE),
+          "drop table: a fake goes in every draw; a blended copy only as a blended world draw (its opaque pass captured, the menu portrait's rasterized)");
+  }
 
   // --- the passes Remix never shows (milestone 124), from the in-world trace's targets
   CHECK(unshownPass(false, 2048, 2048, 0, false, false) == kShadowMapPass, "a 2048x2048 offscreen target written with colour writes off: the shadow map");
@@ -721,13 +731,6 @@ int main() {
     const AlbedoStage* ao = findAlbedoStage(0x0c19795eb80e2e96ull); const AlbedoStage* af = findAlbedoStage(0x17eabad58f650687ull);
     CHECK(ao && ao->stage == 3 && af && af->stage == 2 && findAlbedoStage(0x1234ull) == nullptr, "albedo stage: object PS -> 3, floor PS -> 2, unknown -> none");
     CHECK(findTexcoordPromote(0x0ba6ddb9aa01913cull) && findTexcoordPromote(0x0ba6ddb9aa01913cull)->texcoordIndex == 2 && findTexcoordPromote(0x55c99586fb17cd1cull) == nullptr, "promotions: objects promote 2; the terrain paint no longer promotes");
-    CHECK(!findNeverCapture(0xc79615c0181b5ef1ull) && findGameFake(0xff810e83c3f21f0bull) && !findNeverCapture(0x5a2deada1e077b44ull),
-          "never-capture: the drop-shadow decals go by their pixel shader, a game fake (milestone 144); the grass sprites are sent (milestone 138)");
-    CHECK(!findNeverCapture(0xab38a73070378739ull) && findGameFake(0x11227d6d7bba5802ull), "never-capture: the Sim black overlay pass is not listed: its pixel shader 11227d6d is a game fake (milestone 131)");
-    const NeverCapture* hair = findNeverCapture(0x57a5a049ffa47770ull); const NeverCapture* hair2 = findNeverCapture(0x00e85de9a42890fbull);
-    CHECK(hair && hair2 && hair->blendedOnly && hair2->blendedOnly && neverCaptureDraw(neverCaptureMode(hair), TRUE) && !neverCaptureDraw(neverCaptureMode(hair), FALSE) && !findNeverCapture(0xe12c352d135375f2ull),
-          "never-capture (M133): the Sims' hair by its pixel shaders -- the blended soft-edge copy never sent, the alpha-tested opaque pass captured; not by one Sim's vertex shader");
-    CHECK(findNeverCapture(0x41a25ab37bb2622cull) == nullptr, "never-capture: the sky dome is not in the table (it is presented as the runtime's sky instead)");
     {
       // the sky dome recognised from its bytecode: a position input, and the position's z pinned to w
       std::vector<DWORD> dome, obj2, wallsA3, stub;
@@ -1222,10 +1225,6 @@ int main() {
 
   // --- milestone 16: the lot terrain drawn once per world chunk, and the world terrain's blended layer passes
   {
-    CHECK(!findNeverCapture(0xdfaf82cf9ec175b0ull) && !findNeverCapture(0x0344bbc366f10954ull), "never-capture table: the terrain paint passes left it (baked as hidden layer passes, milestone 17)");
-    const NeverCapture n = { 1, "blended-only", true }, m = { 2, "always", false };
-    CHECK(neverCaptureMode(&n) == 2 && neverCaptureMode(&m) == 1 && neverCaptureMode(nullptr) == 0, "neverCaptureMode: 2 for a blended-only entry, 1 otherwise, 0 without an entry");
-    CHECK(!neverCaptureDraw(0, TRUE) && neverCaptureDraw(1, FALSE) && neverCaptureDraw(1, TRUE) && !neverCaptureDraw(2, FALSE) && neverCaptureDraw(2, TRUE), "neverCaptureDraw: mode 1 always, mode 2 only with alpha blending on");
     CHECK(kLotTerrainVs == kShaderPatches[0].hash && findShaderPatch(kLotTerrainVs) != nullptr, "the lot terrain's hash names the kill-rectangle patch");
     // the traced frame: lot A (World rows below, buffer 0x500c9e60) drawn for chunks (1152,1152) and (1152,896), lot B (0x500cbd40) likewise
     const float rowsA[12] = { 0.3420206f, 0.f, -0.9396924f, 1171.278f,  0.f, 1.f, 0.f, 45.89392f,  0.9396924f, 0.f, 0.3420206f, 1001.816f };
@@ -1291,9 +1290,9 @@ int main() {
         if (loadShader(n, sb) && (!analyzePixelShader(sb.data(), sb.size(), sa) || isGlassShader(sa))) farOk = false;
       }
       const NamedGlass* doorKin = namedGlass(0x85e9c3381d5bf054ull); const NamedGlass* carFar = namedGlass(0xd03ebab11453bca1ull);
-      const NamedGlass* passing = namedGlass(0x66516d5db94ab307ull); const NeverCapture* hairOut = findNeverCapture(0x45c7a7cd511b5233ull);
+      const NamedGlass* passing = namedGlass(0x66516d5db94ab307ull); const DropPs* hairOut = findDropPs(0x45c7a7cd511b5233ull);
       CHECK(farOk && doorKin && doorKin->material == kClearGlass && carFar && carFar->material == kCarGlass && passing && passing->material == kCarGlass && !namedGlass(0x0c2df3be933b2117ull)
-            && !namedGlass(0x45c7a7cd511b5233ull) && hairOut && hairOut->blendedOnly,
+            && !namedGlass(0x45c7a7cd511b5233ull) && hairOut && hairOut->kind == kBlendedCopy,
             "glass (M102, M105, M134): 85e9c338 clear glass; car glass: a passing car's 66516d5d, a distant car's d03ebab1; 0c2df3be not named; 45c7a7cd is the Sims' hair outdoors, not glass (its blended copy never sent); 85e9c338 / d03ebab1 not cube-only");
       // milestones 107, 109: the survey's glass -- clear; bumpy with a normal map; objects fading in are not glass
       auto glassMat = [](uint64_t hsh) { const NamedGlass* g = namedGlass(hsh); return g ? (int) g->material : -1; };
@@ -1348,8 +1347,6 @@ int main() {
       const bool mirrorCube = !loadShader("ps_86dad57d0dc73989", mp) || (analyzePixelShader(mp.data(), mp.size(), ma) && isGlassShader(ma));
       CHECK(mirrorCube && (!ma.valid || (isReflectiveSheet(ma, TRUE) && !isReflectiveSheet(ma, FALSE))), "mirror (M82, M101): the reflective sheet PS 86dad57d reads only a cube; with the stencil test on it is a mirror's face");
       // milestones 84, 131: the Sims' soft shadow blob -- dropped by its pixel shaders (game fakes), no longer listed by its VS
-      CHECK(!findNeverCapture(0xb7d550c6421e14f4ull) && findGameFake(0x6cc68b13e65b5a73ull) && findGameFake(0x92a300ed9b662005ull),
-            "the Sims' soft shadow blob VS b7d550c6: its pixel shaders are game fakes, the VS no longer listed (M131)");
       // milestones 97, 97c: a zero-thickness wall's back side -- the same square in the plane x = 512, the back
       // cut along the other diagonal (run 209); a wall with a thickness has its other side on another plane
       {
@@ -1365,9 +1362,6 @@ int main() {
         CHECK(backIs && m1 == 2 && !sameIs && m2 == 0 && !thickIs && m3 == 0 && wallTriKey(a, a, b) == 0 && wallTriKey(a, b, c) == wallTriKey(b, c, a) && (wallTriKey(a, b, c) ^ 1u) == wallTriKey(c, b, a),
               "wall back side (M97c): the other diagonal facing the other way on the same plane is a back side; the same facing, or another plane, is not");
       }
-      const NeverCapture* cards = findNeverCapture(0x6cb3b47f30712201ull);
-      CHECK(cards && cards->blendedOnly && neverCaptureDraw(neverCaptureMode(cards), TRUE) && !neverCaptureDraw(neverCaptureMode(cards), FALSE),
-            "never-capture (M91): the effect cards VS 6cb3b47f, blended draws only (the pond's white surface effect, the light beams)");
       static uint32_t gm[kGlassMarkerSize * kGlassMarkerSize]; for (auto& p : gm) p = kGlassMaterial[kClearGlass].colour;
       const uint64_t gh = (uint64_t) XXH3_64bits(gm, sizeof gm);
       std::vector<uint8_t> usd; char name[32]; snprintf(name, sizeof name, "mat_%016llX", (unsigned long long) kGlassMaterial[kClearGlass].hash);

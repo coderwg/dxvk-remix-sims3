@@ -23,9 +23,9 @@ static void sims3LogStats() {
            h.normalVariantsMade, h.normalDraws, h.normalHiddenDraws, h.vsConverted, h.vsConvertFailed, h.deinstancedDraws, h.deinstancedInstances,
            h.restoreCount, h.maskEmuA, h.maskEmuB, h.maskEmuC, h.maskEmuSkipped, h.copyFailed);
   Logger::info(msg);
-  snprintf(msg, sizeof msg, "Sims 3 camera hook:   cameras: transforms sent %u times, %u uploads without their eye taken as the camera continued, %u sky dome draws; dropped: %u shadow map, %u sky cube, %u water reflection, %u reflection-pass draws in %u frames (%u mirrored uploads), %u of the game's own fakes, %u never-captured 3D draws, %u of the neighbourhood view's lot picture",
+  snprintf(msg, sizeof msg, "Sims 3 camera hook:   cameras: transforms sent %u times, %u uploads without their eye taken as the camera continued, %u sky dome draws; dropped: %u shadow map, %u sky cube, %u water reflection, %u reflection-pass draws in %u frames (%u mirrored uploads), %u of the game's own fakes, %u blended copies, %u of the neighbourhood view's lot picture",
            h.transformSends, h.continuedUploads, h.skyDraws, h.unshownDrops[sims3cam::kShadowMapPass], h.unshownDrops[sims3cam::kSkyCubePass], h.unshownDrops[sims3cam::kWaterReflectionPass],
-           h.reflectionDrops, h.reflectionFrames, h.mirroredUploads, h.fakeDrops, h.neverSentDrops, h.lotPictureDropped);
+           h.reflectionDrops, h.reflectionFrames, h.mirroredUploads, h.fakeDrops, h.blendedCopyDrops, h.lotPictureDropped);
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   sky: the game's light record %s (%u frames lit by it); clock %s %.2f h (sunrise %.2f, sunset %.2f); the game's light is the %s's, luminance %.3f; sun %s %.3f toward %.3f, %.3f, %.3f; moon %s %.3f toward %.3f, %.3f, %.3f; afterglow %s; %u light updates; the street lamps at %.3f by the game's night switch",
            h.lightRec ? "reached" : "NOT reached", h.framesFromGame, !h.clock.known ? "unknown," : (h.clock.night ? "night," : "day,"), h.clock.hour, h.clock.sunrise, h.clock.sunset,

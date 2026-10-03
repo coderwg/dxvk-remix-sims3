@@ -40,10 +40,8 @@ public:
     , m_shader(shader) {
   }
 
-  // The Sims 3 camera hook: constant-patch rule for this shader (by bytecode hash), or null;
-  // and whether its draws are never captured (1), or not when alpha-blended (2): neverCaptureMode.
+  // The Sims 3 camera hook: constant-patch rule for this shader (by bytecode hash), or null.
   const sims3cam::ShaderPatch* sims3Patch = nullptr;
-  uint8_t sims3NeverCapture = 0;
   bool sims3SkyDome = false;    // its draws are presented to the runtime as the sky (isSkyDomeShader)
   uint64_t sims3Hash = 0;     // FNV-1a-64 of the original bytecode (diagnostics)
   sims3cam::VsNormalInfo sims3Normal;   // where the world-space normal leaves this shader (milestone 11)

@@ -6,7 +6,6 @@
 void sims3NoteVertexShader(Sims3Hook& h, IDirect3DVertexShader9* pShader) {
   auto* const pLssVertexShader = bridge_cast<Direct3DVertexShader9_LSS*>(pShader);
   h.patch = pLssVertexShader ? pLssVertexShader->sims3Patch : nullptr;
-  h.vsNeverCapture = pLssVertexShader ? pLssVertexShader->sims3NeverCapture : 0;
   h.vsSkyDome = pLssVertexShader ? pLssVertexShader->sims3SkyDome : false;
   h.vsHash = pLssVertexShader ? pLssVertexShader->sims3Hash : 0;
   h.vsCapturedUv = pLssVertexShader ? sims3cam::useCapturedUv(pLssVertexShader->sims3Hash) : false;
@@ -24,7 +23,7 @@ void sims3NotePixelShader(Sims3Hook& h, IDirect3DPixelShader9* pShader) {
   h.psAlbedoStage = pLssPixelShader ? pLssPixelShader->sims3AlbedoStage : -1;
   h.psTintReg = pLssPixelShader ? pLssPixelShader->sims3TintReg : -1;
   h.psHash = pLssPixelShader ? pLssPixelShader->sims3Hash : 0;
-  h.psNeverCapture = sims3cam::neverCaptureMode(sims3cam::findNeverCapture(h.psHash));   // milestone 133
+  h.psDrop = sims3cam::findDropPs(h.psHash);   // milestone 148
   h.psAuto = pLssPixelShader ? &pLssPixelShader->sims3Auto : nullptr;
   h.psMajor = pLssPixelShader ? pLssPixelShader->sims3Major : (uint8_t) 0;
 }
