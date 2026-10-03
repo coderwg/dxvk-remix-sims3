@@ -110,6 +110,122 @@ static void sims3DescribeAddress(const void* p, char* out, size_t cap) {
   else snprintf(out, cap, "unknown memory");
 }
 
+// The game's light record reached from the game's program (milestone 125, a diagnostic). Once the
+// record is found, the places in the game's executable image that lead to it are listed -- a pointer
+// into the object holding it (at most 64 KB before it), or a pointer to an object in between (at
+// most 8 KB before a pointer that does so) -- to find a fixed path that needs neither the terrain nor
+// the search. Logged, and appended to rtx-remix\logs\sims3-light-paths.txt, which outlives the
+// session: a path that holds in two fresh sessions is the game's. Searched on a thread of its own;
+// every read of the game's memory guarded.
+static const uint32_t kSims3PathSpan = 0x10000, kSims3PathSpan2 = 0x2000, kSims3PathHoldersMax = 16384, kSims3PathHitsMax = 64;
+struct Sims3PathHit { uint32_t off, d1, d2; bool direct; };
+static const uint8_t* g_sims3PathTarget = nullptr;
+static uint32_t g_sims3PathHolders[kSims3PathHoldersMax]; static uint32_t g_sims3PathHolderN = 0, g_sims3PathHolderOver = 0;
+static Sims3PathHit g_sims3PathHits[kSims3PathHitsMax]; static uint32_t g_sims3PathHitN = 0, g_sims3PathHitOver = 0;
+static uint32_t g_sims3PathImageSize = 0, g_sims3PathStamp = 0, g_sims3PathScans = 0;
+static std::atomic<bool> g_sims3PathBusy { false }, g_sims3PathDone { false };
+static void sims3PathAdd(uint32_t off, uint32_t d1, uint32_t d2, bool direct) {
+  if (g_sims3PathHitN < kSims3PathHitsMax) g_sims3PathHits[g_sims3PathHitN++] = { off, d1, d2, direct }; else ++g_sims3PathHitOver;
+}
+// Objects in the game's private memory holding a pointer at most kSims3PathSpan before the record.
+static void sims3PathHolderRegion(const uint8_t* base, size_t size, uint32_t a) {
+  __try {
+    const uint32_t* q = (const uint32_t*) base; const uint32_t* const end = q + size / 4;
+    for (; q < end; ++q) {
+      const uint32_t v = *q;
+      if (v > a || a - v > kSims3PathSpan) continue;
+      const uint8_t* at = (const uint8_t*) q;
+      if (at >= g_sims3LightExcludeFrom[1] && at < g_sims3LightExcludeTo[1]) continue;   // the device object
+      if (g_sims3PathHolderN < kSims3PathHoldersMax) g_sims3PathHolders[g_sims3PathHolderN++] = (uint32_t) (uintptr_t) at; else ++g_sims3PathHolderOver;
+    }
+  } __except (EXCEPTION_EXECUTE_HANDLER) { }
+}
+// The image's own words: a pointer near the record (level 1) or just before one of its holders (level 2).
+static void sims3PathImageRegion(const uint8_t* img, const uint8_t* base, size_t size, uint32_t a) {
+  __try {
+    const uint32_t* q = (const uint32_t*) base; const uint32_t* const end = q + size / 4;
+    const uint32_t* const hb = g_sims3PathHolders; const uint32_t* const he = g_sims3PathHolders + g_sims3PathHolderN;
+    for (; q < end; ++q) {
+      const uint32_t v = *q;
+      if (v <= a && a - v <= kSims3PathSpan) { sims3PathAdd((uint32_t) ((const uint8_t*) q - img), a - v, 0, true); continue; }
+      const uint32_t* h = std::lower_bound(hb, he, v);
+      if (h == he || *h - v > kSims3PathSpan2) continue;
+      const uint32_t held = *(const uint32_t*) (uintptr_t) *h;
+      sims3PathAdd((uint32_t) ((const uint8_t*) q - img), *h - v, a - held, false);
+    }
+  } __except (EXCEPTION_EXECUTE_HANDLER) { }
+}
+static bool sims3PathImageInfo(const uint8_t* img, uint32_t& size, uint32_t& stamp) {
+  __try {
+    const IMAGE_DOS_HEADER* dos = (const IMAGE_DOS_HEADER*) img;
+    const IMAGE_NT_HEADERS32* nt = (const IMAGE_NT_HEADERS32*) (img + dos->e_lfanew);
+    size = nt->OptionalHeader.SizeOfImage; stamp = nt->FileHeader.TimeDateStamp;
+    return true;
+  } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+static void sims3PathScan() {
+  const uint32_t a = (uint32_t) (uintptr_t) g_sims3PathTarget;
+  const uint8_t* const img = (const uint8_t*) GetModuleHandleA(nullptr);
+  g_sims3PathHolderN = g_sims3PathHolderOver = g_sims3PathHitN = g_sims3PathHitOver = 0;
+  uint32_t size = 0, stamp = 0;
+  if (img && sims3PathImageInfo(img, size, stamp)) {
+    g_sims3PathImageSize = size; g_sims3PathStamp = stamp;
+    MEMORY_BASIC_INFORMATION mbi;
+    // the objects in between: committed writable private memory (the hook's own state lives in its module's image)
+    for (const uint8_t* p = (const uint8_t*) 0x10000; VirtualQuery(p, &mbi, sizeof mbi) == sizeof mbi; ) {
+      const DWORD prot = mbi.Protect & 0xFF;
+      const bool writable = prot == PAGE_READWRITE || prot == PAGE_EXECUTE_READWRITE || prot == PAGE_WRITECOPY || prot == PAGE_EXECUTE_WRITECOPY;
+      if (mbi.State == MEM_COMMIT && mbi.Type == MEM_PRIVATE && writable && !(mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)))
+        sims3PathHolderRegion((const uint8_t*) mbi.BaseAddress, mbi.RegionSize, a);
+      const uint8_t* next = (const uint8_t*) mbi.BaseAddress + mbi.RegionSize;
+      if (next <= p) break;
+      p = next;
+    }
+    std::sort(g_sims3PathHolders, g_sims3PathHolders + g_sims3PathHolderN);
+    // the image's committed, readable pages
+    for (const uint8_t* p = img; p < img + size && VirtualQuery(p, &mbi, sizeof mbi) == sizeof mbi; ) {
+      if (mbi.State == MEM_COMMIT && !(mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS))) {
+        const uint8_t* from = (const uint8_t*) mbi.BaseAddress < img ? img : (const uint8_t*) mbi.BaseAddress;
+        const uint8_t* to = (const uint8_t*) mbi.BaseAddress + mbi.RegionSize; if (to > img + size) to = img + size;
+        if (to > from) sims3PathImageRegion(img, from, (size_t) (to - from), a);
+      }
+      const uint8_t* next = (const uint8_t*) mbi.BaseAddress + mbi.RegionSize;
+      if (next <= p) break;
+      p = next;
+    }
+  }
+  g_sims3PathDone = true;
+  g_sims3PathBusy = false;
+}
+// What the search found: the log, and the file that outlives the session.
+static void sims3PathReport(const Sims3Hook& h) {
+  char exe[MAX_PATH] = {}; GetModuleFileNameA(nullptr, exe, MAX_PATH);
+  const char* name = strrchr(exe, '\\'); name = name ? name + 1 : exe;
+  char where[160]; sims3DescribeAddress(g_sims3PathTarget, where, sizeof where);
+  std::sort(g_sims3PathHits, g_sims3PathHits + g_sims3PathHitN, [](const Sims3PathHit& x, const Sims3PathHit& y) { return x.direct != y.direct ? x.direct : x.d1 + x.d2 < y.d1 + y.d2; });
+  uint32_t direct = 0; for (uint32_t k = 0; k < g_sims3PathHitN; ++k) if (g_sims3PathHits[k].direct) ++direct;
+  std::vector<std::string> lines;
+  lines.push_back(format_string("the game's light record at %p (%s), frame %u, clock %.2f h, reached from %s (build stamp %08x, image %u KB): %u direct places, %u through one object (%u more not kept); %u objects hold a pointer at most 64 KB before it (%u more not kept)",
+                                (const void*) g_sims3PathTarget, where, h.frames, h.clock.known ? h.clock.hour : -1.f, name, g_sims3PathStamp, g_sims3PathImageSize >> 10,
+                                direct, g_sims3PathHitN - direct, g_sims3PathHitOver, g_sims3PathHolderN, g_sims3PathHolderOver));
+  for (uint32_t k = 0; k < g_sims3PathHitN; ++k) {
+    const Sims3PathHit& p = g_sims3PathHits[k];
+    if (p.direct) lines.push_back(format_string("  record = [%s+0x%x] + 0x%x", name, p.off, p.d1));
+    else lines.push_back(format_string("  record = [[%s+0x%x] + 0x%x] + 0x%x", name, p.off, p.d1, p.d2));
+  }
+  for (const std::string& s : lines) Logger::info("Sims 3 camera hook: " + s);
+  char path[MAX_PATH] = {}; GetModuleFileNameA(nullptr, path, MAX_PATH);
+  if (char* cut = strrchr(path, '\\')) *cut = 0;
+  strncat_s(path, "\\rtx-remix\\logs\\sims3-light-paths.txt", _TRUNCATE);
+  FILE* f = nullptr;
+  if (fopen_s(&f, path, "a") == 0 && f) {
+    SYSTEMTIME t; GetLocalTime(&t);
+    fprintf(f, "== %04u-%02u-%02u %02u:%02u:%02u (scan %u of this session)\n", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, g_sims3PathScans);
+    for (const std::string& s : lines) fprintf(f, "%s\n", s.c_str());
+    fclose(f);
+  }
+}
+
 // The block read whole: its head checked, its records copied, and its sequence the same before and
 // after (an odd one means the reporter is writing). 0 read, 1 being written, 2 not the block any more.
 static int sims3LampRead(const uint8_t* block, float* floats, int32_t* ints, sims3cam::LampHead& head) {
@@ -464,6 +580,11 @@ void sims3PresentSky(Sims3Hook& h, Dev* dev) {
       if (h.lightUse >= 0) {
         h.lightState = 3; h.lightDisagree = 0;
         const Sims3Hook::LightPlace& L = h.lightPlaces[h.lightUse];
+        // milestone 125, a diagnostic: what in the game's program leads to the record (at most three times a session)
+        if (g_sims3PathScans < 3u && !g_sims3PathBusy.load()) {
+          ++g_sims3PathScans; g_sims3PathTarget = (const uint8_t*) L.p; g_sims3PathDone = false; g_sims3PathBusy = true;
+          std::thread(sims3PathScan).detach();
+        }
         char where[160]; sims3DescribeAddress(L.p, where, sizeof where);
         snprintf(msg, sizeof msg, "Sims 3 camera hook: the game's own light FOUND at %p (%s): it agreed with the terrain in %u of %u frames (%u of %u records agreed); the sky's light from now on, in every view",
                  (const void*) L.p, where, L.matched, L.checked, confirmed, h.lightPlaceN);
@@ -485,6 +606,7 @@ void sims3PresentSky(Sims3Hook& h, Dev* dev) {
       Logger::info(msg);
     }
   }
+  if (g_sims3PathDone.exchange(false)) sims3PathReport(h);   // milestone 125, a diagnostic
   // The game's night switch, next to its light record (run 163: 28 floats before it), is handed
   // to the lit terrain as c7.x: checked whenever the terrain is drawn; if they ever disagree for
   // two seconds the street lamps go back to the game's word for night.
