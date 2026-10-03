@@ -60,6 +60,9 @@ struct Sims3Hook {
   struct LightPlace { const float* p; uint32_t checked, matched; };
   LightPlace lightPlaces[64] = {}; uint32_t lightPlaceN = 0, lightConfirmFrames = 0, lightDisagree = 0, lightLiveFrames = 0, lightRetryFrame = 0, lightSearches = 0, framesFromGame = 0;
   int lightState = 0, lightUse = -1;   // 0 not searched, 1 searching, 2 confirming against the terrain, 3 found, 4 none found (searched again later)
+  // milestone 127: the record through the game's own pointers (sims3cam::kLightChains): whether the exe is their build
+  // (-1 not checked yet), whether the record in use came that way, whether they failed the terrain this session
+  int lightChainBuild = -1; bool lightFromChains = false, lightChainBad = false; uint32_t lightChainSets = 0;
   void* moonApi = nullptr; uint32_t twilightLogged = 0; float skyLoggedB = -1.f;
   uint64_t statsTick = 0; uint32_t statsFrame = 0;   // the last statistics, for the frame rate
   uint32_t sunChanges = 0, sunLogged = 0, framesNoTerrainSun = 0, sunRefused = 0, sunLogFrame = 0; float sunLogLum = -1.f, sunLogDir[3] = {};   // the sun trace (milestone 19d)

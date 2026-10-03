@@ -47,9 +47,10 @@ static void sims3LogStats(bool withTable) {
   Logger::info(msg);
   {
     static const char* const kLightState[5] = { "not searched yet", "searching", "confirming against the terrain", "found", "none found (searched again later)" };
-    snprintf(msg, sizeof msg, "Sims 3 camera hook:   the game's own light: %s%s; %u searches, %u records at the last, %u frames taken from it",
+    snprintf(msg, sizeof msg, "Sims 3 camera hook:   the game's own light: %s%s; %u searches, %u records at the last, %u frames taken from it; through its pointers: %s (%u times set)",
              kLightState[h.lightState < 0 || h.lightState > 4 ? 0 : h.lightState], h.lightState == 3 ? format_string(" at %p", (const void*) h.lightPlaces[h.lightUse].p).c_str() : "",
-             h.lightSearches, h.lightPlaceN, h.framesFromGame);
+             h.lightSearches, h.lightPlaceN, h.framesFromGame,
+             h.lightChainBuild == 0 ? "another build" : h.lightChainBad ? "stopped agreeing with the terrain" : h.lightFromChains ? "in use" : "not yet", h.lightChainSets);
   }
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   fog: %s; the runtime's fog hue %u %u %u of 255 at brightness %.6f (the colour's %.4f x the light sent over the game's %.3f; %u sends) from %.0f to %.0f (the game's curve %.2f), on %u terrain draws; %u captured draws carried a fog state of the game's own",

@@ -252,6 +252,22 @@ int main() {
   Camera S = {}; const Kind kS = classify(kShadow, 12, S);
   CHECK(kS == Kind::None, "90-degree square shadow camera: %s", kindName(kS));
 
+  // --- the game's light through its own pointers (milestone 127): at least two chains must agree
+  {
+    int v = 0;
+    const uintptr_t all[5] = { 0x1DDA6C00, 0x1DDA6C00, 0x1DDA6C00, 0x1DDA6C00, 0x1DDA6C00 };
+    CHECK(lightChainVote(all, 5, v) == 0x1DDA6C00 && v == 5, "light chains: all five agree -> the record (%d votes)", v);
+    const uintptr_t two[5] = { 0, 0x30D3BF20, 0, 0x30D3BF20, 0 };
+    CHECK(lightChainVote(two, 5, v) == 0x30D3BF20 && v == 2, "light chains: two agree, three unreadable -> the record");
+    const uintptr_t one[5] = { 0, 0x30D3BF20, 0, 0, 0 };
+    CHECK(lightChainVote(one, 5, v) == 0 && v == 0, "light chains: a single chain is not trusted");
+    const uintptr_t split[5] = { 0x1000, 0x2000, 0, 0, 0 };
+    CHECK(lightChainVote(split, 5, v) == 0, "light chains: two chains to different places -> none");
+    const uintptr_t most[5] = { 0x1000, 0x2000, 0x2000, 0x1000, 0x2000 };
+    CHECK(lightChainVote(most, 5, v) == 0x2000 && v == 3, "light chains: three against two -> the three");
+    CHECK(kLightChainCount == 5 && kLightChainStamp == 0x6707155Cu, "light chains: five chains for TS3.exe build 6707155c");
+  }
+
   // --- the passes Remix never shows (milestone 124), from the in-world trace's targets
   CHECK(unshownPass(false, 2048, 2048, 0, false, false) == kShadowMapPass, "a 2048x2048 offscreen target written with colour writes off: the shadow map");
   CHECK(unshownPass(true, 1920, 1080, 0, false, false) == -1, "the screen with colour writes off (a stencil or depth pass of the main view): kept");

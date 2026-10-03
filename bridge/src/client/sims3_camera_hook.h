@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-124).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-127).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -1555,6 +1555,31 @@ inline bool skyLightFrom(const float* c0, const float* c1, Sun& out) {
   for (int q = 0; q < 3; ++q) if (!(c0[q] >= 0.f && c0[q] <= 16.f)) return false;
   for (int q = 0; q < 3; ++q) { out.dir[q] = c1[q] / n; out.col[q] = c0[q]; }
   return true;
+}
+
+// The game's light record reached through the game's own pointers (milestone 127): record =
+// [[TS3.exe + base] + member] + offset. Found by the M126 diagnostic in runs 231-232: the same five
+// chains in two fresh sessions while the record lay elsewhere each time (1DDA6C00, 30D3BF20); two
+// statics (0xdda2d4, 0xe46c54) hold the same object. Valid for that TS3.exe build only (its PE
+// build stamp); any other build is left to the search.
+struct LightChain { uint32_t base, member, offset; };
+inline constexpr uint32_t kLightChainStamp = 0x6707155Cu;
+inline constexpr LightChain kLightChains[] = {
+  { 0xe2ad10, 0xd0, 0x5e0 }, { 0xdda2d4, 0x64, 0x7f0 }, { 0xe46c54, 0x64, 0x7f0 }, { 0xdda2d4, 0x58, 0xa10 }, { 0xe46c54, 0x58, 0xa10 },
+};
+inline constexpr int kLightChainCount = (int) (sizeof kLightChains / sizeof kLightChains[0]);
+// The address most chains lead to, if at least two agree (at[k] = 0: chain k unreadable or not a
+// record); 0 otherwise. `votes` = how many agree.
+inline uintptr_t lightChainVote(const uintptr_t* at, int n, int& votes) {
+  uintptr_t best = 0; votes = 0;
+  for (int i = 0; i < n; ++i) {
+    if (!at[i]) continue;
+    int c = 0;
+    for (int j = 0; j < n; ++j) if (at[j] == at[i]) ++c;
+    if (c > votes) { votes = c; best = at[i]; }
+  }
+  if (votes < 2) { votes = 0; return 0; }
+  return best;
 }
 
 // Whether the runtime's light still stands for this one: within a fifth of a degree and half a
