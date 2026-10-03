@@ -156,6 +156,41 @@ int main() {
   blockB[32] = 1115.16f; blockB[33] = 66.70f; blockB[34] = 1020.54f; blockB[35] = 1.f;
   Camera R2 = {}; const Kind k2 = classify(blockB, 12, R2);
   CHECK(k2 == Kind::None, "same WVP without a World at c4: %s (object-space camera must NOT be forwarded)", kindName(k2));
+  {
+    // milestone 122: the fused matrix elsewhere in the block (run 225: the walls' VS 84b06922 takes it at c4..c7, its World
+    // at c8..c10, the eye after them; c0..c3 hold something else)
+    const float other[16] = { 0.5f,0,0,0.5f,  0,-0.5f,0,0.5f,  0,0,1,0,  0,0,0,1 };
+    float walls[16*4] = {};
+    for (int i = 0; i < 16; ++i) walls[i] = other[i];
+    toBlock(WVP, walls + 16);                                                                 // c4..c7
+    for (int i = 0; i < 12; ++i) walls[32+i] = Wrows[i];                                      // c8..c10
+    walls[48] = 1115.16f; walls[49] = 66.70f; walls[50] = 1020.54f; walls[51] = 1.f;           // eye at c12
+    Camera Cw = {}; const Kind kw = classify(walls, 16, Cw);
+    CHECK(kw == Kind::Main && near3(Cw.pos, 1115.16f, 66.70f, 1020.54f), "the walls' layout (fused matrix at c4, World c8..c10, eye at c12): %s at the true eye", kindName(kw));
+    float noEye[16*4]; for (int i = 0; i < 64; ++i) noEye[i] = walls[i];
+    noEye[51] = 0.f;
+    Camera Cn = {}; const Kind kn = classify(noEye, 16, Cn);
+    CHECK(kn == Kind::None, "the walls' layout without the eye: %s", kindName(kn));
+    float noWorld[16*4] = {}; for (int i = 0; i < 32; ++i) noWorld[i] = walls[i];
+    noWorld[48] = 1115.16f; noWorld[49] = 66.70f; noWorld[50] = 1020.54f; noWorld[51] = 1.f;
+    Camera Co = {}; const Kind ko = classify(noWorld, 16, Co);
+    CHECK(ko == Kind::None, "an object-space fused matrix at c4 without its World: %s (not forwarded, as at c0)", kindName(ko));
+    // the water's reflection camera in the walls' layout: a reflection, so the pass's draws are dropped
+    M4 WVPr; mul(VPr, W, WVPr);
+    float wallsR[16*4]; for (int i = 0; i < 64; ++i) wallsR[i] = walls[i];
+    toBlock(WVPr, wallsR + 16);
+    wallsR[48] = 1115.16f; wallsR[49] = -10.70f; wallsR[50] = 1020.54f;
+    Camera Cr = {}; const Kind kr = classify(wallsR, 16, Cr);
+    CHECK(kr == Kind::Reflection, "the water's reflection camera in the walls' layout: %s", kindName(kr));
+    // the Sims' block at c180: the fused matrix eight registers in (c188), World after it, the eye at c200
+    float sims[24*4] = {};
+    for (int i = 0; i < 16; ++i) sims[i] = other[i];
+    toBlock(WVP, sims + 32);
+    for (int i = 0; i < 12; ++i) sims[48+i] = Wrows[i];
+    sims[80] = 1115.16f; sims[81] = 66.70f; sims[82] = 1020.54f; sims[83] = 1.f;
+    Camera Cs = {}; const Kind ks = classify(sims, 24, Cs);
+    CHECK(ks == Kind::Main && near3(Cs.pos, 1115.16f, 66.70f, 1020.54f), "a block with the fused matrix eight registers in, the eye twelve further: %s", kindName(ks));
+  }
 
   Camera U = {}; const Kind kU = classify(kUi, 5, U);
   CHECK(kU == Kind::None, "UI pass (2/1920, -2/1080 scale): %s -> not a camera (its draws fail the per-draw 3D tests)", kindName(kU));

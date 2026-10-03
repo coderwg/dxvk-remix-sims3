@@ -1,17 +1,18 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-120).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-122).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
  * convention, one per matrix row), usually the object's World as a 3x4 right after it, and the
- * camera's world-space eye position as a float4 (x, y, z, 1) in the same block. The block is
- * uploaded at c0 (the terrain, the walls, most of the lot) and, with the same layout, at
- * c180..c187 (the Sims and the objects; the in-world trace). DXVK-Remix derives its camera solely
+ * camera's world-space eye position as a float4 (x, y, z, 1) further on in the same block. Where
+ * the fused matrix sits depends on the shader family, always a multiple of four registers from the
+ * upload's start (the in-world trace): c0 (the terrain, much of the lot), c4 (the walls), c8 and
+ * c12 (others), c180 and c188 (the Sims and the objects). DXVK-Remix derives its camera solely
  * from D3DTS_VIEW / D3DTS_PROJECTION and treats an identity projection as "no camera", so stock
  * Remix captures nothing.
  *
- * This hook recovers View and Projection from the c0 uploads and forwards them via SetTransform;
+ * This hook recovers View and Projection from those uploads and forwards them via SetTransform;
  * Remix's vertex capture then places geometry from the vertex-shader output through
  * inverse(View*Projection). D3DTS_WORLD stays the identity, except for glass: its object's place
  * (milestone 119), so that a moving glass keeps its motion.
@@ -22,7 +23,7 @@
  * provides one: the eye position it uploads for specular lighting. A candidate is
  * accepted only if the camera position it implies equals a float4 in the same upload.
  *
- * Classification of a c0 upload:
+ * Classification of an upload:
  *   Main       - verified camera with a proper basis (det +1): the play camera, whichever
  *                way it pitches                                  -> forward View/Projection
  *   Reflection - verified camera with a mirrored basis (det -1): a reflection pass (the
@@ -172,9 +173,9 @@ inline bool decompose(const M4& VP, Camera& cam) {
 // VS 41a25ab3, with the play camera's lens but the view's translation stripped, matched a
 // direction at the origin and was adopted as the main camera whenever the far view was in
 // frame, i.e. at a horizon tilt).
-inline bool eyePresent(const float* c, unsigned count, const float pos[3]) {
+inline bool eyePresent(const float* c, unsigned count, const float pos[3], unsigned from = 4) {
   if (len3(pos) < 2.f) return false;
-  for (unsigned r = 4; r < count; ++r) {
+  for (unsigned r = from; r < count; ++r) {
     const float* v = c + r*4;
     if (std::fabs(v[3] - 1.f) > 0.01f) continue;                      // a position, not a direction or a colour
     if (std::fabs(v[0] - pos[0]) < 0.5f && std::fabs(v[1] - pos[1]) < 0.5f && std::fabs(v[2] - pos[2]) < 0.5f) return true;
@@ -200,21 +201,34 @@ inline bool similarMatrix(const D3DMATRIX& a, const D3DMATRIX& b, float eps) {
 // tracer renders reflections itself; the reflection passes' draws are dropped (sims3ApplyForDraw).
 inline Kind kindOfVerified(const Camera& cam) { return cam.mirrored ? Kind::Reflection : Kind::Main; }
 
-// c = constant floats beginning at register 0; count = number of float4 registers.
-inline Kind classify(const float* c, unsigned count, Camera& cam) {
-  if (count < 4) return Kind::None;
+// The fused matrix at register `base` of an upload: candidate A with the World in the three registers
+// after it, candidate B with an identity World. Either is a camera only if its eye is a float4
+// further on in the same upload.
+inline Kind classifyAt(const float* c, unsigned count, unsigned base, Camera& cam) {
+  const float* m = c + base*4;
   M4 WVP;
-  for (int r = 0; r < 4; ++r) for (int col = 0; col < 4; ++col) WVP.m[r][col] = c[r*4 + col];
-  if (count >= 7) {                                                // candidate A: World at c4..c6, VP = WVP * W^-1
+  for (int r = 0; r < 4; ++r) for (int col = 0; col < 4; ++col) WVP.m[r][col] = m[r*4 + col];
+  if (base + 7 <= count) {                                         // candidate A: VP = WVP * W^-1
     float w[3][4];
-    for (int r = 0; r < 3; ++r) for (int col = 0; col < 4; ++col) w[r][col] = c[16 + r*4 + col];
+    for (int r = 0; r < 3; ++r) for (int col = 0; col < 4; ++col) w[r][col] = m[16 + r*4 + col];
     M4 Winv, VP;
     if (invAffine(w, Winv)) {
       mul(WVP, Winv, VP);
-      if (decompose(VP, cam) && eyePresent(c, count, cam.pos)) return kindOfVerified(cam);
+      if (decompose(VP, cam) && eyePresent(c, count, cam.pos, base + 4)) return kindOfVerified(cam);
     }
   }
-  if (decompose(WVP, cam) && eyePresent(c, count, cam.pos)) return kindOfVerified(cam);   // candidate B: identity World
+  if (decompose(WVP, cam) && eyePresent(c, count, cam.pos, base + 4)) return kindOfVerified(cam);   // candidate B
+  return Kind::None;
+}
+
+// c = the constant floats of one upload; count = its number of float4 registers. The fused matrix
+// is tried at every fourth register (milestone 122): run 225's stale draws were walls drawn first
+// after the water's reflection pass, their matrix at c4, which the c0-only reading never saw.
+inline Kind classify(const float* c, unsigned count, Camera& cam) {
+  for (unsigned base = 0; base + 4 <= count; base += 4) {
+    const Kind k = classifyAt(c, count, base, cam);
+    if (k != Kind::None) return k;
+  }
   return Kind::None;
 }
 

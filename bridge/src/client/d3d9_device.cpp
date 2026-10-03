@@ -3065,10 +3065,11 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetVertexShaderConstantF(UINT StartRe
                    Vector4fCount * 4 * sizeof(float), currentUID);
 
     // The Sims 3 camera hook: the game never calls SetTransform, so recover View and
-    // Projection from the fused matrix it uploads at c0 and forward them; without this
-    // the Remix runtime finds no camera and captures no geometry. See sims3_camera_hook.h.
-    // (Must precede WAIT_FOR_OPTIONAL_SERVER_RESPONSE, which returns unconditionally.)
-    if (StartRegister == 0 && Vector4fCount >= 4 && sims3cam::enabled() && !g_sims3.ourConsts && !m_stateRecording) {
+    // Projection from the fused matrix it uploads (wherever the block holds it) and forward
+    // them; without this the Remix runtime finds no camera and captures no geometry. See
+    // sims3_camera_hook.h. (Must precede WAIT_FOR_OPTIONAL_SERVER_RESPONSE, which returns
+    // unconditionally.)
+    if (Vector4fCount >= 4 && sims3cam::enabled() && !g_sims3.ourConsts && !m_stateRecording) {
       // Maintain the verified main camera; the transforms themselves are applied per draw
       // (sims3ApplyForDraw), where the depth-test state and vertex layout are known.
       auto& h = g_sims3;
