@@ -45,6 +45,11 @@ bool sims3ApplyForDraw(Sims3Hook& h, Dev* dev, const DWORD* rs) {
     h.drawDropped = true; h.dropWhy = kWhy[unshown]; ++h.unshownDrops[unshown];
     return false;
   }
+  // the game's own fakes (milestone 130): its shadows, fog, glow and tone curve, which Remix makes itself
+  if (const sims3cam::GameFake* fake = sims3cam::findGameFake(h.psHash)) {
+    h.drawDropped = true; h.dropWhy = fake->name; ++h.fakeDrops;
+    return false;
+  }
   // a mirrored camera's pass is over at the first draw culling clockwise (milestone 85): the main
   // camera, which a mirrored upload never replaces, holds again
   if (sims3cam::endsMirroredPass(h.camMirrored, cull)) { h.camMirrored = false; h.cameraValid = h.cameraValidBeforeMirror; ++h.mirrorPassEnds; }
@@ -118,30 +123,6 @@ inline void sims3NoteCapture(Sims3Hook& h, int stage, const DWORD* rs, UINT freq
     sims3NoteStates(s, rs);
     sims3NoteInstancing(s, freq0);
   }
-}
-
-// Diagnostics (milestone 129, one run): the game's draws that reach the runtime without being
-// captured, per shader pair, target and the states that tell a pass apart -- what is left of the
-// game's own picture besides the ray-traced scene.
-inline void sims3NoteUncaptured(Sims3Hook& h, const DWORD* rs) {
-  const uint16_t w = h.rt0W, ht = h.rt0H;
-  const uint8_t z = (uint8_t) rs[D3DRS_ZENABLE], bl = rs[D3DRS_ALPHABLENDENABLE] ? 1 : 0, cw = (uint8_t) (rs[D3DRS_COLORWRITEENABLE] & 0xF);
-  Sims3Hook::UncapturedStat* s = nullptr;
-  for (int i = 0; i < h.uncapturedN && !s; ++i) {
-    Sims3Hook::UncapturedStat& u = h.uncaptured[i];
-    if (u.vs == h.vsHash && u.ps == h.psHash && u.w == w && u.h == ht && u.z == z && u.blend == bl && u.cw == cw) s = &u;
-  }
-  if (!s) {
-    if (h.uncapturedN >= Sims3Hook::kUncapturedStats) { ++h.uncapturedOver; return; }
-    s = &h.uncaptured[h.uncapturedN++];
-    *s = Sims3Hook::UncapturedStat();
-    s->vs = h.vsHash; s->ps = h.psHash; s->w = w; s->h = ht; s->z = z; s->blend = bl; s->cw = cw; s->primary = h.rtIsPrimary ? 1 : 0;
-    s->src = (uint8_t) rs[D3DRS_SRCBLEND]; s->dst = (uint8_t) rs[D3DRS_DESTBLEND];
-    s->s0kind = h.boundKind[0]; s->s0w = h.boundW[0]; s->s0h = h.boundH[0]; s->lastFrame = 0xFFFFFFFFu;
-  }
-  ++s->draws;
-  if (h.drawIndexed) s->indexedPrims += h.drawPrims;
-  if (s->lastFrame != h.frames) { s->lastFrame = h.frames; ++s->frames; }
 }
 
 // Diagnostics: a D3DFORMAT as text (a FOURCC as its letters, else the enum's known names).

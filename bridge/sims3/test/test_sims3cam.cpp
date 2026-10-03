@@ -265,8 +265,14 @@ int main() {
     CHECK(lightChainVote(split, 5, v) == 0, "light chains: two chains to different places -> none");
     const uintptr_t most[5] = { 0x1000, 0x2000, 0x2000, 0x1000, 0x2000 };
     CHECK(lightChainVote(most, 5, v) == 0x2000 && v == 3, "light chains: three against two -> the three");
-    CHECK(kLightChainCount == 5, "light chains: five chains (TS3.exe build 6707155c)");
+    CHECK(kLightChainCount == 3, "light chains: one chain per path, three (TS3.exe build 6707155c)");
   }
+
+  // --- the game's own fakes (milestone 130): dropped by pixel shader
+  CHECK(findGameFake(0xbac911e069b2ee21ull) && findGameFake(0x353ed3fb56cf16f1ull) && findGameFake(0x9b8f4e2b9fbb9bb1ull) && findGameFake(0xd33629855723d2bcull),
+        "game fakes: the tone curve, the glow's composite, the town ground's light, the fog over the lot");
+  CHECK(!findGameFake(0x5aee1186d554dbc4ull) && !findGameFake(0x7304aaea6a75fb3full) && !findGameFake(0x7ba9f578d1a1ebb2ull) && !findGameFake(0x52d5e6267a915d34ull) && !findGameFake(0),
+        "game fakes: not the objects' shader, the effect cards (their opaque draws are captured), the interface, the cursor's depth pick");
 
   // --- the passes Remix never shows (milestone 124), from the in-world trace's targets
   CHECK(unshownPass(false, 2048, 2048, 0, false, false) == kShadowMapPass, "a 2048x2048 offscreen target written with colour writes off: the shadow map");

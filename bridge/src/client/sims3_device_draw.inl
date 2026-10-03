@@ -321,7 +321,6 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
   h.drawCaptured = want;
   if (h.drawDropped) return false;                // a reflection pass's draw: the caller returns without drawing
   if (!want) {
-    sims3NoteUncaptured(h, rs);              // milestone 129, a diagnostic
     sims3TerrainBlockEndIfUsed(h, dev);      // an uncaptured draw follows the terrain block: ends it only if it samples a held stage (milestone 18h)
     sims3RestoreGameState(h, dev);
     sims3BeginMaskedWrite(h, dev, rs);

@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-128).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-130).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -962,6 +962,44 @@ inline const NeverCapture kNeverCapture[] = {
 };
 
 inline const NeverCapture* findNeverCapture(uint64_t hash) { return findByHash(kNeverCapture, hash); }
+
+// ---- the game's own fakes, dropped (milestone 130) --------------------------------------
+// What the game paints because it cannot trace light: its shadows, its fog, its glow and its tone
+// curve. Remix makes each of them itself, so these draws are dropped before they reach the runtime,
+// by pixel shader -- the effect is what the shader computes (run 234 counted what still reached the
+// runtime uncaptured; the shaders disassembled; none of these pixel shaders is ever captured). Before
+// the interface they were never seen in Remix (uncaptured, the identity transforms put them at the
+// world origin) but cost the bridge and the runtime; the tone curve, after the interface, was laid
+// over the ray-traced picture.
+struct GameFake { uint64_t hash; const char* name; };   // hash: the pixel shader's
+inline const GameFake kGameFakes[] = {
+  // the screen copied in 256x256 tiles after the interface and drawn back through x (1 + c0) / (x + c0)
+  { 0xbac911e069b2ee21ull, "the game's tone curve" },
+  // the glow: the scene's copy shrunk into 512x512, blurred back into 1024x1024, added onto the screen
+  { 0x5b275a5c0a5eb82eull, "the game's glow (shrink)" },
+  { 0x596c432012619e82ull, "the game's glow (blur)" },
+  { 0x353ed3fb56cf16f1ull, "the game's glow (blur; added onto the screen)" },
+  // the Sims' soft shadows: each Sim's silhouette in a channel of a 512x512 target, blurred down to
+  // 64x64 and back, laid over the ground as blobs (VS b7d550c6 in kNeverCapture)
+  { 0x06640070ab99ca77ull, "the Sims' shadow silhouettes" },
+  { 0x4e0b4fe50a3af4eaull, "the Sims' shadows (blur)" },
+  { 0x2db6dcdb34d42a11ull, "the Sims' shadows (box filter)" },
+  { 0xe602e4157960f7adull, "the Sims' shadows (blur)" },
+  { 0x6cc68b13e65b5a73ull, "the Sims' shadow blobs on the ground" },
+  { 0x92a300ed9b662005ull, "the Sims' shadow blobs on the ground (multiplied)" },
+  { 0x7f79fba967877d64ull, "a shadow blob on the ground" },
+  // shadows and light painted onto the ground, the lot and the Sims
+  { 0x6c1867be86538473ull, "building shadows on the ground (the shadow map, four taps, multiplied)" },
+  { 0x9b8f4e2b9fbb9bb1ull, "the town ground's light (the shadow map, multiplied over the paint)" },
+  { 0x00d76427fc9ede0cull, "a shadow decal on the ground (multiplied)" },
+  { 0xff810e83c3f21f0bull, "drop-shadow decals (multiplied)" },
+  { 0x11227d6d7bba5802ull, "the Sims' darkening overlay (black by the composite's alpha)" },
+  { 0x8133bb57435ab6eeull, "the lot's shading sheets in the top-down view (a colour, alpha by height)" },
+  // the fog painted over the lot (the runtime's fog comes from the game's light record)
+  { 0xd33629855723d2bcull, "the game's fog over the lot" },
+  { 0xd09db2967daf6d1full, "the game's fog over the lot" },
+};
+inline const GameFake* findGameFake(uint64_t psHash) { return findByHash(kGameFakes, psHash); }
 // The mode a vertex shader carries from its table entry: 0 captured, 1 never captured, 2 not
 // captured when alpha blending is on.
 inline uint8_t neverCaptureMode(const NeverCapture* n) { return n ? (n->blendedOnly ? 2 : 1) : 0; }
@@ -1536,11 +1574,13 @@ inline bool skyLightFrom(const float* c0, const float* c1, Sun& out) {
 
 // The game's light record reached through the game's own pointers (milestone 127): record =
 // [[TS3.exe + base] + member] + offset. Found by the M126 diagnostic in runs 231-232: the same five
-// chains in two fresh sessions while the record lay elsewhere each time (1DDA6C00, 30D3BF20); two
-// statics (0xdda2d4, 0xe46c54) hold the same object. Offsets of TS3.exe build stamp 6707155c.
+// chains in two fresh sessions while the record lay elsewhere each time (1DDA6C00, 30D3BF20). A
+// second static (0xe46c54) holds the same object as 0xdda2d4, so its two chains only repeated
+// these (milestone 130: one chain per path). Run 233: two chains of five agreed only from the
+// first frame on; run 234: all five from the first to the last. Offsets of TS3.exe build 6707155c.
 struct LightChain { uint32_t base, member, offset; };
 inline constexpr LightChain kLightChains[] = {
-  { 0xe2ad10, 0xd0, 0x5e0 }, { 0xdda2d4, 0x64, 0x7f0 }, { 0xe46c54, 0x64, 0x7f0 }, { 0xdda2d4, 0x58, 0xa10 }, { 0xe46c54, 0x58, 0xa10 },
+  { 0xe2ad10, 0xd0, 0x5e0 }, { 0xdda2d4, 0x64, 0x7f0 }, { 0xdda2d4, 0x58, 0xa10 },
 };
 inline constexpr int kLightChainCount = (int) (sizeof kLightChains / sizeof kLightChains[0]);
 // The address most chains lead to, if at least two agree (at[k] = 0: chain k unreadable or not a
