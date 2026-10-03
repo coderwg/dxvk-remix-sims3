@@ -206,9 +206,14 @@ static uint32_t sims3ApiLamp(sims3cam::Lamp& L) {
 // table by the keys of its object, placed by its object's transform, sent as Remix API lights.
 static void sims3PresentLamps(Sims3Hook& h) {
   const bool api = GlobalOptions::getExposeRemixApi();
-  // the lamp reporter's block: searched for on a thread of its own until found, read every frame
+  // the lamp reporter's block: searched for on a thread of its own until found, read every frame. The
+  // script mod makes it while a world loads (runs 249-251: never found in the main menu, found just
+  // before the world's first frame), so the search starts once the world is drawn (milestone 150): every
+  // 600 frames, every 3600 after 12 misses (the mod not there). Searched from the start, the 12 were spent
+  // in a long stay in the menu and the sun and the lamps came a minute late (run 251).
   const uint8_t* block = g_sims3LampBlock.load();
-  if (!block && !g_sims3LampScanBusy.load() && (h.lampReportScanFrame == 0 || h.frames - h.lampReportScanFrame > (g_sims3LampScans.load() < 12u ? 600u : 3600u))) {
+  if (!block && h.capturedDraws > 0 && !g_sims3LampScanBusy.load()
+      && (h.lampReportScanFrame == 0 || h.frames - h.lampReportScanFrame > (g_sims3LampScans.load() < 12u ? 600u : 3600u))) {
     h.lampReportScanFrame = h.frames ? h.frames : 1;
     g_sims3LampScanBusy = true;
     std::thread(sims3LampScan).detach();
