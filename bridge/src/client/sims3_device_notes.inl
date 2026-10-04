@@ -8,14 +8,12 @@ void sims3NoteVertexShader(Sims3Hook& h, IDirect3DVertexShader9* pShader) {
   h.patch = pLssVertexShader ? pLssVertexShader->sims3Patch : nullptr;
   h.vsSkyDome = pLssVertexShader ? pLssVertexShader->sims3SkyDome : false;
   h.vsHash = pLssVertexShader ? pLssVertexShader->sims3Hash : 0;
-  h.vsCapturedUv = pLssVertexShader ? sims3cam::useCapturedUv(pLssVertexShader->sims3Hash) : false;
   h.vsBound = pShader;
   h.vsNormal = pLssVertexShader ? &pLssVertexShader->sims3Normal : nullptr;
   h.vsConstOut = pLssVertexShader ? &pLssVertexShader->sims3ConstOut : nullptr;
   h.vsCard = pLssVertexShader ? &pLssVertexShader->sims3Card : nullptr;
   h.vsWall = pLssVertexShader ? &pLssVertexShader->sims3Wall : nullptr;
   h.vsTerrain = pLssVertexShader ? sims3cam::findTerrainShader(pLssVertexShader->sims3Hash) : nullptr;
-  h.vsTabled = pLssVertexShader && h.vsCapturedUv;
 }
 void sims3NotePixelShader(Sims3Hook& h, IDirect3DPixelShader9* pShader) {
   Direct3DPixelShader9_LSS* pLssPixelShader = bridge_cast<Direct3DPixelShader9_LSS*>(pShader);

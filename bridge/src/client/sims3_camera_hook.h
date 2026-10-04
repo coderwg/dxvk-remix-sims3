@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-160).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-161).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -994,49 +994,29 @@ struct AlbedoStage { uint64_t hash; const char* name; uint8_t stage; int8_t tint
 inline constexpr int8_t kTintRegister = 8;
 
 inline const AlbedoStage kAlbedoStages[] = {
-  // objects: s2 the lot's light map (sampled with a world-space projection, rows c15/c16 of the VS; scaled by c12.y), s3 diffuse (TEXCOORD2), s4 specular mask; light rig and tint
+  // objects: s2 the lot's light map (sampled with a world-space projection, rows c15/c16 of the VS; scaled by c12.y), s3 diffuse
+  // (TEXCOORD2), s4 specular mask; light rig and tint. The chooser takes the light map on a few draws (run 262: up to 171 of 142,522)
   { 0x0c19795eb80e2e96ull, "object PS 0x10a68900", 3, kTintRegister },
   { 0x8282d3a0d611b62eull, "object PS 0x10a69440", 3, kTintRegister },
   { 0x54bea85dc05c7c35ull, "object PS 0x10a694e0", 3, kTintRegister },
   { 0x470c140c802b7ec0ull, "object PS 0x1118d5e0", 3, kTintRegister },
   { 0x5aee1186d554dbc4ull, "object PS 0x10a68220 (s2 diffuse, TEXCOORD2; 3 lights)", 2 },
-  // in-game variants (run-15 shader dump)
-  { 0x1458c67a2c009563ull, "object PS variant 1458c67a (s2 diffuse, TEXCOORD2)", 2 },
-  { 0xa3afadeeb6a034c6ull, "object PS variant a3afadee (s2 diffuse, TEXCOORD2)", 2 },
-  { 0x528502f128e81506ull, "PS 528502f1 (s1 on TEXCOORD2)", 1 },
-  { 0xc0b8100612d70879ull, "PS c0b81006 (s1 on TEXCOORD1)", 1 },
-  { 0x5e6fbac12103e50bull, "PS 5e6fbac1 (s1 on TEXCOORD1)", 1 },
-  { 0x86f63bbb50a73dbcull, "PS 86f63bbb (s1 on TEXCOORD2)", 1 },
-  { 0xd1478edc68b0d60cull, "outer ground PS d1478edc (pattern tile s2 on TEXCOORD2)", 2 },
-  // doors / windows / trims: normal map at s1, diffuse blend at s3 or s4 (TEXCOORD0)
+  // doors / windows / trims: normal map at s1, diffuse blend at s3 or s4 (TEXCOORD0); the chooser takes s4 / s6
   { 0xced805afc5c51385ull, "PS 0x14592a60", 3 },
-  { 0x0f79ca391d079af3ull, "PS 0x14592b00", 3 },
   { 0x9bb08cceb8d858c5ull, "PS 0x14594b80", 4 },
-  { 0x77e55c68700be25full, "PS 0x14594ae0", 4 },
-  { 0x1cbf4a03015f901cull, "PS 0x10a2afa0 (s3, TEXCOORD0)", 3 },
-  { 0x920fb3f3573d30d4ull, "PS 0x10ea7000 (s3, TEXCOORD0)", 3 },
-  { 0x9ccd448262adfd4dull, "PS 0x105dbc60 (s2, TEXCOORD1)", 2 },
-  { 0xd99d3c12905fd7c9ull, "PS 0xd7adc80 (s1, TEXCOORD2)", 1 },
-  // layered ground decals: four layers on TEXCOORD0, first layer as albedo
+  // layered ground decals: four layers on TEXCOORD0, first layer as albedo (the chooser takes s3)
   { 0x2d843890f7471cdfull, "PS 0xd7ad960 (s6..s9 layers)", 6 },
   { 0x2bc380a5a20143fcull, "PS 0x104068c0 (s7..s10 layers)", 7 },
-  { 0x3ebb622c4fe0be4full, "floors PS 0x10a221a0 (s2 pattern on TEXCOORD0; s1 is the room lightmap)", 2 },
-  { 0xa63ccabe650b1bc0ull, "floors PS 0x10a1f0e0 (s2 pattern on TEXCOORD0; s1 is the room lightmap)", 2 },
   // walls C (milestone 79): the wall's thickness -- tops, edges, the sides of openings, its own index
   // ranges of the wall buffer -- in one flat colour, c4, under the light; no colour texture. Its s1,
   // the opening mask (greyscale, white where the wall stands), is the albedo, tinted by c4.
   { 0x7d2cbb8e474dfaf5ull, "walls C PS 7d2cbb8e (flat colour c4; s1 the opening mask)", 1, 4 },
-  // (the terrain's pixel shaders -- the lot-area paint 17eabad5 / 670dbe0f / d63bf505 / 98062e8d, the world and
-  // lot terrain e18ad53a / 27ac2b7a / 028ce2dd / 3608ab95 / c30755d3 -- had entries for terrain draws captured
-  // the ordinary way when the baker could not take them; milestone 160 retired that way: the baker reads them)
-  // PS 0x167e8be0 (ff72720d): colour = s1 (TEXCOORD0) x s0 (TEXCOORD1), the floor tiles' layout; its
-  // entry here named s0, a room light map (256x128, or a 32x32 / 4x4 stand-in): left to the
-  // chooser since milestone 76, which takes the compressed s1
+  // floor tiles: colour = s1 (TEXCOORD0) x s0 (TEXCOORD1), s0 a room light map the chooser takes on a few draws
   { 0xda37b5ef6f7a09a6ull, "floor tiles PS 0x167e3320 (s1 on TEXCOORD0; s0 is the lightmap)", 1 },
-  { 0xdeeecbb3cdf04655ull, "PS 0xdbbbc40 (s1)", 1 },
-  { 0xb0fb977be6b7bbccull, "PS 0x106fe840 (s1)", 1 },
-  { 0xc3c0476375bf7797ull, "PS 0x16e98380 (s1)", 1 },
-  { 0x78a22ef03769d4deull, "PS 0x16e95cc0 (s1)", 1 },
+  // (The table is what the bytecode cannot tell: milestone 161 left out nineteen entries whose stage the chooser
+  // gave on every draw of run 262 -- object variants 1458c67a / a3afadee, 528502f1, c0b81006, 5e6fbac1, 86f63bbb,
+  // the outer ground d1478edc, doors 0f79ca39 / 77e55c68, 1cbf4a03, 920fb3f3, 9ccd4482, d99d3c12, the floors
+  // 3ebb622c / a63ccabe, deeecbb3, b0fb977b, the trees' c3c04763 / 78a22ef0; milestone 160 the terrain's nine.)
 };
 
 inline const AlbedoStage* findAlbedoStage(uint64_t hash) { return findByHash(kAlbedoStages, hash); }
@@ -2370,16 +2350,9 @@ inline bool isWaveMapFormat(uint32_t fmt) { return fmt == 21u /* A8R8G8B8 */ || 
 // theirs in texel units and divide by 512 in the shader, so the runtime tiled every
 // wallpaper five hundred times across a wall. Pointing stage 0's index at an unused set
 // (the game never sets it) hides the input and the runtime samples with the shader's own
-// output -- which is what the pixel shader samples with, by construction. Applied to the
-// families whose TEXCOORD0 output is verified (the floors' pattern coordinate, computed in the shader).
-struct CapturedUv { uint64_t hash; const char* name; };
-
-inline const CapturedUv kCapturedUv[] = {
-  { 0x0fcdd50823cd0504ull, "floors (pattern UV computed in the shader)" },
-  { 0x22e0b0fb83e51c5cull, "floor tiles" },
-};
-
-inline bool useCapturedUv(uint64_t hash) { return findByHash(kCapturedUv, hash) != nullptr; }
+// output -- which is what the pixel shader samples with, by construction. Applied to every captured
+// draw whose albedo coordinate the bytecode names (h.autoCapturedUv, sims3AutoTexcoord). (Until milestone
+// 161 a table named two floor families; the bytecode gave the same on every draw of run 262.)
 
 // ---- the game's own lamp lights --------------------------------------------------------
 // The game keeps every lamp model's lights in a LITE resource: type, position in the model's

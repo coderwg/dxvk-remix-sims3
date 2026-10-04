@@ -55,7 +55,6 @@ struct Sims3Hook {
   uint32_t sunChanges = 0;
   bool rsSet[256] = {};                              // render states the game has set at least once (the array's initial values are not trusted)
   uint32_t invisibleDrawsSkipped = 0;   // captured draws whose render states make them invisible in-game (colour writes off, ...)
-  bool vsCapturedUv = false;           // bound vertex shader's draws sample with its captured TEXCOORD0 output
   bool uvIndexHidden = false;          // stage 0's D3DTSS_TEXCOORDINDEX currently points at the unused set 7
   bool loggedCapturedUv = false;
   uint64_t vsHash = 0, psHash = 0;     // bound shaders' bytecode hashes (0 = none), for the per-shader capture table
@@ -85,7 +84,6 @@ struct Sims3Hook {
   const sims3cam::PsAnalysis* psAuto = nullptr;   // bound pixel shader's sampler analysis when it has no table entry
   uint8_t psMajor = 0;                            // the bound pixel shader's major version (milestone 56)
   IDirect3DVertexShader9* vsBound = nullptr;      // the vertex shader the game bound (for the variant swap)
-  bool vsTabled = false;                          // it has a captured-UV or never-capture entry: no auto coordinate, no variants
   struct VsVariant { IDirect3DVertexShader9* base; uint64_t hash; uint8_t texcoord; uint8_t normalOut; bool constRead; bool outward; IDirect3DVertexShader9* variant; };
   static constexpr uint32_t kVsVariants = 512;
   VsVariant vsVariants[kVsVariants] = {};         // one per (shader, coordinate, normal, c255 read, outward cards); keyed by pointer AND hash (an address may be reused); variant null = could not be made

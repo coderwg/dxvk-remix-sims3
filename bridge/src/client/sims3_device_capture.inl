@@ -155,7 +155,7 @@ inline void sims3AutoTexcoord(Sims3Hook& h, int k, int tc, bool tabledPs) {
   // the shader's own coordinate output is what its pixel shader samples with; a promotion is
   // bound by sims3BindVariant, which clears autoCapturedUv again if the variant cannot be made
   h.autoCapturedUv = true;
-  if (tc > 0 && !h.vsTabled) h.pendingPromote = (uint8_t) tc;
+  if (tc > 0) h.pendingPromote = (uint8_t) tc;
 }
 
 // The normal the runtime should shade with, for the bound shaders (milestone 11): the register

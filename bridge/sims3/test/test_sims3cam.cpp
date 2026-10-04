@@ -769,8 +769,10 @@ int main() {
 
   // --- the sun from the per-object light rig (milestone 2b), values from trace call 1279780
   {
-    const AlbedoStage* ao = findAlbedoStage(0x0c19795eb80e2e96ull); const AlbedoStage* af = findAlbedoStage(0x3ebb622c4fe0be4full);
-    CHECK(ao && ao->stage == 3 && af && af->stage == 2 && findAlbedoStage(0x1234ull) == nullptr, "albedo stage: object PS -> 3, floor PS -> 2, unknown -> none");
+    const AlbedoStage* ao = findAlbedoStage(0x0c19795eb80e2e96ull); const AlbedoStage* ad = findAlbedoStage(0x2d843890f7471cdfull);
+    CHECK(ao && ao->stage == 3 && ad && ad->stage == 6 && findAlbedoStage(0x1234ull) == nullptr, "albedo stage: object PS -> 3, a layered ground decal -> its first layer s6, unknown -> none");
+    CHECK(!findAlbedoStage(0x3ebb622c4fe0be4full) && !findAlbedoStage(0xa63ccabe650b1bc0ull) && !findAlbedoStage(0xc3c0476375bf7797ull) && !findAlbedoStage(0xd1478edc68b0d60cull),
+          "albedo stage (M161): the floors, the trees' fade shaders and the outer ground are the chooser's (it gave their stage on every draw of run 262)");
     CHECK(!findAlbedoStage(0x17eabad58f650687ull) && !findAlbedoStage(0x028ce2dde691b739ull) && !findAlbedoStage(0xe18ad53a96ff51ccull),
           "albedo stage (M160): the terrain's pixel shaders have no entry (the baker reads them; no ordinary capture of a terrain draw)");
     {
@@ -792,9 +794,7 @@ int main() {
       DWORD vs3plain[sizeof vs3dome / 4]; memcpy(vs3plain, vs3dome, sizeof vs3dome); vs3plain[18] = 0xA0E40002u;   // z from c2
       CHECK(!isSkyDomeShader(vs3plain, sizeof vs3plain / 4), "  with z from its own row it is an ordinary shader");
     }
-    CHECK(findAlbedoStage(0x3ebb622c4fe0be4full) && findAlbedoStage(0x3ebb622c4fe0be4full)->stage == 2 && findAlbedoStage(0xda37b5ef6f7a09a6ull) && findAlbedoStage(0xda37b5ef6f7a09a6ull)->stage == 1 && findAlbedoStage(0xf0d7af09599ed1bcull) == nullptr, "albedo stage: floors -> s2, floor tiles -> s1 (their small shared textures are lightmaps); the wall variant is stripped");
-    CHECK(useCapturedUv(0x0fcdd50823cd0504ull) && useCapturedUv(0x22e0b0fb83e51c5cull) && !useCapturedUv(0x0ba6ddb9aa01913cull) && !useCapturedUv(0x976b73dbd59842cdull) && !useCapturedUv(0xf64835ccff6bffd7ull) && !useCapturedUv(0x1234ull),
-          "captured UVs (M160): the floors' two families by the table; the objects' coordinate from the bytecode per draw; terrain, walls and unknown shaders keep the runtime's default");
+    CHECK(findAlbedoStage(0xda37b5ef6f7a09a6ull) && findAlbedoStage(0xda37b5ef6f7a09a6ull)->stage == 1 && findAlbedoStage(0xf0d7af09599ed1bcull) == nullptr, "albedo stage: floor tiles -> s1 (their small shared textures are lightmaps); the wall variant is stripped");
     {
       // milestone 7: the pixel shader's samplers read from its bytecode, checked against the hand tables on the real dumps
       std::vector<DWORD> t; PsAnalysis a;
