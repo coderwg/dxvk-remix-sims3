@@ -301,6 +301,19 @@ IDirect3DVertexBuffer9* sims3MakeVertexBuffer(Dev* dev, const std::vector<uint8_
   vb->Unlock();
   return vb;
 }
+// A texture of the hook's own (milestone 157: the one maker): w x h A8R8G8B8, one level, D3DPOOL_MANAGED,
+// level 0 the given pixels (rows packed). Null when it cannot be made or written. The terrain's and the
+// materials' markers, the low-detail lots' window glow.
+template<typename Dev>
+IDirect3DTexture9* sims3MakeTexture(Dev* dev, const uint32_t* pixels, uint32_t w, uint32_t hgt) {
+  IDirect3DTexture9* tex = nullptr;
+  if (FAILED(dev->CreateTexture(w, hgt, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &tex, nullptr)) || !tex) return nullptr;
+  D3DLOCKED_RECT lr = {};
+  if (FAILED(tex->LockRect(0, &lr, nullptr, 0)) || !lr.pBits) { tex->Release(); return nullptr; }
+  for (uint32_t y = 0; y < hgt; ++y) memcpy((uint8_t*) lr.pBits + (size_t) y * lr.Pitch, pixels + (size_t) y * w, (size_t) w * 4u);
+  tex->UnlockRect(0);
+  return tex;
+}
 // An index buffer of the hook's own (D3DPOOL_DEFAULT, released at a device reset): 16-bit when every
 // index fits, else 32-bit (the walls' cut geometry, the squares' shapes, the low-detail lots' parts).
 template<typename Dev, typename Index>

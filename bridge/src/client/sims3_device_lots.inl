@@ -134,12 +134,8 @@ IDirect3DTexture9* sims3LotGlowTexture(Sims3Hook& h, Dev* dev, Direct3DTexture9_
   std::vector<uint32_t> argb;
   if (!data || !sims3cam::decodeColour((uint32_t) desc.Format, data, bridge_util::calcTotalSizeOfRect(desc.Width, desc.Height, desc.Format), desc.Width, desc.Height, argb)) { ++h.glowTexFailed; return nullptr; }
   sims3cam::windowOnlyGlow(argb, sims3cam::kLotGlowThreshold);
-  IDirect3DTexture9* tex = nullptr;
-  if (FAILED(dev->CreateTexture(desc.Width, desc.Height, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &tex, nullptr)) || !tex) { ++h.glowTexFailed; return nullptr; }
-  D3DLOCKED_RECT lr = {};
-  if (FAILED(tex->LockRect(0, &lr, nullptr, 0)) || !lr.pBits) { tex->Release(); ++h.glowTexFailed; return nullptr; }
-  for (uint32_t y = 0; y < desc.Height; ++y) memcpy((uint8_t*) lr.pBits + (size_t) y * lr.Pitch, &argb[(size_t) y * desc.Width], (size_t) desc.Width * 4u);
-  tex->UnlockRect(0);
+  IDirect3DTexture9* tex = sims3MakeTexture(dev, argb.data(), desc.Width, desc.Height);
+  if (!tex) { ++h.glowTexFailed; return nullptr; }
   g.tex = tex; ++h.glowTexMade;
   return tex;
 }

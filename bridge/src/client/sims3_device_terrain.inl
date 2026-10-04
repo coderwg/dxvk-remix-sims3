@@ -37,18 +37,10 @@ bool sims3EnsureMarkers(Sims3Hook& h, Dev* dev) {
   if (h.markerFailed) return false;
   for (int kind = 0; kind < sims3cam::kTerrainMarkers; ++kind) {
     if (h.marker[kind]) continue;
-    IDirect3DTexture9* tex = nullptr;
-    if (FAILED(dev->CreateTexture(sims3cam::kTerrainMarkerSize, sims3cam::kTerrainMarkerSize, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &tex, nullptr)) || tex == nullptr) {
-      h.markerFailed = true; Logger::info("Sims 3 camera hook: terrain marker texture could not be created; terrain draws are captured as before"); return false;
-    }
     uint32_t pixels[sims3cam::kTerrainMarkerSize * sims3cam::kTerrainMarkerSize];
     sims3cam::terrainMarkerPixels(kind, pixels);
-    D3DLOCKED_RECT lr = {};
-    if (FAILED(tex->LockRect(0, &lr, nullptr, 0)) || lr.pBits == nullptr) {
-      tex->Release(); h.markerFailed = true; Logger::info("Sims 3 camera hook: terrain marker texture could not be written; terrain draws are captured as before"); return false;
-    }
-    for (uint32_t y = 0; y < sims3cam::kTerrainMarkerSize; ++y) memcpy((uint8_t*) lr.pBits + (size_t) y * lr.Pitch, pixels + y * sims3cam::kTerrainMarkerSize, sims3cam::kTerrainMarkerSize * 4);
-    tex->UnlockRect(0);
+    IDirect3DTexture9* tex = sims3MakeTexture(dev, pixels, sims3cam::kTerrainMarkerSize, sims3cam::kTerrainMarkerSize);
+    if (!tex) { h.markerFailed = true; Logger::info("Sims 3 camera hook: terrain marker texture could not be made; terrain draws are captured as before"); return false; }
     h.marker[kind] = tex;
     h.markerHash[kind] = (uint64_t) XXH3_64bits(pixels, sizeof pixels);   // the runtime hashes level 0's bytes, rows packed
   }

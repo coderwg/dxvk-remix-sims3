@@ -276,18 +276,10 @@ bool sims3EnsureMarker(Dev* dev, IDirect3DTexture9*& marker, bool& failed, uint3
   if (marker) return true;
   if (failed) return false;
   char msg[320];
-  IDirect3DTexture9* tex = nullptr;
-  if (FAILED(dev->CreateTexture(sims3cam::kGlassMarkerSize, sims3cam::kGlassMarkerSize, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &tex, nullptr)) || tex == nullptr) {
-    failed = true; snprintf(msg, sizeof msg, "Sims 3 camera hook: %s marker texture could not be created; its draws go out as before", what); Logger::info(msg); return false;
-  }
   static uint32_t pixels[sims3cam::kGlassMarkerSize * sims3cam::kGlassMarkerSize];
   for (auto& p : pixels) p = colour;
-  D3DLOCKED_RECT lr = {};
-  if (FAILED(tex->LockRect(0, &lr, nullptr, 0)) || lr.pBits == nullptr) {
-    tex->Release(); failed = true; snprintf(msg, sizeof msg, "Sims 3 camera hook: %s marker texture could not be written; its draws go out as before", what); Logger::info(msg); return false;
-  }
-  for (uint32_t y = 0; y < sims3cam::kGlassMarkerSize; ++y) memcpy((uint8_t*) lr.pBits + (size_t) y * lr.Pitch, pixels + y * sims3cam::kGlassMarkerSize, sims3cam::kGlassMarkerSize * 4);
-  tex->UnlockRect(0);
+  IDirect3DTexture9* tex = sims3MakeTexture(dev, pixels, sims3cam::kGlassMarkerSize, sims3cam::kGlassMarkerSize);
+  if (!tex) { failed = true; snprintf(msg, sizeof msg, "Sims 3 camera hook: %s marker texture could not be made; its draws go out as before", what); Logger::info(msg); return false; }
   marker = tex;
   const uint64_t hash = (uint64_t) XXH3_64bits(pixels, sizeof pixels);   // the runtime hashes level 0's bytes, rows packed
   snprintf(msg, sizeof msg, "Sims 3 camera hook: %s marker created, hash 0x%016llX%s (the hook's Remix mods name mat_%016llX; replacement assets must be on)",
