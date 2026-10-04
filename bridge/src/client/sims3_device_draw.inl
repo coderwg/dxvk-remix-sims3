@@ -279,31 +279,6 @@ uint32_t sims3FadeTest(Sims3Hook& h, Dev* dev, int fc, bool rel, DWORD gameFunc,
   return h.fadeG.func;
 }
 
-// A check for taking the near-tree table out (milestone 162; out again after run 264): per (vertex shader,
-// pixel shader) pair, the captured draws the table names a tree near the camera, those its vertex shader
-// does (nearTreeFadeInput), and whether the two agree on the fade's input and on the albedo being the
-// table's leaf texture. Listed once at the session's end (sims3LogNearTreeCheck).
-struct Sims3NearCheck { uint64_t vs = 0, ps = 0; uint32_t both = 0, inputDiffers = 0, samplerDiffers = 0, tableOnly = 0, vsOnly = 0, vsOnlyBlended = 0; };
-static std::unordered_map<uint64_t, Sims3NearCheck> g_sims3NearCheck;
-inline void sims3NearTreeCheck(const Sims3Hook& h, int k, bool blended) {
-  const sims3cam::SolidFade* sf = sims3cam::findSolidFade(h.psHash);
-  const bool byVs = h.vsNearFade >= 0;
-  if (!sf && !byVs) return;
-  Sims3NearCheck& c = g_sims3NearCheck[h.vsHash * 0x9E3779B97F4A7C15ull ^ h.psHash];
-  c.vs = h.vsHash; c.ps = h.psHash;
-  if (sf && byVs) { ++c.both; if (sf->fadeInput != h.vsNearFade) ++c.inputDiffers; if (k != sf->sampler) ++c.samplerDiffers; }
-  else if (sf) ++c.tableOnly;
-  else { ++c.vsOnly; if (blended) ++c.vsOnlyBlended; }
-}
-inline void sims3LogNearTreeCheck() {
-  std::vector<Sims3NearCheck> v; for (const auto& e : g_sims3NearCheck) v.push_back(e.second);
-  std::sort(v.begin(), v.end(), [](const Sims3NearCheck& a, const Sims3NearCheck& b) { return a.vs != b.vs ? a.vs < b.vs : a.ps < b.ps; });
-  for (const auto& c : v)
-    Logger::info(format_string("Sims 3 camera hook: check -- near trees: VS %016llx PS %016llx: %u draws named by both (%u with another fade input, %u whose albedo is not the table's leaf texture), %u by the table only, %u by the vertex shader only (%u of them blended)",
-                               (unsigned long long) c.vs, (unsigned long long) c.ps, c.both, c.inputDiffers, c.samplerDiffers, c.tableOnly, c.vsOnly, c.vsOnlyBlended));
-  Logger::info(format_string("Sims 3 camera hook: check -- near trees: %u shader pairs", (unsigned) v.size()));
-}
-
 // Before every draw of the game (not the hook's own restore quad). Everything the hook sets for the
 // draw is held in the draw's scope of the undo log (milestone 152, sims3cam::HookCalls). A captured draw -- the main
 // camera held, see sims3ApplyForDraw -- gets: its albedo presented as stage 0 when the game bound
@@ -459,18 +434,20 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
         Logger::info(msg);
       }
     }
-    sims3NearTreeCheck(h, k, rs[D3DRS_ALPHABLENDENABLE] != 0);   // the milestone-162 check
-    // a tree near the camera drawn solid (milestones 137, 139): blending off, its leaves cut at its
-    // plant's fade as the opaque tree's are (the game's LESS 1 on "fade - alpha", turned onto the alpha)
-    if (const sims3cam::SolidFade* sf = sims3cam::findSolidFade(h.psHash)) {
-      const int fc = h.vsConstOut ? h.vsConstOut->c[sf->fadeInput] : -1;
-      const uint32_t func = (fc >= 0 && k == sf->sampler && !h.calls.holdsRs(D3DRS_ALPHAFUNC) && !h.calls.holdsRs(D3DRS_ALPHABLENDENABLE)) ? sims3FadeTest(h, dev, fc, h.vsConstOut->rel[sf->fadeInput], D3DCMP_LESS, 1, true) : 0u;
+    // a tree near the camera drawn solid (milestones 137, 139, 163): its vertex shader hands over the plant's
+    // fade and opacity (h.vsNearFade, nearTreeFadeInput); blending off, its leaves cut at the plant's fade as
+    // the opaque tree's are (the game's LESS 1 on "fade - alpha", turned onto the alpha) -- when the albedo is
+    // the leaf texture, the one whose alpha shapes the surface (PsSamplerUse::alphaUsed)
+    if (h.vsNearFade >= 0) {
+      const int fc = h.vsConstOut ? h.vsConstOut->c[h.vsNearFade] : -1;
+      const bool leaf = k >= 0 && k < 16 && h.psAuto && h.psAuto->valid && h.psAuto->samplers[k].alphaUsed;
+      const uint32_t func = (fc >= 0 && leaf && !h.calls.holdsRs(D3DRS_ALPHAFUNC) && !h.calls.holdsRs(D3DRS_ALPHABLENDENABLE)) ? sims3FadeTest(h, dev, fc, h.vsConstOut->rel[h.vsNearFade], D3DCMP_LESS, 1, true) : 0u;
       if (func) ++h.solidFadeDraws; else ++h.solidFadeLeft;
       bool seen = false; for (uint32_t i = 0; i < h.solidFadeLogged; ++i) if (h.solidFadeLoggedPs[i] == h.psHash) seen = true;
       if (!seen && h.solidFadeLogged < 4) {
         h.solidFadeLoggedPs[h.solidFadeLogged++] = h.psHash; char msg[288];
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: %s, PS %016llx (VS %016llx): albedo s%d, fade c%d = %.4f (%u plants) -> %s %u",
-                 sf->name, (unsigned long long) h.psHash, (unsigned long long) h.vsHash, k, fc >> 2, func ? h.fade0 : 0.f, func ? h.fadePlants : 0u,
+        snprintf(msg, sizeof msg, "Sims 3 camera hook: a tree near the camera, PS %016llx (VS %016llx): albedo s%d, fade c%d = %.4f (%u plants) -> %s %u",
+                 (unsigned long long) h.psHash, (unsigned long long) h.vsHash, k, fc >> 2, func ? h.fade0 : 0.f, func ? h.fadePlants : 0u,
                  func ? "drawn solid, blending off, alpha test >=" : fc < 0 ? "no fade from the vertex shader: left as the game's" : "not the leaf texture's albedo: left as the game's",
                  func && h.fadeG.count ? h.fadeG.ref[0] : 0u);
         Logger::info(msg);

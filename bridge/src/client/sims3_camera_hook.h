@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-162).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-163).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -1118,17 +1118,13 @@ inline bool dropsDraw(const DropPs* d, bool is3D, DWORD alphaBlendEnable) {
 // and a texkill that thins the leaves as it falls (run 240: 594 blended draws against 152 opaque at
 // close range). The runtime took them for translucent -- unshaded and see-through. The user's
 // choice: a tree near the camera stays a solid tree. Blending off, and its leaves cut where the
-// opaque tree's are -- alpha at least the tree's fade, which the vertex shader hands over in
-// fadeInput (semantic * 4 + component, as PsAnalysis::fadeInput): VS 1b5224b7 writes c2.y to
-// TEXCOORD1.w and 01729eeb to COLOR0.w, as their opaque counterparts 799a26fa and 854fd850 do.
-// sampler: the leaf texture the cut reads, which must be the draw's albedo.
-struct SolidFade { uint64_t hash; const char* name; int8_t sampler; int8_t fadeInput; };   // hash: the pixel shader's
-inline const SolidFade kSolidFades[] = {
-  { 0x714d5dae31da4378ull, "a tree's leaves near the camera (VS 1b5224b7)", 1, 1 * 4 + 3 },
-  { 0xd3759d8d17c63b92ull, "a tree's branches near the camera (VS 01729eeb)", 1, kSemColor0 * 4 + 3 },
-  { 0xca3faba5c3d2dbc2ull, "a tree's fronds near the camera (VS 01729eeb)", 1, kSemColor0 * 4 + 3 },
-};
-inline const SolidFade* findSolidFade(uint64_t psHash) { return findByHash(kSolidFades, psHash); }
+// opaque tree's are -- alpha at least the plant's fade, which the vertex shader hands over (as the opaque
+// ones do: VS 1b5224b7 on TEXCOORD1.w like 799a26fa, 01729eeb on COLOR0.w like 854fd850) -- when the
+// draw's albedo is the leaf texture, the one whose alpha shapes the surface (PsSamplerUse::alphaUsed: s1 in
+// the near leaves', branches' and fronds' shaders 714d5dae, d3759d8d, ca3faba5). Which draws these are and
+// where the fade arrives come from the vertex shader (nearTreeFadeInput). (Until milestone 163 a table named
+// the three pixel shaders with their fade input and leaf sampler; run 264 found the vertex shader name the
+// same 2,942 draws with the same input.)
 // A tree near the camera, from its vertex shader (milestone 162): SpeedTree hands each plant's fade -- c2.y
 // of the plant's block of three, read relative to a0 -- to the pixel shader on a .w (VsConstantOutputs);
 // the near-camera copies hand over the plant's opacity, c2.w, as well (84 of the 3,250 vertex shaders
@@ -1826,6 +1822,7 @@ struct PsSamplerUse {
   bool projective = false;  // read with texldp (shadow maps)
   int8_t texcoord = -1;     // TEXCOORD index of the coordinate input, or -1
   uint8_t colorChannels = 0;// how many of its r, g, b reach the colour output (an albedo: 3; a mask: 1 or 2)
+  bool alphaUsed = false;   // its alpha reaches the alpha output (oC0.w) or a texkill: what shapes the surface (milestone 163)
   bool reachesColor() const { return colorChannels > 0; }
 };
 // A cut-out's value (milestone 68): a sum of up to three terms, each a literal times, when c >= 0,
@@ -1874,7 +1871,7 @@ inline bool analyzePixelShader(const DWORD* tokens, size_t count, PsAnalysis& ou
   if (major < 2) return false;                                        // ps_1_x has no dcl/texld of this shape
   int8_t inputTexcoord[32]; for (int i = 0; i < 32; ++i) inputTexcoord[i] = -1;
   int8_t inputColor[32]; for (int i = 0; i < 32; ++i) inputColor[i] = (major < 3 && i < 2) ? (int8_t) i : (int8_t) -1;   // ps_2_x: v# is COLOR#
-  uint64_t tempTaint[32][4] = {}, colorTaint[4][4] = {};
+  uint64_t tempTaint[32][4] = {}, colorTaint[4][4] = {}, killTaint = 0;   // killTaint: what feeds a texkill
   const uint32_t kTemp = 0u, kInput = 1u, kTexture = 3u, kColorOut = 8u, kSampler = 10u;
   auto bit = [](uint32_t sampler, uint32_t channel) -> uint64_t { return 1ull << (sampler * 4 + channel); };
   // per temp: the sampler and coordinate register of the last TEXLD into it (the mask test)
@@ -1972,6 +1969,7 @@ inline bool analyzePixelShader(const DWORD* tokens, size_t count, PsAnalysis& ou
     const uint32_t dtype = dxsoRegType(dest), dn = dxsoRegNum(dest);
     const uint32_t mask = (dest >> 16) & 0xFu;
     if (op == 0x41u) {                                                 // TEXKILL reg: what feeds the discard
+      if (dtype == kTemp && dn < 32) for (uint32_t c = 0; c < 4; ++c) if (mask & (1u << c)) killTaint |= tempTaint[dn][c];
       if (out.maskSampler >= 0 && dtype == kTemp && dn < 32) {
         for (uint32_t c = 0; c < 4; ++c) if (tempTaint[dn][c] & bit((uint32_t) out.maskSampler, 0)) out.maskKill = true;
       }
@@ -2057,6 +2055,7 @@ inline bool analyzePixelShader(const DWORD* tokens, size_t count, PsAnalysis& ou
     uint8_t n = 0;
     for (uint32_t c = 0; c < 3; ++c) if (color & bit(s, c)) ++n;
     out.samplers[s].colorChannels = n;
+    out.samplers[s].alphaUsed = ((colorTaint[0][3] | killTaint) & bit(s, 3)) != 0;
   }
   if (out.maskSampler >= 0 && !out.maskKill && (colorTaint[0][3] & bit((uint32_t) out.maskSampler, 0))) out.maskAlpha = true;
   if (kills == 1 && killOk && killed.s >= 0 && killed.s < 16 && !out.samplers[killed.s].cube) { out.cutSampler = killed.s; out.cutA = killed.a; out.cutB = killed.b; }

@@ -116,7 +116,7 @@ static void sims3LogOptions() {
 
 // Called from the client's shutdown path (d3d9_lss.cpp) so the last stretch of the session is reported.
 void sims3LogFinalStats() {
-  if (sims3cam::enabled() && g_sims3.frames > 0) { sims3LogStats(); sims3LogNearTreeCheck(); }   // the milestone-162 check
+  if (sims3cam::enabled() && g_sims3.frames > 0) sims3LogStats();
 }
 
 // The frame's end, from Present: the options once, the statistics every 600 frames (short sessions
