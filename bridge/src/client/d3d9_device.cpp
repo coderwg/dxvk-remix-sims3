@@ -2714,6 +2714,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreateVertexShader(CONST DWORD* pFunc
     sims3cam::analyzeVertexNormal(pFunction, sims3Count, pLssVertexShader->sims3Normal);
     // the constants it hands the pixel shader unchanged (milestone 135: the trees' fade)
     sims3cam::analyzeVertexConstantOutputs(pFunction, sims3Count, pLssVertexShader->sims3ConstOut);
+    pLssVertexShader->sims3NearFade = (int8_t) sims3cam::nearTreeFadeInput(pLssVertexShader->sims3ConstOut);   // milestone 162
     // cards turned to the camera (milestone 136: the trees' leaves)
     sims3cam::analyzeCameraCard(pFunction, sims3Count, pLssVertexShader->sims3Card);
     // a wall shader (milestone 13): the clamp of the up-ness flag, for the opening cut

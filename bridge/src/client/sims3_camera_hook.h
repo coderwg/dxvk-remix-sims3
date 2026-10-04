@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-161).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-162).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -1129,6 +1129,21 @@ inline const SolidFade kSolidFades[] = {
   { 0xca3faba5c3d2dbc2ull, "a tree's fronds near the camera (VS 01729eeb)", 1, kSemColor0 * 4 + 3 },
 };
 inline const SolidFade* findSolidFade(uint64_t psHash) { return findByHash(kSolidFades, psHash); }
+// A tree near the camera, from its vertex shader (milestone 162): SpeedTree hands each plant's fade -- c2.y
+// of the plant's block of three, read relative to a0 -- to the pixel shader on a .w (VsConstantOutputs);
+// the near-camera copies hand over the plant's opacity, c2.w, as well (84 of the 3,250 vertex shaders
+// dumped: the fade on TEXCOORD1.w or COLOR0.w; their opaque twins hand over the fade alone, and the
+// compositor's quad, which copies c2 whole, has the fade on no .w). The fade's input (semantic * 4 +
+// component, as PsAnalysis::fadeInput), or -1.
+inline int nearTreeFadeInput(const VsConstantOutputs& o) {
+  int fade = -1; bool opacity = false;
+  for (int i = 0; i < 72; ++i) {
+    if (o.c[i] < 0 || !o.rel[i]) continue;
+    if (o.c[i] == 2 * 4 + 1 && (i & 3) == 3 && fade < 0) fade = i;   // c2.y on a .w
+    else if (o.c[i] == 2 * 4 + 3) opacity = true;                    // c2.w
+  }
+  return opacity ? fade : -1;
+}
 
 // ---- the lot terrain drawn once per world chunk (milestone 16) ----------------------------
 // A lot's ground mesh is drawn once for every 256-unit world chunk it overlaps, with that chunk's

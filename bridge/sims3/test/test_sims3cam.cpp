@@ -1589,6 +1589,20 @@ int main() {
     }
   }
 
+  // --- a tree near the camera from its vertex shader (milestone 162): the plant's fade and opacity handed over
+  {
+    std::vector<DWORD> nearLeaf, nearBranch, leaf, branch, quad;
+    if (loadShader("vs_1b5224b7e9bee689", nearLeaf) && loadShader("vs_01729eebdb3cafd4", nearBranch) && loadShader("vs_799a26fa907d36d7", leaf)
+        && loadShader("vs_854fd850257ee36f", branch) && loadShader("vs_0a66b32b7f4645bb", quad)) {
+      VsConstantOutputs a, b, c, d, e;
+      const bool ok = analyzeVertexConstantOutputs(nearLeaf.data(), nearLeaf.size(), a) && analyzeVertexConstantOutputs(nearBranch.data(), nearBranch.size(), b)
+                      && analyzeVertexConstantOutputs(leaf.data(), leaf.size(), c) && analyzeVertexConstantOutputs(branch.data(), branch.size(), d)
+                      && analyzeVertexConstantOutputs(quad.data(), quad.size(), e);
+      CHECK(ok && nearTreeFadeInput(a) == 1 * 4 + 3 && nearTreeFadeInput(b) == kSemColor0 * 4 + 3 && nearTreeFadeInput(c) == -1 && nearTreeFadeInput(d) == -1 && nearTreeFadeInput(e) == -1,
+            "near trees (M162): the near leaves' VS 1b5224b7 -> TEXCOORD1.w, the near branches' 01729eeb -> COLOR0.w (the table's inputs); the opaque twins 799a26fa / 854fd850 and the compositor's quad 0a66b32b -> none");
+    } else SKIP("near trees: vertex shader dumps 1b5224b7 / 01729eeb / 799a26fa / 854fd850 / 0a66b32b not all found");
+  }
+
   // --- the hook's caches (milestone 158): one kind, the entry used longest ago makes room
   {
     {

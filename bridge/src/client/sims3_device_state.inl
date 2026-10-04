@@ -90,6 +90,7 @@ struct Sims3Hook {
   uint32_t vsVariantCount = 0, vsVariantsFull = 0;   // ...and the draws that found the table full
   const sims3cam::VsNormalInfo* vsNormal = nullptr;   // the bound (game) vertex shader's normal facts
   const sims3cam::VsConstantOutputs* vsConstOut = nullptr;   // ...and the constants it hands the pixel shader (milestone 135)
+  int8_t vsNearFade = -1;                         // ...and, a tree near the camera, the input its plant's fade arrives on (milestone 162)
   const sims3cam::CameraCard* vsCard = nullptr;   // ...and whether it turns cards to the camera (milestone 136)
   uint32_t cardDraws = 0, cardNotCamera = 0;   // leaf draws faced outward / whose constants were not the camera's axes (milestone 136)
   uint8_t pendingPromote = 0;                     // the coordinate to promote for this draw (0 = none), decided before the variant is bound
