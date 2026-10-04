@@ -47,8 +47,9 @@ bool sims3SendInstances(Sims3Hook& h, Dev* dev, const St& st, Send&& send) {
 // when it is not a wall draw or nothing of it changes (the game's draw then goes out as it is).
 template<typename Dev, typename St>
 bool sims3SendWallCut(Sims3Hook& h, Dev* dev, const St& st, D3DPRIMITIVETYPE type, INT base, UINT start, UINT prims, UID& uid) {
+  Sims3Geometry g0, g1;
   if (type != D3DPT_TRIANGLELIST || !h.wallLayout.valid || !h.vsWall || !h.vsWall->valid
-      || *st.streams[0] == nullptr || *st.streams[1] == nullptr || *st.indices == nullptr) return false;
+      || !sims3BoundGeometry(dev, 0, g0) || !sims3BoundGeometry(dev, 1, g1)) return false;
   const sims3cam::PsAnalysis* ps = (h.psAuto && h.psAuto->valid && h.psAuto->maskSampler >= 0 && h.psAuto->maskSampler < 16) ? h.psAuto : nullptr;
   const DWORD* rs = st.renderStates.data();
   // the discard threshold: texkill at 0.5; walls C alpha-tests mask + z - 0.5 against the
@@ -56,11 +57,7 @@ bool sims3SendWallCut(Sims3Hook& h, Dev* dev, const St& st, D3DPRIMITIVETYPE typ
   float thr = -1.f;
   if (ps && ps->maskKill) thr = 0.5f;
   else if (ps && ps->maskAlpha && rs[D3DRS_ALPHATESTENABLE] && (rs[D3DRS_ALPHAFUNC] == D3DCMP_GREATEREQUAL || rs[D3DRS_ALPHAFUNC] == D3DCMP_GREATER)) thr = 0.5f + (float) (rs[D3DRS_ALPHAREF] & 0xFFu) / 255.f;
-  auto* vb0 = bridge_cast<Direct3DVertexBuffer9_LSS*>(*st.streams[0]);
-  auto* vb1 = bridge_cast<Direct3DVertexBuffer9_LSS*>(*st.streams[1]);
-  auto* ib = bridge_cast<Direct3DIndexBuffer9_LSS*>(*st.indices);
-  const uint8_t* d0 = vb0->sims3Data(); const uint8_t* d1 = vb1->sims3Data(); const uint8_t* di = ib->sims3Data();
-  if (!d0 || !d1 || !di) { ++h.wallSkipped; return false; }
+  if (!g0.vd || !g1.vd || !g0.id) { ++h.wallSkipped; return false; }
   // the mask: the texture at the pixel shader's mask sampler (none bound: black everywhere)
   const int s = ps ? ps->maskSampler : -1;
   uint32_t maskId = 0, maskVer = 0, maskW = 0, maskH = 0, maskFmt = 0; uint64_t maskHash = 0; const uint8_t* mask = nullptr;
@@ -83,9 +80,9 @@ bool sims3SendWallCut(Sims3Hook& h, Dev* dev, const St& st, D3DPRIMITIVETYPE typ
   if (thr < 0.f) { maskW = maskH = 0; maskHash = 0; ++h.wallNoOpeningTest; }
   sims3cam::WallCutInput in;
   in.layout = h.wallLayout;
-  in.vb0 = d0; in.vb0Size = vb0->sims3Size(); in.offset0 = st.streamOffsets[0]; in.stride0 = st.streamStrides[0];
-  in.vb1 = d1; in.vb1Size = vb1->sims3Size(); in.offset1 = st.streamOffsets[1]; in.stride1 = st.streamStrides[1];
-  in.ib = di; in.ibSize = ib->sims3Size(); in.ib32 = ib->getDesc().Format == D3DFMT_INDEX32;
+  in.vb0 = g0.vd; in.vb0Size = g0.vbSize; in.offset0 = g0.off; in.stride0 = g0.stride;
+  in.vb1 = g1.vd; in.vb1Size = g1.vbSize; in.offset1 = g1.off; in.stride1 = g1.stride;
+  in.ib = g0.id; in.ibSize = g0.ibSize; in.ib32 = g0.ib32;
   in.baseVertex = base; in.startIndex = start; in.primCount = prims;
   in.mask = mask; in.maskW = maskW; in.maskH = maskH;
   float ck[4]; memcpy(ck, &st.vertexConstants.fConsts[h.vsWall->clampReg], sizeof ck);
@@ -94,9 +91,9 @@ bool sims3SendWallCut(Sims3Hook& h, Dev* dev, const St& st, D3DPRIMITIVETYPE typ
   // declaration and the constants the cut depends on
   struct { uint64_t vb0Hash, vb1Hash, ibHash, maskHash; uint32_t off0, st0, off1, st1, ib32, declId; int32_t base; uint32_t start, prims; float lo, hi, vis, kScale, thr; } k;
   memset(&k, 0, sizeof k);
-  k.vb0Hash = sims3ContentHash(h, (uint32_t) vb0->getId(), vb0->sims3Version, d0, in.vb0Size);
-  k.vb1Hash = sims3ContentHash(h, (uint32_t) vb1->getId(), vb1->sims3Version, d1, in.vb1Size);
-  k.ibHash = sims3ContentHash(h, (uint32_t) ib->getId(), ib->sims3Version, di, in.ibSize);
+  k.vb0Hash = sims3ContentHash(h, g0.vbId, g0.vbVersion, g0.vd, in.vb0Size);
+  k.vb1Hash = sims3ContentHash(h, g1.vbId, g1.vbVersion, g1.vd, in.vb1Size);
+  k.ibHash = sims3ContentHash(h, g0.ibId, g0.ibVersion, g0.id, in.ibSize);
   k.maskHash = maskHash; k.off0 = in.offset0; k.st0 = in.stride0; k.off1 = in.offset1; k.st1 = in.stride1; k.ib32 = in.ib32 ? 1u : 0u; k.declId = h.wallDeclId;
   k.base = base; k.start = start; k.prims = prims; k.lo = ck[0]; k.hi = ck[1]; k.vis = ck[2]; k.kScale = in.params.kScale; k.thr = thr;
   const uint64_t key = sims3cam::fnv1a64(&k, sizeof k);
@@ -106,9 +103,9 @@ bool sims3SendWallCut(Sims3Hook& h, Dev* dev, const St& st, D3DPRIMITIVETYPE typ
   if (!e || !e->changed) return false;
   ++h.wallCutDraws;
   // the game's buffers are held by a reference of the hook's own while its own are bound
-  IDirect3DVertexBuffer9* gvb0 = (IDirect3DVertexBuffer9*) vb0; IDirect3DVertexBuffer9* gvb1 = (IDirect3DVertexBuffer9*) vb1; IDirect3DIndexBuffer9* gib = (IDirect3DIndexBuffer9*) ib;
+  IDirect3DVertexBuffer9* gvb0 = g0.vb; IDirect3DVertexBuffer9* gvb1 = g1.vb; IDirect3DIndexBuffer9* gib = g0.ib;
   gvb0->AddRef(); gvb1->AddRef(); gib->AddRef();
-  const UINT off0 = st.streamOffsets[0], off1 = st.streamOffsets[1], st0 = st.streamStrides[0], st1 = st.streamStrides[1];
+  const UINT off0 = g0.off, off1 = g1.off, st0 = g0.stride, st1 = g1.stride;
   dev->SetStreamSource(0, e->vb0, 0, st0); dev->SetStreamSource(1, e->vb1, 0, st1); dev->SetIndices(e->ib);
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_DrawIndexedPrimitive, dev->getId());

@@ -55,39 +55,29 @@ inline void sims3OnReset(Sims3Hook& h) {
 // true when it is the back side of a zero-thickness wall; otherwise its triangles join them.
 template<typename Dev>
 bool sims3WallBackSide(Sims3Hook& h, Dev* dev) {
-  IDirect3DVertexBuffer9* vb = nullptr; UINT off = 0, stride = 0;
-  if (FAILED(dev->GetStreamSource(0, &vb, &off, &stride)) || !vb) return false;
-  vb->Release();
-  IDirect3DIndexBuffer9* ib = nullptr;
-  if (FAILED(dev->GetIndices(&ib)) || !ib) return false;
-  ib->Release();
-  auto* lvb = bridge_cast<Direct3DVertexBuffer9_LSS*>(vb); auto* lib = bridge_cast<Direct3DIndexBuffer9_LSS*>(ib);
-  if (!lvb || !lib || stride == 0 || h.wallLayout.posOff < 0) return false;
-  const uint32_t vbId = (uint32_t) lvb->getId();
+  Sims3Geometry g;
+  if (!sims3BoundGeometry(dev, 0, g) || h.wallLayout.posOff < 0) return false;
   struct { uint32_t vbId, vbVer, ibId, ibVer, off, stride; int32_t base; uint32_t start, prims, posOff; } pk = {
-    vbId, lvb->sims3Version, (uint32_t) lib->getId(), lib->sims3Version, off, stride, h.drawBase, h.drawStart, h.drawPrims, (uint32_t) h.wallLayout.posOff };
+    g.vbId, g.vbVersion, g.ibId, g.ibVersion, g.off, g.stride, h.drawBase, h.drawStart, h.drawPrims, (uint32_t) h.wallLayout.posOff };
   const uint64_t pieceKey = sims3cam::fnv1a64(&pk, sizeof pk);
   const std::vector<uint64_t>* piece = h.wallPieceTris.find(pieceKey);
   if (!piece) {
     std::vector<uint64_t> tris;
-    const uint8_t* vd = lvb->sims3Data(); const uint8_t* id = lib->sims3Data();
-    const bool ib32 = lib->getDesc().Format == D3DFMT_INDEX32;
-    const size_t isz = ib32 ? 4u : 2u, n = (size_t) h.drawPrims * 3u;
-    if (vd && id && ((size_t) h.drawStart + n) * isz <= lib->sims3Size()) {
+    const size_t n = (size_t) h.drawPrims * 3u;
+    if (g.vd && (size_t) h.drawStart + n <= g.indices()) {
       tris.reserve(h.drawPrims);
       for (size_t t = 0; t < n; t += 3) {
         int16_t p[3][4]; bool ok = true;
         for (int c = 0; c < 3 && ok; ++c) {
-          const int64_t v = (int64_t) h.drawBase + (int64_t) sims3cam::readIndex(id, (size_t) h.drawStart + t + (size_t) c, ib32);
-          const size_t at = (size_t) off + (size_t) v * stride + (size_t) h.wallLayout.posOff;
-          if (v < 0 || at + 8u > lvb->sims3Size()) ok = false; else memcpy(p[c], vd + at, 8);   // SHORT4: x, full height, z, stub height
+          const uint8_t* q = g.at(g.vertex(h.drawBase, (size_t) h.drawStart + t + (size_t) c), (uint32_t) h.wallLayout.posOff, 8u);
+          if (q) memcpy(p[c], q, 8); else ok = false;   // SHORT4: x, full height, z, stub height
         }
         tris.push_back(ok ? sims3cam::wallTriKey(p[0], p[1], p[2]) : 0u);
       }
     }
     piece = &(h.wallPieceTris.add(pieceKey) = std::move(tris));
   }
-  auto& kept = h.wallFrameTris[vbId];
+  auto& kept = h.wallFrameTris[g.vbId];
   uint32_t matched = 0;
   if (sims3cam::isWallBackSide(*piece, kept, matched)) {
     return true;
@@ -174,16 +164,7 @@ void sims3GlassWorld(Sims3Hook& h, Dev* dev, UINT freq0) {
   }
   const std::vector<DWORD>& tok = *known;
   if (tok.empty()) { fail("its bytecode is not readable"); return; }
-  // the draw's first vertex
-  IDirect3DIndexBuffer9* ib = nullptr;
-  if (FAILED(dev->GetIndices(&ib)) || !ib) return;
-  ib->Release();
-  auto* lib = bridge_cast<Direct3DIndexBuffer9_LSS*>(ib);
-  const uint8_t* id = lib ? lib->sims3Data() : nullptr;
-  const bool ib32 = lib && lib->getDesc().Format == D3DFMT_INDEX32;
-  if (!id || ((size_t) h.drawStart + 1u) * (ib32 ? 4u : 2u) > lib->sims3Size()) { fail("its index buffer is not readable"); return; }
-  const int64_t vtx = (int64_t) h.drawBase + (int64_t) sims3cam::readIndex(id, (size_t) h.drawStart, ib32);
-  // its inputs, as the declaration lays them out ((0, 0, 0, 1) where nothing is declared)
+  // the draw's first vertex, its inputs, as the declaration lays them out ((0, 0, 0, 1) where nothing is declared)
   float in[16][4] = {};
   for (auto& v : in) v[3] = 1.f;
   sims3cam::VsInputDcl dcls[16];
@@ -192,15 +173,14 @@ void sims3GlassWorld(Sims3Hook& h, Dev* dev, UINT freq0) {
     const D3DVERTEXELEMENT9* e = nullptr;
     for (const D3DVERTEXELEMENT9* x = h.declElems; x->Stream != 0xFF; ++x) if (x->Usage == dcls[i].usage && x->UsageIndex == dcls[i].index) { e = x; break; }
     if (!e) continue;
-    IDirect3DVertexBuffer9* vb = nullptr; UINT off = 0, stride = 0;
-    if (FAILED(dev->GetStreamSource(e->Stream, &vb, &off, &stride)) || !vb) { fail("a stream is not bound"); return; }
-    vb->Release();
-    auto* lvb = bridge_cast<Direct3DVertexBuffer9_LSS*>(vb);
-    const uint8_t* vd = lvb ? lvb->sims3Data() : nullptr;
+    Sims3Geometry g;
+    if (!sims3BoundGeometry(dev, e->Stream, g)) { fail("a stream is not bound"); return; }
+    const int64_t vtx = g.vertex(h.drawBase, (size_t) h.drawStart);
+    if (vtx < 0) { fail("its index buffer is not readable"); return; }
     const uint32_t bytes = sims3cam::declTypeBytes((uint8_t) e->Type);
-    const size_t at = (size_t) off + (size_t) vtx * stride + (size_t) e->Offset;
-    if (!vd || vtx < 0 || bytes == 0 || at + bytes > lvb->sims3Size()) { fail("its vertex data is not readable"); return; }
-    if (!sims3cam::vsDecodeElement((uint8_t) e->Type, vd + at, in[dcls[i].reg])) { fail("an element type it cannot read"); return; }
+    const uint8_t* q = bytes ? g.at(vtx, (uint32_t) e->Offset, bytes) : nullptr;
+    if (!q) { fail("its vertex data is not readable"); return; }
+    if (!sims3cam::vsDecodeElement((uint8_t) e->Type, q, in[dcls[i].reg])) { fail("an element type it cannot read"); return; }
   }
   // the shader's constants as the device holds them
   static float cf[256][4]; int ci[16][4] = {}; BOOL cb[16] = {};
@@ -228,31 +208,22 @@ void sims3GlassOneSide(Sims3Hook& h, Dev* dev) {
   for (const D3DVERTEXELEMENT9* e = h.declElems; e->Stream != 0xFF; ++e) if (e->Usage == D3DDECLUSAGE_POSITION) { if (e->UsageIndex == 0) pe = e; else second = true; }
   const uint32_t bytes = pe ? sims3cam::declTypeBytes((uint8_t) pe->Type) : 0u;
   if (!pe || second || bytes == 0) { ++h.glassSideSkipped; return; }
-  IDirect3DVertexBuffer9* vb = nullptr; UINT off = 0, stride = 0;
-  if (FAILED(dev->GetStreamSource(pe->Stream, &vb, &off, &stride)) || !vb) return;
-  vb->Release();
-  IDirect3DIndexBuffer9* ib = nullptr;
-  if (FAILED(dev->GetIndices(&ib)) || !ib) return;
-  ib->Release();
-  auto* lvb = bridge_cast<Direct3DVertexBuffer9_LSS*>(vb); auto* lib = bridge_cast<Direct3DIndexBuffer9_LSS*>(ib);
-  if (!lvb || !lib || stride == 0) return;
+  Sims3Geometry g;
+  if (!sims3BoundGeometry(dev, pe->Stream, g)) return;
   struct { uint32_t vbId, vbVer, ibId, ibVer, off, stride; int32_t base; uint32_t start, prims, posOff, posType; } pk = {
-    (uint32_t) lvb->getId(), lvb->sims3Version, (uint32_t) lib->getId(), lib->sims3Version, off, stride, h.drawBase, h.drawStart, h.drawPrims, (uint32_t) pe->Offset, (uint32_t) pe->Type };
+    g.vbId, g.vbVersion, g.ibId, g.ibVersion, g.off, g.stride, h.drawBase, h.drawStart, h.drawPrims, (uint32_t) pe->Offset, (uint32_t) pe->Type };
   const uint64_t key = sims3cam::fnv1a64(&pk, sizeof pk);
   const Sims3Hook::GlassSide* found = h.glassSides.find(key);
   if (!found) {
     Sims3Hook::GlassSide side; side.prims = h.drawPrims;
-    const uint8_t* vd = lvb->sims3Data(); const uint8_t* id = lib->sims3Data();
-    const bool ib32 = lib->getDesc().Format == D3DFMT_INDEX32;
-    const size_t isz = ib32 ? 4u : 2u, n = (size_t) h.drawPrims * 3u;
-    bool ok = vd && id && ((size_t) h.drawStart + n) * isz <= lib->sims3Size();
+    const size_t n = (size_t) h.drawPrims * 3u;
+    bool ok = g.vd && (size_t) h.drawStart + n <= g.indices();
     std::vector<uint32_t> idx(ok ? n : 0); std::vector<float> pos(ok ? n * 3 : 0);
     for (size_t i = 0; ok && i < n; ++i) {
-      idx[i] = sims3cam::readIndex(id, (size_t) h.drawStart + i, ib32);
-      const int64_t v = (int64_t) h.drawBase + (int64_t) idx[i];
-      const size_t at = (size_t) off + (size_t) v * stride + (size_t) pe->Offset;
-      if (v < 0 || at + bytes > lvb->sims3Size()) { ok = false; break; }
-      float f[4] = {}; sims3cam::declDecode((uint8_t) pe->Type, vd + at, f);
+      idx[i] = g.index((size_t) h.drawStart + i);
+      const uint8_t* q = g.at((int64_t) h.drawBase + (int64_t) idx[i], (uint32_t) pe->Offset, bytes);
+      if (!q) { ok = false; break; }
+      float f[4] = {}; sims3cam::declDecode((uint8_t) pe->Type, q, f);
       if ((pe->Type == D3DDECLTYPE_SHORT4 || pe->Type == D3DDECLTYPE_SHORT4N) && f[3] != 0.f) for (int c = 0; c < 3; ++c) f[c] /= f[3];   // the game's shaders divide a packed position by its w
       memcpy(&pos[i * 3], f, 12);
     }

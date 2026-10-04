@@ -17,17 +17,9 @@
 template<typename Dev>
 uint8_t sims3SquarePiece(Sims3Hook& h, Dev* dev) {
   if (!h.drawIndexed || h.drawType != D3DPT_TRIANGLELIST || h.drawPrims == 0) return 1;
-  IDirect3DVertexBuffer9* vb = nullptr; UINT off = 0, stride = 0;
-  if (FAILED(dev->GetStreamSource(0, &vb, &off, &stride)) || !vb) return 1;
-  vb->Release();   // the device state holds it
-  IDirect3DIndexBuffer9* ib = nullptr;
-  if (FAILED(dev->GetIndices(&ib)) || !ib) return 1;
-  ib->Release();
-  auto* lvb = bridge_cast<Direct3DVertexBuffer9_LSS*>(vb);
-  auto* lib = bridge_cast<Direct3DIndexBuffer9_LSS*>(ib);
-  if (!lvb || !lib || stride == 0) return 1;
-  const uint32_t vbId = (uint32_t) lvb->getId();
-  struct { uint64_t vb; uint32_t vbId, off, stride; } sk = { (uint64_t) (uintptr_t) vb, vbId, off, stride };
+  Sims3Geometry g;
+  if (!sims3BoundGeometry(dev, 0, g)) return 1;
+  struct { uint64_t vb; uint32_t vbId, off, stride; } sk = { (uint64_t) (uintptr_t) g.vb, g.vbId, g.off, g.stride };
   Sims3Hook::Square* sp = h.squares.find(sims3cam::fnv1a64(&sk, sizeof sk));
   if (!sp) {
     // the position: SHORT4 x, height, z, morph (run 168); any other layout is not merged
@@ -39,14 +31,14 @@ uint8_t sims3SquarePiece(Sims3Hook& h, Dev* dev) {
         if (e[i].Stream == 0 && e[i].Usage == D3DDECLUSAGE_POSITION && e[i].UsageIndex == 0 && e[i].Type == D3DDECLTYPE_SHORT4) posOffset = e[i].Offset;
       decl->Release();
     }
-    if (posOffset < 0 || (UINT) posOffset + 8u > stride) return 1;
+    if (posOffset < 0 || (UINT) posOffset + 8u > g.stride) return 1;
     Sims3Hook::Square& n = h.squares.add(sims3cam::fnv1a64(&sk, sizeof sk), [](Sims3Hook::Square& old) { old.release(); });
-    n.vb = vb; n.vbId = vbId; n.offset = off; n.stride = stride; n.posOffset = (uint16_t) posOffset;
+    n.vb = g.vb; n.vbId = g.vbId; n.offset = g.off; n.stride = g.stride; n.posOffset = (uint16_t) posOffset;
     sp = &n;
   }
   Sims3Hook::Square& s = *sp;
   if (s.frameSeen != h.frames) { s.frameSeen = h.frames; s.frameRanges.clear(); }
-  s.vbVersion = lvb->sims3Version; s.ib = ib; s.ibId = (uint32_t) lib->getId(); s.ibVersion = lib->sims3Version; s.ib32 = lib->getDesc().Format == D3DFMT_INDEX32; s.base = h.drawBase;
+  s.vbVersion = g.vbVersion; s.ib = g.ib; s.ibId = g.ibId; s.ibVersion = g.ibVersion; s.ib32 = g.ib32; s.base = h.drawBase;
   const uint64_t range = ((uint64_t) h.drawStart << 32) | (uint64_t) h.drawPrims;
   s.frameRanges.push_back(range);
   const bool inShape = s.ready && s.merged && s.builtVbVersion == s.vbVersion && s.builtIbId == s.ibId && s.builtIbVersion == s.ibVersion && s.builtBase == s.base &&
@@ -62,19 +54,17 @@ void sims3SquareBuild(Sims3Hook& h, Dev* dev, Sims3Hook::Square& s, const std::v
   ++h.mergeBuilds;
   if (s.merged) { s.merged->Release(); s.merged = nullptr; }
   s.ready = false;
-  auto* lvb = bridge_cast<Direct3DVertexBuffer9_LSS*>(s.vb);
-  auto* lib = bridge_cast<Direct3DIndexBuffer9_LSS*>(s.ib);
-  const uint8_t* vd = lvb ? lvb->sims3Data() : nullptr;
-  const uint8_t* id = lib ? lib->sims3Data() : nullptr;
-  if (!vd || !id) { ++h.mergeBuildFailed; return; }
-  const uint32_t vbSize = lvb->sims3Size(), ibSize = lib->sims3Size();
-  const uint32_t count = vbSize > s.offset ? (vbSize - s.offset) / s.stride : 0;
+  Sims3Geometry g;
+  if (!sims3GeometryOf(s.vb, s.offset, s.stride, s.ib, g) || !g.vd || !g.id) { ++h.mergeBuildFailed; return; }
+  const uint32_t count = g.vbSize > s.offset ? (uint32_t) ((g.vbSize - s.offset) / s.stride) : 0;
   std::vector<int32_t> x(count), z(count);
   for (uint32_t v = 0; v < count; ++v) {
-    int16_t c[4]; memcpy(c, vd + s.offset + (size_t) v * s.stride + s.posOffset, sizeof c);
+    const uint8_t* p = g.at(v, s.posOffset, 8u);
+    if (!p) continue;
+    int16_t c[4]; memcpy(c, p, sizeof c);
     x[v] = c[0]; z[v] = c[2];
   }
-  const uint32_t isz = s.ib32 ? 4u : 2u, ibCount = ibSize / isz;
+  const uint32_t ibCount = (uint32_t) g.indices();
   std::vector<uint32_t> idx;
   for (uint64_t r : ranges) {
     const uint32_t start = (uint32_t) (r >> 32);
@@ -82,9 +72,7 @@ void sims3SquareBuild(Sims3Hook& h, Dev* dev, Sims3Hook::Square& s, const std::v
     if (start >= ibCount) continue;
     if (start + n > ibCount) n = (ibCount - start) / 3u * 3u;
     for (uint32_t k = 0; k < n; ++k) {
-      uint32_t i;
-      i = sims3cam::readIndex(id, (size_t) start + k, s.ib32);
-      const int64_t vtx = (int64_t) s.base + (int64_t) i;
+      const int64_t vtx = (int64_t) s.base + (int64_t) g.index((size_t) start + k);
       idx.push_back(vtx < 0 ? 0xFFFFFFFFu : (uint32_t) vtx);   // a vertex before the buffer: left out as outside
     }
   }

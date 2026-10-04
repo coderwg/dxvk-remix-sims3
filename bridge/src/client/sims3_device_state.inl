@@ -302,6 +302,50 @@ IDirect3DVertexBuffer9* sims3MakeVertexBuffer(Dev* dev, const std::vector<uint8_
   vb->Unlock();
   return vb;
 }
+// The geometry a draw reads, as the client keeps it (milestone 159: one reader for the wall cut, the wall
+// and glass back sides, the glass's place, the low-detail lots and the town squares): a vertex buffer at
+// an offset and stride and an index buffer, the device's (no reference of the hook's), their ids and
+// uploads (the caches' keys) and their client copies, null when the client has none. (Until milestone
+// 159 every user fetched and bounds-checked the buffers its own way.)
+struct Sims3Geometry {
+  IDirect3DVertexBuffer9* vb = nullptr; IDirect3DIndexBuffer9* ib = nullptr;
+  uint32_t vbId = 0, vbVersion = 0, ibId = 0, ibVersion = 0; UINT off = 0, stride = 0; bool ib32 = false;
+  const uint8_t* vd = nullptr; const uint8_t* id = nullptr; size_t vbSize = 0, ibSize = 0;
+  size_t indices() const { return id ? ibSize / (ib32 ? 4u : 2u) : 0; }
+  uint32_t index(size_t i) const { return sims3cam::readIndex(id, i, ib32); }   // i < indices()
+  // the vertex number of index i with the draw's base vertex, -1 past the index buffer
+  int64_t vertex(INT base, size_t i) const { return i < indices() ? (int64_t) base + (int64_t) index(i) : -1; }
+  // vertex v's n bytes at elemOff, null outside the vertex buffer's copy
+  const uint8_t* at(int64_t v, uint32_t elemOff, uint32_t n) const {
+    if (!vd || v < 0) return nullptr;
+    const uint64_t a = (uint64_t) off + (uint64_t) v * stride + elemOff;
+    return a + n <= vbSize ? vd + a : nullptr;
+  }
+};
+// A vertex and an index buffer as the client keeps them; false unless both are the bridge's and the stride is set.
+template<typename Vb, typename Ib>
+bool sims3GeometryOf(Vb* vb, UINT off, UINT stride, Ib* ib, Sims3Geometry& g) {
+  g = Sims3Geometry();
+  auto* lvb = vb ? bridge_cast<Direct3DVertexBuffer9_LSS*>(vb) : nullptr;
+  auto* lib = ib ? bridge_cast<Direct3DIndexBuffer9_LSS*>(ib) : nullptr;
+  if (!lvb || !lib || stride == 0) return false;
+  g.vb = vb; g.ib = ib; g.off = off; g.stride = stride;
+  g.vbId = (uint32_t) lvb->getId(); g.vbVersion = lvb->sims3Version; g.ibId = (uint32_t) lib->getId(); g.ibVersion = lib->sims3Version;
+  g.ib32 = lib->getDesc().Format == D3DFMT_INDEX32;
+  g.vd = lvb->sims3Data(); g.vbSize = g.vd ? lvb->sims3Size() : 0; g.id = lib->sims3Data(); g.ibSize = g.id ? lib->sims3Size() : 0;
+  return true;
+}
+// The buffers bound on the device: the stream's vertex buffer and the index buffer.
+template<typename Dev>
+bool sims3BoundGeometry(Dev* dev, UINT stream, Sims3Geometry& g) {
+  IDirect3DVertexBuffer9* vb = nullptr; UINT off = 0, stride = 0;
+  if (FAILED(dev->GetStreamSource(stream, &vb, &off, &stride)) || !vb) { g = Sims3Geometry(); return false; }
+  vb->Release();   // the device state holds it
+  IDirect3DIndexBuffer9* ib = nullptr;
+  if (FAILED(dev->GetIndices(&ib)) || !ib) { g = Sims3Geometry(); return false; }
+  ib->Release();
+  return sims3GeometryOf(vb, off, stride, ib, g);
+}
 // A texture of the hook's own (milestone 157: the one maker): w x h A8R8G8B8, one level, D3DPOOL_MANAGED,
 // level 0 the given pixels (rows packed). Null when it cannot be made or written. The terrain's and the
 // materials' markers, the low-detail lots' window glow.

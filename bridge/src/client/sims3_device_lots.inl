@@ -6,10 +6,8 @@
 // house's triangles and the plate's top, each as an index buffer of the hook's own (the same vertex
 // numbers, drawn with the game's base vertex). Kept per content; null when nothing can be split.
 template<typename Dev>
-Sims3Hook::PlateEntry* sims3LotPlateEntry(Sims3Hook& h, Dev* dev, Direct3DVertexBuffer9_LSS* vb, UINT off, UINT stride, Direct3DIndexBuffer9_LSS* ib,
-                                          const D3DVERTEXELEMENT9* decl, INT base, UINT start, UINT prims, Direct3DTexture9_LSS* glowTex) {
-  const uint8_t* vd = vb ? vb->sims3Data() : nullptr; const uint8_t* id = ib ? ib->sims3Data() : nullptr;
-  if (!vd || !id || !decl || stride == 0) { ++h.plateFailed; return nullptr; }
+Sims3Hook::PlateEntry* sims3LotPlateEntry(Sims3Hook& h, Dev* dev, const Sims3Geometry& g, const D3DVERTEXELEMENT9* decl, INT base, UINT start, UINT prims, Direct3DTexture9_LSS* glowTex) {
+  if (!g.vd || !g.id || !decl) { ++h.plateFailed; return nullptr; }
   int posOff = -1, nrmOff = -1, uvOff = -1, nrmType = -1;
   for (uint32_t i = 0; i < 24 && decl[i].Stream != 0xFF; ++i) {
     if (decl[i].Stream != 0) continue;
@@ -18,26 +16,23 @@ Sims3Hook::PlateEntry* sims3LotPlateEntry(Sims3Hook& h, Dev* dev, Direct3DVertex
     if (decl[i].Usage == D3DDECLUSAGE_NORMAL && decl[i].UsageIndex == 0 && (decl[i].Type == D3DDECLTYPE_D3DCOLOR || decl[i].Type == D3DDECLTYPE_UBYTE4N)) { nrmOff = decl[i].Offset; nrmType = decl[i].Type; }
   }
   if (posOff < 0 || nrmOff < 0) { ++h.plateFailed; return nullptr; }
-  const uint32_t vbSize = vb->sims3Size(), ibSize = ib->sims3Size();
-  const bool ib32 = ib->getDesc().Format == D3DFMT_INDEX32;
   // the buffers by id and write count: ids come from a counter that never repeats, so the pair names
   // the content without hashing it (some ninety models a frame in the neighbourhood view)
   struct { uint64_t vbId, ibId, glowId; uint32_t vbVersion, ibVersion, glowVersion, off, stride, ib32, posOff, nrmOff; int32_t base; uint32_t start, prims; } k;
   memset(&k, 0, sizeof k);
-  k.vbId = (uint64_t) vb->getId(); k.ibId = (uint64_t) ib->getId(); k.vbVersion = vb->sims3Version; k.ibVersion = ib->sims3Version;
+  k.vbId = g.vbId; k.ibId = g.ibId; k.vbVersion = g.vbVersion; k.ibVersion = g.ibVersion;
   if (glowTex) { k.glowId = (uint64_t) glowTex->getId(); k.glowVersion = glowTex->sims3Level0Version(); }
-  k.off = off; k.stride = stride; k.ib32 = ib32 ? 1u : 0u; k.posOff = (uint32_t) posOff; k.nrmOff = (uint32_t) nrmOff; k.base = base; k.start = start; k.prims = prims;
+  k.off = g.off; k.stride = g.stride; k.ib32 = g.ib32 ? 1u : 0u; k.posOff = (uint32_t) posOff; k.nrmOff = (uint32_t) nrmOff; k.base = base; k.start = start; k.prims = prims;
   const uint64_t key = sims3cam::fnv1a64(&k, sizeof k);
   if (Sims3Hook::PlateEntry* known = h.plates.find(key)) return known->ok ? known : nullptr;
   // a new model: split it (past 256 the entry used longest ago makes room)
   Sims3Hook::PlateEntry& e = h.plates.add(key, [](Sims3Hook::PlateEntry& old) { old.release(); });
   ++h.plateBuilds;
-  const uint32_t isz = ib32 ? 4u : 2u, ibCount = ibSize / isz;
+  const size_t ibCount = g.indices();
   std::vector<uint32_t> idx; idx.reserve((size_t) prims * 3u);
   uint32_t lo = 0xFFFFFFFFu, hi = 0;
   for (uint32_t t = 0; t < prims * 3u && start + t < ibCount; ++t) {
-    uint32_t i;
-    i = sims3cam::readIndex(id, (size_t) start + t, ib32);
+    const uint32_t i = g.index((size_t) start + t);
     idx.push_back(i); if (i < lo) lo = i; if (i > hi) hi = i;
   }
   if (idx.size() < 3 || lo > hi) { ++h.plateFailed; return nullptr; }
@@ -46,11 +41,11 @@ Sims3Hook::PlateEntry* sims3LotPlateEntry(Sims3Hook& h, Dev* dev, Direct3DVertex
   std::vector<float> pos((size_t) count * 3u), uv((size_t) count * 2u); std::vector<uint8_t> cls(count);
   for (uint32_t v = 0; v < count; ++v) {
     const int64_t vtx = (int64_t) base + (int64_t) lo + (int64_t) v;
-    const uint64_t at = (uint64_t) off + (uint64_t) (vtx < 0 ? 0 : vtx) * stride;
-    if (vtx < 0 || at + (uint64_t) nrmOff + 4u > vbSize || at + (uint64_t) posOff + 12u > vbSize) { cls[v] = 0; continue; }
-    memcpy(&pos[(size_t) v * 3u], vd + at + posOff, 12);
-    cls[v] = vd[at + nrmOff + 3];
-    if (uvOff >= 0 && at + (uint64_t) uvOff + 8u <= vbSize) memcpy(&uv[(size_t) v * 2u], vd + at + uvOff, 8);
+    const uint8_t* p = g.at(vtx, (uint32_t) posOff, 12u); const uint8_t* nm = g.at(vtx, (uint32_t) nrmOff, 4u);
+    if (!p || !nm) { cls[v] = 0; continue; }
+    memcpy(&pos[(size_t) v * 3u], p, 12);
+    cls[v] = nm[3];
+    if (uvOff >= 0) if (const uint8_t* t = g.at(vtx, (uint32_t) uvOff, 8u)) memcpy(&uv[(size_t) v * 2u], t, 8);
   }
   std::vector<uint32_t> rel(idx.size()); for (size_t i = 0; i < idx.size(); ++i) rel[i] = idx[i] - lo;
   std::vector<uint32_t> house, plate; sims3cam::PlateSplitStats st;
@@ -80,6 +75,7 @@ Sims3Hook::PlateEntry* sims3LotPlateEntry(Sims3Hook& h, Dev* dev, Direct3DVertex
   // the glow layer (milestone 71): its triangles as vertices of their own, each moved kLotGlowLift
   // along its face normal (turned to the side of the vertex normal), drawn from 0 with indices 0..n-1
   if (!glow.empty()) {
+    const UINT stride = g.stride;
     std::vector<uint8_t> bytes(glow.size() * (size_t) stride);
     std::vector<uint32_t> seq(glow.size());
     bool ok = true;
@@ -87,11 +83,11 @@ Sims3Hook::PlateEntry* sims3LotPlateEntry(Sims3Hook& h, Dev* dev, Direct3DVertex
       float p[9]; float vn[3] = { 0.f, 0.f, 0.f };
       for (int k = 0; k < 3; ++k) {
         const uint32_t v = glow[t + k];
-        const uint64_t at = (uint64_t) off + (uint64_t) ((int64_t) base + (int64_t) lo + (int64_t) v) * stride;
-        if (at + stride > vbSize) { ok = false; break; }
-        memcpy(&bytes[(t + k) * stride], vd + at, stride);
-        memcpy(&p[3 * k], vd + at + posOff, 12);
-        const uint8_t* q = vd + at + nrmOff;
+        const uint8_t* vx = g.at((int64_t) base + (int64_t) lo + (int64_t) v, 0u, stride);   // the whole vertex
+        if (!vx) { ok = false; break; }
+        memcpy(&bytes[(t + k) * stride], vx, stride);
+        memcpy(&p[3 * k], vx + posOff, 12);
+        const uint8_t* q = vx + nrmOff;
         const float nx = (nrmType == D3DDECLTYPE_D3DCOLOR ? q[2] : q[0]) / 127.5f - 1.f, ny = q[1] / 127.5f - 1.f, nz = (nrmType == D3DDECLTYPE_D3DCOLOR ? q[0] : q[2]) / 127.5f - 1.f;
         vn[0] += nx; vn[1] += ny; vn[2] += nz;
         seq[t + k] = (uint32_t) (t + k);
@@ -136,13 +132,12 @@ IDirect3DTexture9* sims3LotGlowTexture(Sims3Hook& h, Dev* dev, Direct3DTexture9_
 // (the game's draw then goes out as it is); uid is the last message's.
 template<typename Dev, typename St>
 bool sims3LotModelDraw(Sims3Hook& h, Dev* dev, const St& st, INT base, UINT minIndex, UINT numVertices, UINT start, UINT prims, UID& uid) {
-  if (!*st.streams[0] || !*st.indices || !*st.vertexDecl) return false;
-  auto* vb0 = bridge_cast<Direct3DVertexBuffer9_LSS*>(*st.streams[0]);
-  auto* ib = bridge_cast<Direct3DIndexBuffer9_LSS*>(*st.indices);
+  Sims3Geometry geo;
+  if (!*st.vertexDecl || !sims3BoundGeometry(dev, 0, geo)) return false;
   auto* decl = bridge_cast<Direct3DVertexDeclaration9_LSS*>(*st.vertexDecl);
   const int gs = sims3cam::kLotGlowStage;
   Direct3DTexture9_LSS* glowTex = (h.psHash == sims3cam::kLotImpostorPs && h.boundTex[gs] && (h.boundKind[gs] & 0x7F) == 1) ? bridge_cast<Direct3DTexture9_LSS*>(h.boundTex[gs]) : nullptr;
-  Sims3Hook::PlateEntry* e = sims3LotPlateEntry(h, dev, vb0, st.streamOffsets[0], st.streamStrides[0], ib, decl ? decl->sims3Elements() : nullptr, base, start, prims, glowTex);
+  Sims3Hook::PlateEntry* e = sims3LotPlateEntry(h, dev, geo, decl ? decl->sims3Elements() : nullptr, base, start, prims, glowTex);
   if (!e) return false;
   const bool wantSplit = e->platePrims != 0;
   if (wantSplit && !h.platePs && !h.platePsFailed) {
@@ -162,7 +157,7 @@ bool sims3LotModelDraw(Sims3Hook& h, Dev* dev, const St& st, INT base, UINT minI
     const D3DPRIMITIVETYPE type = D3DPT_TRIANGLELIST;
     c.send_many(type, b, mn, nv, s, np);
   };
-  IDirect3DIndexBuffer9* gib = (IDirect3DIndexBuffer9*) ib; gib->AddRef();
+  IDirect3DIndexBuffer9* gib = geo.ib; gib->AddRef();
   if (!split) send(base, minIndex, numVertices, start, prims);   // the model as the game draws it, then its glow
   if (split) {
     if (e->housePrims) { dev->SetIndices(e->house); send(base, e->houseMin, e->houseNum, 0u, e->housePrims); }
@@ -183,8 +178,8 @@ bool sims3LotModelDraw(Sims3Hook& h, Dev* dev, const St& st, INT base, UINT minI
     static constexpr D3DRENDERSTATETYPE kGlowRs[7] = { D3DRS_ALPHABLENDENABLE, D3DRS_SRCBLEND, D3DRS_DESTBLEND, D3DRS_BLENDOP, D3DRS_ALPHATESTENABLE, D3DRS_ZWRITEENABLE, D3DRS_TEXTUREFACTOR };
     const DWORD ours[7] = { TRUE, D3DBLEND_ONE, D3DBLEND_ONE, D3DBLENDOP_ADD, FALSE, FALSE, 0xFF000000u | (grey << 16) | (grey << 8) | grey };
     for (int i = 0; i < 7; ++i) h.calls.holdRs(dev, kGlowRs[i], ours[i]);
-    IDirect3DVertexBuffer9* gvb0 = (IDirect3DVertexBuffer9*) vb0; gvb0->AddRef();
-    const UINT off0 = st.streamOffsets[0], st0 = st.streamStrides[0];
+    IDirect3DVertexBuffer9* gvb0 = geo.vb; gvb0->AddRef();
+    const UINT off0 = geo.off, st0 = geo.stride;
     dev->SetStreamSource(0, e->glowVb, 0, e->glowStride);
     dev->SetIndices(e->glow);
     send(0, e->glowMin, e->glowNum, 0u, e->glowPrims);
