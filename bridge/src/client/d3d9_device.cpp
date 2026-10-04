@@ -80,6 +80,7 @@ namespace {
 namespace {
 #include "sims3_device_squares.inl"   // the town ground's squares (milestone 60)
 #include "sims3_device_lots.inl"      // the low-detail lots (milestones 69-71)
+#include "sims3_device_send.inl"      // how a draw goes to the runtime (milestone 153)
 #include "sims3_device_notes.inl"     // the facts about the bound objects (milestone 17w)
 }
 
@@ -2435,12 +2436,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawPrimitive(D3DPRIMITIVETYPE Primit
   if (sims3cam::enabled()) g_sims3.drawIndexed = false;
   SIMS3_BEGIN_DRAW();
   UID currentUID = 0;
-  if (sims3cam::enabled() && g_sims3.splitDraw && PrimitiveType == D3DPT_TRIANGLELIST && PrimitiveCount >= 2) {   // a lot's re-submission as two half draws (milestone 17r)
-    const UINT half_ = PrimitiveCount / 2;
-    { ClientMessage c(Commands::IDirect3DDevice9Ex_DrawPrimitive, getId()); currentUID = c.get_uid(); c.send_many(PrimitiveType, StartVertex, half_); }
-    { ClientMessage c(Commands::IDirect3DDevice9Ex_DrawPrimitive, getId()); currentUID = c.get_uid(); c.send_many(PrimitiveType, StartVertex + half_ * 3, PrimitiveCount - half_); }
-    ++g_sims3.splitDraws;
-  } else {
+  // The Sims 3 camera hook: the draw goes out the hook's way when one applies (sims3SendDraw), else as the game made it
+  if (!(sims3cam::enabled() && sims3SendDraw(g_sims3, this, m_state, false, PrimitiveType, 0, 0, 0, StartVertex, PrimitiveCount, currentUID))) {
     ClientMessage c(Commands::IDirect3DDevice9Ex_DrawPrimitive, getId());
     currentUID = c.get_uid();
     c.send_many(PrimitiveType, StartVertex, PrimitiveCount);
@@ -2474,186 +2471,11 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
     }
   }
   UID currentUID = 0;
-  {
-    // The Sims 3 camera hook: a captured hardware-instanced draw goes to the runtime once per
-    // instance (see Sims3Hook::drawCaptured), the instance streams' offsets stepping through
-    // their data and stream 0 at one instance for the duration; the game's settings come back
-    // afterwards.
-    uint32_t instances_ = 1; uint32_t instStreams_ = 0;
-    if (sims3cam::enabled() && g_sims3.drawCaptured && (m_state.streamFreqs[0] & D3DSTREAMSOURCE_INDEXEDDATA)) {
-      instances_ = m_state.streamFreqs[0] & 0x3FFFFFFFu;
-      for (uint32_t s_ = 1; s_ < caps::MaxStreams; ++s_)
-        if ((m_state.streamFreqs[s_] & D3DSTREAMSOURCE_INSTANCEDATA) && *m_state.streams[s_] != nullptr && m_state.streamStrides[s_] > 0) instStreams_ |= 1u << s_;
-      if (instances_ <= 1 || instances_ > 1024 || instStreams_ == 0) instances_ = 1;
-    }
-    if (instances_ > 1) {
-      const UINT freq0_ = m_state.streamFreqs[0];
-      IDirect3DVertexBuffer9* vb_[caps::MaxStreams] = {}; UINT off_[caps::MaxStreams] = {}, stride_[caps::MaxStreams] = {};
-      for (uint32_t s_ = 1; s_ < caps::MaxStreams; ++s_) if (instStreams_ & (1u << s_)) {
-        vb_[s_] = (IDirect3DVertexBuffer9*) bridge_cast<Direct3DVertexBuffer9_LSS*>(*m_state.streams[s_]);
-        vb_[s_]->AddRef();   // held across the re-bindings below (each one drops the state's reference first)
-        off_[s_] = m_state.streamOffsets[s_]; stride_[s_] = m_state.streamStrides[s_];
-      }
-      // The runtime folds draws of one frame with the same material, geometry and vertex-shader
-      // hash into one object, and the vertex-shader hash of a captured draw covers the bytecode AND
-      // the float constants the shader can reach (d3d9_rtx_geometry.cpp). A per-instance value in
-      // c255 (never uploaded by the game; the variant bound for the draw reads it, see
-      // appendConstantRead) keeps each instance its own object.
-      float savedTag_[4]; memcpy(savedTag_, &m_state.vertexConstants.fConsts[255], sizeof savedTag_);
-      SetStreamSourceFreq(0, D3DSTREAMSOURCE_INDEXEDDATA | 1u);
-      for (uint32_t i_ = 0; i_ < instances_; ++i_) {
-        for (uint32_t s_ = 1; s_ < caps::MaxStreams; ++s_) if (instStreams_ & (1u << s_)) SetStreamSource(s_, vb_[s_], off_[s_] + i_ * stride_[s_], stride_[s_]);
-        const float tag_[4] = { (float) (i_ + 1), 0.f, 0.f, 0.f };
-        SetVertexShaderConstantF(255, tag_, 1);
-        ClientMessage c(Commands::IDirect3DDevice9Ex_DrawIndexedPrimitive, getId());
-        currentUID = c.get_uid();
-        c.send_many(Type, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount);
-      }
-      SetVertexShaderConstantF(255, savedTag_, 1);
-      for (uint32_t s_ = 1; s_ < caps::MaxStreams; ++s_) if (instStreams_ & (1u << s_)) { SetStreamSource(s_, vb_[s_], off_[s_], stride_[s_]); vb_[s_]->Release(); }
-      SetStreamSourceFreq(0, freq0_);
-      ++g_sims3.deinstancedDraws; g_sims3.deinstancedInstances += instances_;
-    } else {
-      // The Sims 3 camera hook: a captured wall draw gets its window and door openings cut into
-      // the geometry (milestone 13, sims3_walls.h). The pixel shader's mask test is evaluated on
-      // the client from the buffers' shadow copies and the mask atlas, and the cut triangles are
-      // drawn from the hook's own buffers; the game's bindings come back afterwards. A draw whose
-      // opening test cannot be evaluated -- a pixel shader the analyser does not know, walls C
-      // without its alpha test, a mask not readable on the client -- still loses the triangles its
-      // vertex shader hides, which never depended on the mask (milestone 77).
-      bool wallDone_ = false;
-      if (sims3cam::enabled() && g_sims3.drawCaptured && Type == D3DPT_TRIANGLELIST && g_sims3.wallLayout.valid && g_sims3.vsWall && g_sims3.vsWall->valid
-          && *m_state.streams[0] != nullptr && *m_state.streams[1] != nullptr && *m_state.indices != nullptr) {
-        auto wallDraw_ = [&]() -> bool {
-          auto& h = g_sims3;
-          const sims3cam::PsAnalysis* ps = (h.psAuto && h.psAuto->valid && h.psAuto->maskSampler >= 0 && h.psAuto->maskSampler < 16) ? h.psAuto : nullptr;
-          const DWORD* rs = m_state.renderStates.data();
-          // the discard threshold: texkill at 0.5; walls C alpha-tests mask + z - 0.5 against the
-          // reference; below 0: no opening test
-          float thr = -1.f;
-          if (ps && ps->maskKill) thr = 0.5f;
-          else if (ps && ps->maskAlpha && rs[D3DRS_ALPHATESTENABLE] && (rs[D3DRS_ALPHAFUNC] == D3DCMP_GREATEREQUAL || rs[D3DRS_ALPHAFUNC] == D3DCMP_GREATER)) thr = 0.5f + (float) (rs[D3DRS_ALPHAREF] & 0xFFu) / 255.f;
-          auto* vb0 = bridge_cast<Direct3DVertexBuffer9_LSS*>(*m_state.streams[0]);
-          auto* vb1 = bridge_cast<Direct3DVertexBuffer9_LSS*>(*m_state.streams[1]);
-          auto* ib = bridge_cast<Direct3DIndexBuffer9_LSS*>(*m_state.indices);
-          const uint8_t* d0 = vb0->sims3Data(); const uint8_t* d1 = vb1->sims3Data(); const uint8_t* di = ib->sims3Data();
-          if (!d0 || !d1 || !di) { ++h.wallSkipped; return false; }
-          // the mask: the texture at the pixel shader's mask sampler (none bound: black everywhere)
-          const int s = ps ? ps->maskSampler : -1;
-          uint32_t maskId = 0, maskVer = 0, maskW = 0, maskH = 0, maskFmt = 0; uint64_t maskHash = 0; const uint8_t* mask = nullptr;
-          if (thr >= 0.f && h.boundTex[s] != nullptr) {
-            if ((h.boundKind[s] & 0x7F) == 1) {
-              auto* tex = bridge_cast<Direct3DTexture9_LSS*>(h.boundTex[s]);
-              const D3DSURFACE_DESC d = tex->getLevelDesc(0);
-              maskId = (uint32_t) tex->getId(); maskVer = tex->sims3Level0Version(); maskW = d.Width; maskH = d.Height; maskFmt = (uint32_t) d.Format;
-              mask = sims3WallMask(h, maskId, maskVer, maskFmt, d.Width, d.Height, tex->sims3Level0Data(), maskHash);
-            }
-            if (!mask) {
-              thr = -1.f;
-              if (h.wallSkipLogged < 4) {
-                ++h.wallSkipLogged; char fb[16]; char m[288];
-                snprintf(m, sizeof m, "Sims 3 camera hook: wall draw's openings not cut at frame %u -> the mask at stage %d (%s %ux%u) is not readable on the client (its hidden triangles still go), VS %016llx PS %016llx", h.frames + 1, s, sims3FormatName(maskFmt, fb, sizeof fb), maskW, maskH, (unsigned long long) h.vsHash, (unsigned long long) h.psHash);
-                Logger::info(m);
-              }
-            }
-          }
-          if (thr < 0.f) { maskW = maskH = 0; maskHash = 0; ++h.wallNoOpeningTest; }
-          sims3cam::WallCutInput in;
-          in.layout = h.wallLayout;
-          in.vb0 = d0; in.vb0Size = vb0->sims3Size(); in.offset0 = m_state.streamOffsets[0]; in.stride0 = m_state.streamStrides[0];
-          in.vb1 = d1; in.vb1Size = vb1->sims3Size(); in.offset1 = m_state.streamOffsets[1]; in.stride1 = m_state.streamStrides[1];
-          in.ib = di; in.ibSize = ib->sims3Size(); in.ib32 = ib->getDesc().Format == D3DFMT_INDEX32;
-          in.baseVertex = BaseVertexIndex; in.startIndex = startIndex; in.primCount = primCount;
-          in.mask = mask; in.maskW = maskW; in.maskH = maskH;
-          float ck[4]; memcpy(ck, &m_state.vertexConstants.fConsts[h.vsWall->clampReg], sizeof ck);
-          in.params.clampLo = ck[0]; in.params.clampHi = ck[1]; in.params.clampVis = ck[2]; in.params.kScale = h.vsWall->kScale; in.params.threshold = thr;
-          // the key follows the buffers' and the mask's CONTENT (hashed once per upload), the draw range, the
-          // declaration and the constants the cut depends on
-          struct { uint64_t vb0Hash, vb1Hash, ibHash, maskHash; uint32_t off0, st0, off1, st1, ib32, declId; int32_t base; uint32_t start, prims; float lo, hi, vis, kScale, thr; } k;
-          memset(&k, 0, sizeof k);
-          k.vb0Hash = sims3ContentHash(h, (uint32_t) vb0->getId(), vb0->sims3Version, d0, in.vb0Size);
-          k.vb1Hash = sims3ContentHash(h, (uint32_t) vb1->getId(), vb1->sims3Version, d1, in.vb1Size);
-          k.ibHash = sims3ContentHash(h, (uint32_t) ib->getId(), ib->sims3Version, di, in.ibSize);
-          k.maskHash = maskHash; k.off0 = in.offset0; k.st0 = in.stride0; k.off1 = in.offset1; k.st1 = in.stride1; k.ib32 = in.ib32 ? 1u : 0u; k.declId = h.wallDeclId;
-          k.base = BaseVertexIndex; k.start = startIndex; k.prims = primCount; k.lo = ck[0]; k.hi = ck[1]; k.vis = ck[2]; k.kScale = in.params.kScale; k.thr = thr;
-          const uint64_t key = sims3cam::fnv1a64(&k, sizeof k);
-          sims3cam::WallCutStats st; bool built = false;
-          Sims3Hook::WallEntry* e = sims3WallEntry(h, this, key, in, st, built);
-          ++h.wallDraws;
-          if (!e || !e->changed) return false;
-          ++h.wallCutDraws;
-          // the game's buffers are held by a reference of the hook's own while its own are bound
-          IDirect3DVertexBuffer9* gvb0 = (IDirect3DVertexBuffer9*) vb0; IDirect3DVertexBuffer9* gvb1 = (IDirect3DVertexBuffer9*) vb1; IDirect3DIndexBuffer9* gib = (IDirect3DIndexBuffer9*) ib;
-          gvb0->AddRef(); gvb1->AddRef(); gib->AddRef();
-          const UINT off0 = m_state.streamOffsets[0], off1 = m_state.streamOffsets[1], st0 = m_state.streamStrides[0], st1 = m_state.streamStrides[1];
-          SetStreamSource(0, e->vb0, 0, st0); SetStreamSource(1, e->vb1, 0, st1); SetIndices(e->ib);
-          {
-            ClientMessage c(Commands::IDirect3DDevice9Ex_DrawIndexedPrimitive, getId());
-            currentUID = c.get_uid();
-            const INT base0 = 0; const UINT min0 = 0, start0 = 0, nv = e->vertexCount, np = e->triangleCount;
-            c.send_many(Type, base0, min0, nv, start0, np);
-          }
-          SetStreamSource(0, gvb0, off0, st0); SetStreamSource(1, gvb1, off1, st1); SetIndices(gib);
-          gvb0->Release(); gvb1->Release(); gib->Release();
-          return true;
-        };
-        wallDone_ = wallDraw_();
-      }
-      // The Sims 3 camera hook: a low-detail lot model (milestones 69-71), drawn by the hook in its parts.
-      if (!wallDone_ && sims3cam::enabled() && g_sims3.drawCaptured
-          && g_sims3.vsHash == sims3cam::kLotImpostorVs && Type == D3DPT_TRIANGLELIST)
-        wallDone_ = sims3LotModelDraw(g_sims3, this, m_state, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount, currentUID);
-      if (!wallDone_ && sims3cam::enabled() && g_sims3.glassIb && Type == D3DPT_TRIANGLELIST) {
-        // The Sims 3 camera hook: a glass sheet's back side left out (milestone 104): the kept triangles
-        // from the hook's own index buffer; the game's index buffer back afterwards
-        IDirect3DIndexBuffer9* gib_ = (IDirect3DIndexBuffer9*) bridge_cast<Direct3DIndexBuffer9_LSS*>(*m_state.indices);
-        if (gib_) gib_->AddRef();
-        SetIndices(g_sims3.glassIb);
-        {
-          ClientMessage c(Commands::IDirect3DDevice9Ex_DrawIndexedPrimitive, getId());
-          currentUID = c.get_uid();
-          const UINT start0_ = 0, prims_ = g_sims3.glassPrims;
-          c.send_many(Type, BaseVertexIndex, MinVertexIndex, NumVertices, start0_, prims_);
-        }
-        SetIndices(gib_); if (gib_) gib_->Release();
-        g_sims3.glassIb = nullptr;
-        wallDone_ = true;
-      }
-      if (!wallDone_ && sims3cam::enabled() && g_sims3.fadeSplit) {
-        // The Sims 3 camera hook: a SpeedTree draw whose plants are cut at different fades (milestone
-        // 139) goes out once per group: the other plants at scale 0 (collapsed onto their own place),
-        // the group's reference; the game's constants come back afterwards (the reference with the
-        // rest of its alpha test, sims3EndDraw).
-        auto& h = g_sims3;
-        const UINT regs_ = h.fadePlants * 3u;
-        float saved_[sims3cam::FadeGroups::kPlants * 3 * 4], block_[sims3cam::FadeGroups::kPlants * 3 * 4];
-        memcpy(saved_, &m_state.vertexConstants.fConsts[0], regs_ * 4 * sizeof(float));
-        for (uint32_t g_ = 0; g_ < h.fadeG.count; ++g_) {
-          memcpy(block_, saved_, regs_ * 4 * sizeof(float));
-          for (uint32_t i_ = 0; i_ < h.fadePlants; ++i_) if (!(h.fadeG.members[g_] & (1u << i_))) block_[(h.fadeReg + 3u * i_) * 4u] = 0.f;
-          { sims3cam::OwnCall own_(h.calls); SetVertexShaderConstantF(0, block_, regs_); }
-          sims3SetAlphaTest(h, this, h.fadeG.func, h.fadeG.ref[g_]);
-          ClientMessage c(Commands::IDirect3DDevice9Ex_DrawIndexedPrimitive, getId());
-          currentUID = c.get_uid();
-          c.send_many(Type, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount);
-        }
-        { sims3cam::OwnCall own_(h.calls); SetVertexShaderConstantF(0, saved_, regs_); }
-        h.fadeSplit = false; ++h.fadeSplitDraws; h.fadeSplitParts += h.fadeG.count;
-        wallDone_ = true;
-      }
-      if (!wallDone_ && sims3cam::enabled() && g_sims3.splitDraw && Type == D3DPT_TRIANGLELIST && primCount >= 2) {
-        // The Sims 3 camera hook: a lot's re-submission as two half draws (milestone 17r), each its
-        // own geometry to the runtime's draw tracker; together they bake the same triangles.
-        const UINT half_ = primCount / 2;
-        { ClientMessage c(Commands::IDirect3DDevice9Ex_DrawIndexedPrimitive, getId()); currentUID = c.get_uid(); c.send_many(Type, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, half_); }
-        { ClientMessage c(Commands::IDirect3DDevice9Ex_DrawIndexedPrimitive, getId()); currentUID = c.get_uid(); c.send_many(Type, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex + half_ * 3, primCount - half_); }
-        ++g_sims3.splitDraws;
-      } else if (!wallDone_) {
-        ClientMessage c(Commands::IDirect3DDevice9Ex_DrawIndexedPrimitive, getId());
-        currentUID = c.get_uid();
-        c.send_many(Type, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount);
-      }
-    }
+  // The Sims 3 camera hook: the draw goes out the hook's way when one applies (sims3SendDraw), else as the game made it
+  if (!(sims3cam::enabled() && sims3SendDraw(g_sims3, this, m_state, true, Type, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount, currentUID))) {
+    ClientMessage c(Commands::IDirect3DDevice9Ex_DrawIndexedPrimitive, getId());
+    currentUID = c.get_uid();
+    c.send_many(Type, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount);
   }
   if (sims3cam::enabled() && g_sims3.compositeSecond) { SIMS3_END_DRAW(); sims3CompositeSecondPass(g_sims3, this, true, Type, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount); }
   else if (sims3cam::enabled() && g_sims3.mergePending >= 0 && !g_sims3.reissue) { SIMS3_END_DRAW(); sims3MergedSquareDraw(g_sims3, this); }   // the square's merged shape (milestone 60)
