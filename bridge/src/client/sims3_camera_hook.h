@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-153).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-154).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -2611,6 +2611,74 @@ inline uint32_t applyPatches(const ShaderPatch* p, UINT startRegister, float* da
     ++n;
   }
   return n;
+}
+
+// ---- a texture's level 0 as the game uploaded it (milestone 154: one decoder) ------------------------
+// The wall openings' mask atlas (its red channel, milestone 13) and the low-detail lots' atlases (their
+// colour, milestones 70-71) are read on the client. (Until milestone 154 each had a decoder of its own.)
+// Bytes of level 0 for the formats decodeColour reads, 0 for any other.
+inline size_t level0Bytes(uint32_t format, uint32_t w, uint32_t h) {
+  switch (format) {
+  case (uint32_t) D3DFMT_DXT1: return (size_t) ((w + 3) / 4) * ((h + 3) / 4) * 8;
+  case (uint32_t) D3DFMT_DXT3: case (uint32_t) D3DFMT_DXT5: return (size_t) ((w + 3) / 4) * ((h + 3) / 4) * 16;
+  case (uint32_t) D3DFMT_L8: return (size_t) w * h;
+  case (uint32_t) D3DFMT_A8R8G8B8: case (uint32_t) D3DFMT_X8R8G8B8: return (size_t) w * h * 4;
+  case (uint32_t) D3DFMT_R5G6B5: case (uint32_t) D3DFMT_X1R5G5B5: case (uint32_t) D3DFMT_A1R5G5B5:   // the game's blank 4x4 placeholder mask is A1R5G5B5
+  case (uint32_t) D3DFMT_A4R4G4B4: case (uint32_t) D3DFMT_X4R4G4B4: return (size_t) w * h * 2;
+  default: return 0;
+  }
+}
+// Every level-0 texel as A8R8G8B8, alpha 255 (DXT1; DXT3 / DXT5 by their colour blocks; L8 as grey;
+// A8R8G8B8, X8R8G8B8; the 16-bit R5G6B5, X1R5G5B5, A1R5G5B5, A4R4G4B4, X4R4G4B4). False for another
+// format, or when size is short of level 0.
+inline bool decodeColour(uint32_t format, const uint8_t* data, size_t size, uint32_t w, uint32_t hgt, std::vector<uint32_t>& out) {
+  if (!data || w == 0 || hgt == 0 || w > 4096 || hgt > 4096) return false;
+  const size_t need = level0Bytes(format, w, hgt);
+  if (need == 0 || size < need) return false;
+  const size_t texels = (size_t) w * hgt;
+  out.assign(texels, 0xFF000000u);
+  auto rgb = [](uint32_t r, uint32_t g, uint32_t b) { return 0xFF000000u | (r << 16) | (g << 8) | b; };
+  switch (format) {
+  case (uint32_t) D3DFMT_DXT1: case (uint32_t) D3DFMT_DXT3: case (uint32_t) D3DFMT_DXT5: {
+    const bool dxt1 = format == (uint32_t) D3DFMT_DXT1;
+    const uint32_t bw = (w + 3) / 4, bh = (hgt + 3) / 4, bs = dxt1 ? 8u : 16u;
+    for (uint32_t by = 0; by < bh; ++by) for (uint32_t bx = 0; bx < bw; ++bx) {
+      const uint8_t* b = data + ((size_t) by * bw + bx) * bs + (dxt1 ? 0u : 8u);
+      const uint32_t c0 = b[0] | ((uint32_t) b[1] << 8), c1 = b[2] | ((uint32_t) b[3] << 8);
+      const uint32_t bits = b[4] | ((uint32_t) b[5] << 8) | ((uint32_t) b[6] << 16) | ((uint32_t) b[7] << 24);
+      uint32_t pal[4][3];
+      for (int k = 0; k < 2; ++k) { const uint32_t c = k ? c1 : c0; pal[k][0] = ((c >> 11) & 31u) * 255u / 31u; pal[k][1] = ((c >> 5) & 63u) * 255u / 63u; pal[k][2] = (c & 31u) * 255u / 31u; }
+      const bool four = !dxt1 || c0 > c1;   // DXT1 with c0 <= c1: three colours and transparent black
+      for (int q = 0; q < 3; ++q) {
+        pal[2][q] = four ? (2 * pal[0][q] + pal[1][q]) / 3 : (pal[0][q] + pal[1][q]) / 2;
+        pal[3][q] = four ? (pal[0][q] + 2 * pal[1][q]) / 3 : 0;
+      }
+      for (uint32_t py = 0; py < 4; ++py) for (uint32_t px = 0; px < 4; ++px) {
+        const uint32_t x = bx * 4 + px, y = by * 4 + py;
+        if (x >= w || y >= hgt) continue;
+        const uint32_t* c = pal[(bits >> (2 * (py * 4 + px))) & 3u];
+        out[(size_t) y * w + x] = rgb(c[0], c[1], c[2]);
+      }
+    }
+    return true;
+  }
+  case (uint32_t) D3DFMT_L8:
+    for (size_t i = 0; i < texels; ++i) out[i] = rgb(data[i], data[i], data[i]);
+    return true;
+  case (uint32_t) D3DFMT_A8R8G8B8: case (uint32_t) D3DFMT_X8R8G8B8:
+    for (size_t i = 0; i < texels; ++i) out[i] = rgb(data[i * 4 + 2], data[i * 4 + 1], data[i * 4]);
+    return true;
+  default: {   // the 16-bit formats
+    const bool r565 = format == (uint32_t) D3DFMT_R5G6B5, r444 = format == (uint32_t) D3DFMT_A4R4G4B4 || format == (uint32_t) D3DFMT_X4R4G4B4;
+    for (size_t i = 0; i < texels; ++i) {
+      const uint32_t v = data[i * 2] | ((uint32_t) data[i * 2 + 1] << 8);
+      if (r565) out[i] = rgb(((v >> 11) & 31u) * 255u / 31u, ((v >> 5) & 63u) * 255u / 63u, (v & 31u) * 255u / 31u);
+      else if (r444) out[i] = rgb(((v >> 8) & 15u) * 17u, ((v >> 4) & 15u) * 17u, (v & 15u) * 17u);
+      else out[i] = rgb(((v >> 10) & 31u) * 255u / 31u, ((v >> 5) & 31u) * 255u / 31u, (v & 31u) * 255u / 31u);
+    }
+    return true;
+  }
+  }
 }
 
 // ---- the hook's own device calls (milestone 152) ------------------------------------------------------

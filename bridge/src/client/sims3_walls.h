@@ -41,58 +41,13 @@
 namespace sims3cam {
 
 // ---- the mask: one byte per texel, the red channel the shaders read -------------------------
-// Bytes of level 0 for the formats decodeMaskRed reads (0 = not one of them).
-inline size_t maskBytes(uint32_t format, uint32_t w, uint32_t h) {
-  switch (format) {
-  case (uint32_t) D3DFMT_DXT1: return ((w | h) & 3u) ? 0 : (size_t) w * h / 2;
-  case (uint32_t) D3DFMT_L8: return (size_t) w * h;
-  case (uint32_t) D3DFMT_A8R8G8B8: case (uint32_t) D3DFMT_X8R8G8B8: return (size_t) w * h * 4;
-  case (uint32_t) D3DFMT_R5G6B5: case (uint32_t) D3DFMT_X1R5G5B5: case (uint32_t) D3DFMT_A1R5G5B5:   // the game's blank 4x4 placeholder mask is A1R5G5B5
-  case (uint32_t) D3DFMT_A4R4G4B4: case (uint32_t) D3DFMT_X4R4G4B4: return (size_t) w * h * 2;
-  default: return 0;
-  }
-}
-
+// (decodeColour's red, milestone 154)
 inline bool decodeMaskRed(uint32_t format, const uint8_t* data, size_t size, uint32_t w, uint32_t h, std::vector<uint8_t>& out) {
-  if (!data || w == 0 || h == 0 || w > 4096 || h > 4096) return false;
-  const size_t need = maskBytes(format, w, h);
-  if (need == 0 || size < need) return false;
-  const size_t texels = (size_t) w * h;
-  switch (format) {
-  case (uint32_t) D3DFMT_DXT1: {
-    const size_t bw = w / 4, bh = h / 4;
-    out.assign(texels, 0);
-    for (size_t by = 0; by < bh; ++by) for (size_t bx = 0; bx < bw; ++bx) {
-      const uint8_t* b = data + (by * bw + bx) * 8;
-      const uint32_t c0 = b[0] | ((uint32_t) b[1] << 8), c1 = b[2] | ((uint32_t) b[3] << 8);
-      const uint32_t bits = b[4] | ((uint32_t) b[5] << 8) | ((uint32_t) b[6] << 16) | ((uint32_t) b[7] << 24);
-      const uint32_t r0 = ((c0 >> 11) & 31u) * 255u / 31u, r1 = ((c1 >> 11) & 31u) * 255u / 31u;
-      uint8_t pal[4] = { (uint8_t) r0, (uint8_t) r1, 0, 0 };
-      if (c0 > c1) { pal[2] = (uint8_t) ((2 * r0 + r1) / 3); pal[3] = (uint8_t) ((r0 + 2 * r1) / 3); }
-      else { pal[2] = (uint8_t) ((r0 + r1) / 2); pal[3] = 0; }          // index 3: transparent black
-      for (uint32_t py = 0; py < 4; ++py) for (uint32_t px = 0; px < 4; ++px)
-        out[(by * 4 + py) * w + bx * 4 + px] = pal[(bits >> (2 * (py * 4 + px))) & 3u];
-    }
-    return true;
-  }
-  case (uint32_t) D3DFMT_L8:
-    out.assign(data, data + texels);
-    return true;
-  case (uint32_t) D3DFMT_A8R8G8B8: case (uint32_t) D3DFMT_X8R8G8B8:
-    out.resize(texels);
-    for (size_t i = 0; i < texels; ++i) out[i] = data[i * 4 + 2];
-    return true;
-  default: {                                                            // the 16-bit formats: red at `shift`, `bits` wide
-    const uint32_t shift = format == (uint32_t) D3DFMT_R5G6B5 ? 11u : (format == (uint32_t) D3DFMT_A4R4G4B4 || format == (uint32_t) D3DFMT_X4R4G4B4) ? 8u : 10u;
-    const uint32_t mask = shift == 8u ? 15u : 31u, scale = shift == 8u ? 17u : 255u, div = shift == 8u ? 1u : 31u;
-    out.resize(texels);
-    for (size_t i = 0; i < texels; ++i) {
-      const uint32_t v = data[i * 2] | ((uint32_t) data[i * 2 + 1] << 8);
-      out[i] = (uint8_t) (((v >> shift) & mask) * scale / div);
-    }
-    return true;
-  }
-  }
+  std::vector<uint32_t> argb;
+  if (!decodeColour(format, data, size, w, h, argb)) return false;
+  out.resize(argb.size());
+  for (size_t i = 0; i < argb.size(); ++i) out[i] = (uint8_t) (argb[i] >> 16);
+  return true;
 }
 
 // ---- vertex elements ------------------------------------------------------------------------

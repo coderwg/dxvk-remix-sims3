@@ -11,7 +11,7 @@ inline const uint8_t* sims3WallMask(Sims3Hook& h, uint32_t texId, uint32_t versi
   for (auto& m : h.masks) { if (!m.used) { slot = &m; break; } if (m.lastUse < slot->lastUse) slot = &m; }
   Sims3Hook::MaskEntry& m = *slot;
   m.used = true; m.texId = texId; m.version = version; m.lastUse = ++h.maskUse; m.red.clear(); m.contentHash = 0;
-  m.ok = data != nullptr && sims3cam::decodeMaskRed(fmt, data, sims3cam::maskBytes(fmt, w, hgt), w, hgt, m.red);
+  m.ok = data != nullptr && sims3cam::decodeMaskRed(fmt, data, bridge_util::calcTotalSizeOfRect(w, hgt, (D3DFORMAT) fmt), w, hgt, m.red);
   if (m.ok) { ++h.wallMasksDecoded; m.contentHash = sims3cam::fnv1a64(m.red.data(), m.red.size()) ^ ((uint64_t) w << 48) ^ ((uint64_t) hgt << 32); }
   contentHash = m.contentHash;
   return m.ok ? m.red.data() : nullptr;

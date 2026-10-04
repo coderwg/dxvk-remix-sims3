@@ -443,6 +443,14 @@ int main() {
     const uint8_t blk[8] = { 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55 };   // DXT1: row 0 white, the rest black
     std::vector<uint32_t> c;
     CHECK(decodeColour((uint32_t) D3DFMT_DXT1, blk, sizeof blk, 4, 4, c) && c.size() == 16 && c[0] == 0xFFFFFFFFu && c[5] == 0xFF000000u, "glow: DXT1 decodes to A8R8G8B8 (white %08X, black %08X)", c[0], c[5]);
+    {
+      const uint8_t l8[4] = { 0, 128, 255, 7 }; const uint8_t p565[2] = { 0x1F, 0xF8 }; const uint8_t p4444[2] = { 0x0F, 0xF0 };
+      std::vector<uint32_t> o;
+      CHECK(decodeColour((uint32_t) D3DFMT_L8, l8, sizeof l8, 2, 2, o) && o[1] == 0xFF808080u && o[2] == 0xFFFFFFFFu
+            && decodeColour((uint32_t) D3DFMT_R5G6B5, p565, 2, 1, 1, o) && o[0] == 0xFFFF00FFu && decodeColour((uint32_t) D3DFMT_A4R4G4B4, p4444, 2, 1, 1, o) && o[0] == 0xFF0000FFu
+            && !decodeColour((uint32_t) D3DFMT_DXT1, blk, 4, 4, 4, o) && !decodeColour((uint32_t) D3DFMT_V8U8, l8, sizeof l8, 1, 1, o) && level0Bytes(D3DFMT_DXT5, 6, 6) == 64,
+            "one decoder (M154): L8 as grey, R5G6B5 and A4R4G4B4 in full colour; short data and other formats refused; DXT blocks rounded up");
+    }
     std::vector<uint32_t> g = { 0xFFAEA57Du, 0xFF141414u, 0xFF292929u, 0xFF000000u };
     windowOnlyGlow(g, kLotGlowThreshold);
     CHECK(g[0] == 0xFFAEA57Du && g[1] == 0xFF000000u && g[2] == 0xFF292929u && g[3] == 0xFF000000u, "glow: texels at or below 40/255 go black, brighter ones stay (a window %08X kept, 20 dropped, 41 kept)", g[0]);
@@ -1088,7 +1096,7 @@ int main() {
     else CHECK(vb0.size() == 71280 && vb1.size() == 6480 && ib.size() == 6456 && atlas.size() == 32768, "walls: the captured wall buffers and mask atlas (walls-data/) have the traced sizes");
     if (have) {
       std::vector<uint8_t> red;
-      CHECK(decodeMaskRed(D3DFMT_DXT1, atlas.data(), atlas.size(), 256, 256, red) && red.size() == 65536 && maskBytes(D3DFMT_DXT1, 256, 256) == 32768, "walls: DXT1 atlas decoded to a red plane");
+      CHECK(decodeMaskRed(D3DFMT_DXT1, atlas.data(), atlas.size(), 256, 256, red) && red.size() == 65536 && level0Bytes(D3DFMT_DXT1, 256, 256) == 32768, "walls: DXT1 atlas decoded to a red plane");
       // the window cell (1792, 64, 1024, 2048) = texels 112..176 x 4..132; its black box at a plain 0.5 threshold
       int xmin = 999, xmax = -1, ymin = 999, ymax = -1, count = 0;
       for (int y = 4; y < 132; ++y) for (int x = 112; x < 176; ++x) if (red[y * 256 + x] < 128) { xmin = (std::min)(xmin, x); xmax = (std::max)(xmax, x); ymin = (std::min)(ymin, y); ymax = (std::max)(ymax, y); ++count; }
@@ -1225,9 +1233,9 @@ int main() {
       {
         uint8_t px[32]; for (int i = 0; i < 32; ++i) px[i] = 0xFF;
         std::vector<uint8_t> r16;
-        CHECK(decodeMaskRed(D3DFMT_A1R5G5B5, px, sizeof px, 4, 4, r16) && r16.size() == 16 && r16[0] == 255 && r16[15] == 255 && maskBytes(D3DFMT_A1R5G5B5, 4, 4) == 32, "walls: the game's blank 4x4 A1R5G5B5 mask decodes white");
+        CHECK(decodeMaskRed(D3DFMT_A1R5G5B5, px, sizeof px, 4, 4, r16) && r16.size() == 16 && r16[0] == 255 && r16[15] == 255 && level0Bytes(D3DFMT_A1R5G5B5, 4, 4) == 32, "walls: the game's blank 4x4 A1R5G5B5 mask decodes white");
         uint8_t px565[2] = { 0x00, 0xF8 };   // red 31, green 0, blue 0
-        CHECK(decodeMaskRed(D3DFMT_R5G6B5, px565, 2, 1, 1, r16) && r16[0] == 255 && maskBytes(D3DFMT_R5G6B5, 1, 1) == 2, "walls: R5G6B5 red decodes");
+        CHECK(decodeMaskRed(D3DFMT_R5G6B5, px565, 2, 1, 1, r16) && r16[0] == 255 && level0Bytes(D3DFMT_R5G6B5, 1, 1) == 2, "walls: R5G6B5 red decodes");
       }
     }
     // the shader facts, on the in-game dumps

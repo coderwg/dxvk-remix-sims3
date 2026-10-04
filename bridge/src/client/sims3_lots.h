@@ -67,41 +67,6 @@ inline void splitLotPlate(const std::vector<float>& pos, const std::vector<uint8
 inline constexpr uint64_t kLotImpostorPs = 0x9c84a6b7017f33fcull;
 inline constexpr int kLotGlowStage = 3, kLotGlowScaleReg = 3;
 inline constexpr uint8_t kLotGlowThreshold = 40;   // a texel glows above 40 / 255 (run 176: 14% of the house texels, mean 174, 165, 125)
-// Every level-0 texel as A8R8G8B8 (DXT1, DXT3 / DXT5 colour blocks with alpha 255, A8R8G8B8, X8R8G8B8).
-inline bool decodeColour(uint32_t format, const uint8_t* data, size_t size, uint32_t w, uint32_t hgt, std::vector<uint32_t>& out) {
-  if (!data || w == 0 || hgt == 0 || w > 4096 || hgt > 4096) return false;
-  const bool dxt1 = format == (uint32_t) D3DFMT_DXT1, dxt35 = format == (uint32_t) D3DFMT_DXT3 || format == (uint32_t) D3DFMT_DXT5;
-  out.assign((size_t) w * hgt, 0xFF000000u);
-  if (dxt1 || dxt35) {
-    const uint32_t bw = (w + 3) / 4, bh = (hgt + 3) / 4, bs = dxt1 ? 8u : 16u;
-    if (size < (size_t) bw * bh * bs) return false;
-    for (uint32_t by = 0; by < bh; ++by) for (uint32_t bx = 0; bx < bw; ++bx) {
-      const uint8_t* b = data + ((size_t) by * bw + bx) * bs + (dxt1 ? 0u : 8u);
-      const uint32_t c0 = b[0] | ((uint32_t) b[1] << 8), c1 = b[2] | ((uint32_t) b[3] << 8);
-      const uint32_t bits = b[4] | ((uint32_t) b[5] << 8) | ((uint32_t) b[6] << 16) | ((uint32_t) b[7] << 24);
-      uint32_t rgb[4][3];
-      for (int k = 0; k < 2; ++k) { const uint32_t c = k ? c1 : c0; rgb[k][0] = ((c >> 11) & 31u) * 255u / 31u; rgb[k][1] = ((c >> 5) & 63u) * 255u / 63u; rgb[k][2] = (c & 31u) * 255u / 31u; }
-      const bool four = !dxt1 || c0 > c1;
-      for (int q = 0; q < 3; ++q) {
-        rgb[2][q] = four ? (2 * rgb[0][q] + rgb[1][q]) / 3 : (rgb[0][q] + rgb[1][q]) / 2;
-        rgb[3][q] = four ? (rgb[0][q] + 2 * rgb[1][q]) / 3 : 0;
-      }
-      for (uint32_t py = 0; py < 4; ++py) for (uint32_t px = 0; px < 4; ++px) {
-        const uint32_t x = bx * 4 + px, y = by * 4 + py;
-        if (x >= w || y >= hgt) continue;
-        const uint32_t* c = rgb[(bits >> (2 * (py * 4 + px))) & 3u];
-        out[(size_t) y * w + x] = 0xFF000000u | (c[0] << 16) | (c[1] << 8) | c[2];
-      }
-    }
-    return true;
-  }
-  if (format == (uint32_t) D3DFMT_A8R8G8B8 || format == (uint32_t) D3DFMT_X8R8G8B8) {
-    if (size < (size_t) w * hgt * 4) return false;
-    for (size_t i = 0; i < (size_t) w * hgt; ++i) out[i] = 0xFF000000u | ((uint32_t) data[i * 4 + 2] << 16) | ((uint32_t) data[i * 4 + 1] << 8) | data[i * 4];
-    return true;
-  }
-  return false;
-}
 inline uint8_t maxChannel(uint32_t argb) { const uint8_t r = (uint8_t) (argb >> 16), g = (uint8_t) (argb >> 8), b = (uint8_t) argb; return r > g ? (r > b ? r : b) : (g > b ? g : b); }
 // The brightest of r, g, b of every level-0 texel (the glow test).
 inline bool decodeMaxChannel(uint32_t format, const uint8_t* data, size_t size, uint32_t w, uint32_t hgt, std::vector<uint8_t>& out) {
