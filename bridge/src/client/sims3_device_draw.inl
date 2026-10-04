@@ -279,6 +279,56 @@ uint32_t sims3FadeTest(Sims3Hook& h, Dev* dev, int fc, bool rel, DWORD gameFunc,
   return h.fadeG.func;
 }
 
+// A check for phase 4 of the simplification study (milestone 160; out again after run 262): for every
+// captured draw, whether the bytecode alone gives what a table gives -- a tabled pixel shader's albedo
+// (chooseAutoAlbedo with the textures bound now), the coordinate of a captured-UV table's vertex shader
+// (its albedo read straight from TEXCOORD0), and the coordinate the bytecode promotes for the twelve
+// vertex shaders the retired promotion table named (their old index here). Counted per shader, listed
+// once at the session's end (sims3LogTableChecks).
+struct Sims3TableCheck { uint32_t same = 0, differ = 0; int expect = -1, other = -9; uint64_t partner = 0; };
+static std::unordered_map<uint64_t, Sims3TableCheck> g_sims3AlbedoCheck, g_sims3UvCheck, g_sims3PromoteCheck;
+inline void sims3TableCheck(Sims3Hook& h, int k, bool tabledPs) {
+  static const struct { uint64_t vs; int tc; } kRetired[] = {
+    { 0x0ba6ddb9aa01913cull, 2 }, { 0xc3af2a4a82d84e6eull, 2 }, { 0x7d1bc3ce6acbd715ull, 2 }, { 0x1bd4405f8346ded4ull, 2 },
+    { 0x4c1d851f37e3c3f2ull, 2 }, { 0x4be4f1463f801b19ull, 2 }, { 0x24ef09fb3303a9d0ull, 2 }, { 0xe228d963a38f3e41ull, 2 },
+    { 0x23072b72226654bdull, 5 }, { 0x294ca59dd766bd6eull, 1 }, { 0xe0c97675a334022eull, 1 }, { 0x64154031c30a8800ull, 2 } };
+  if (tabledPs && h.psAuto && h.psAuto->valid) {
+    int ak = -1, atc = -1;
+    const bool chose = sims3cam::chooseAutoAlbedo(*h.psAuto, h.boundColor2D, h.boundFmt, h.boundW, h.boundH, ak, atc);
+    Sims3TableCheck& c = g_sims3AlbedoCheck[h.psHash]; c.expect = k;
+    if (chose && ak == k) ++c.same; else { ++c.differ; c.other = chose ? ak : -1; c.partner = h.vsHash; }
+  }
+  if (k >= 0 && k < 16 && h.vsCapturedUv && h.psAuto && h.psAuto->valid) {
+    const sims3cam::PsSamplerUse& u = h.psAuto->samplers[k];
+    Sims3TableCheck& c = g_sims3UvCheck[h.vsHash]; c.expect = 0;
+    if (u.read && !u.dependent && !u.projective && !u.cube && u.texcoord == 0) ++c.same; else { ++c.differ; c.other = u.texcoord; c.partner = h.psHash; }
+  }
+  for (const auto& r : kRetired) if (r.vs == h.vsHash) {
+    Sims3TableCheck& c = g_sims3PromoteCheck[h.vsHash]; c.expect = r.tc;
+    const int got = h.autoCapturedUv ? (int) h.pendingPromote : -1;   // -1: the bytecode named no coordinate
+    if (got == r.tc) ++c.same; else { ++c.differ; c.other = got; c.partner = h.psHash; }
+  }
+}
+inline void sims3LogTableChecks() {
+  auto sorted = [](const std::unordered_map<uint64_t, Sims3TableCheck>& m) { std::vector<std::pair<uint64_t, Sims3TableCheck>> v(m.begin(), m.end()); std::sort(v.begin(), v.end(), [](const auto& a, const auto& b) { return a.first < b.first; }); return v; };
+  uint32_t drawn = 0;
+  for (const auto& e : sorted(g_sims3AlbedoCheck)) {
+    ++drawn;
+    Logger::info(format_string("Sims 3 camera hook: check -- albedo of PS %016llx [the table's s%d]: %u draws the same from the bytecode, %u not (it chose %s%d; VS %016llx)",
+                               (unsigned long long) e.first, e.second.expect, e.second.same, e.second.differ, e.second.other < 0 ? "nothing " : "s", e.second.other, (unsigned long long) e.second.partner));
+  }
+  std::string missing;
+  for (const auto& a : sims3cam::kAlbedoStages) if (!g_sims3AlbedoCheck.count(a.hash)) missing += format_string(" %016llx", (unsigned long long) a.hash);
+  Logger::info(format_string("Sims 3 camera hook: check -- %u of the albedo table's %u pixel shaders drawn; not drawn:%s", drawn, (unsigned) (sizeof sims3cam::kAlbedoStages / sizeof sims3cam::kAlbedoStages[0]), missing.c_str()));
+  for (const auto& e : sorted(g_sims3UvCheck))
+    Logger::info(format_string("Sims 3 camera hook: check -- captured UV of VS %016llx: %u draws whose albedo reads TEXCOORD0 straight, %u not (coordinate %d; PS %016llx)",
+                               (unsigned long long) e.first, e.second.same, e.second.differ, e.second.other, (unsigned long long) e.second.partner));
+  for (const auto& e : sorted(g_sims3PromoteCheck))
+    Logger::info(format_string("Sims 3 camera hook: check -- coordinate of VS %016llx [the retired table's TEXCOORD%d]: %u draws the same from the bytecode, %u not (%d; PS %016llx)",
+                               (unsigned long long) e.first, e.second.expect, e.second.same, e.second.differ, e.second.other, (unsigned long long) e.second.partner));
+  Logger::info(format_string("Sims 3 camera hook: check -- %u of the retired promotion table's 12 vertex shaders drawn", (unsigned) g_sims3PromoteCheck.size()));
+}
+
 // Before every draw of the game (not the hook's own restore quad). Everything the hook sets for the
 // draw is held in the draw's scope of the undo log (milestone 152, sims3cam::HookCalls). A captured draw -- the main
 // camera held, see sims3ApplyForDraw -- gets: its albedo presented as stage 0 when the game bound
@@ -310,7 +360,7 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
   if (h.drawIndexed && h.drawType == D3DPT_TRIANGLELIST && h.wallLayout.valid && h.vsWall && h.vsWall->valid && sims3WallBackSide(h, dev)) {
     h.drawDropped = true; h.drawCaptured = false; return false;
   }
-  int k = -1;
+  int k = -1; bool tabledPs = false;   // tabledPs: the milestone-160 check
   ++h.capturedDraws;
   if (rs[D3DRS_FOGENABLE] && (rs[D3DRS_FOGTABLEMODE] != D3DFOG_NONE || rs[D3DRS_FOGVERTEXMODE] != D3DFOG_NONE))   // a fog state of the game's own (milestone 56: none expected)
   h.autoCapturedUv = false; h.pendingPromote = 0; h.drawGlass = false;
@@ -324,8 +374,11 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
   if (terrainKind == 1 && !h.reissue && !lotFamilyDraw) terrainKind = sims3SquarePiece(h, dev);
   if (terrainKind != 0 && h.reissue) terrainKind = h.reissueKind ? h.reissueKind : 2;   // the hook's own re-issue: the composite's second pass (hidden), a square's merged shape (1)
   h.compositeSecond = false;
-  // a lot's ground goes out in place (milestone 19): nothing overwrites its paint in the atlas (run 119's paint test)
-  const bool terrain = terrainKind != 0 && sims3BeginTerrainDraw(h, dev, terrainKind);
+  // a lot's ground goes out in place (milestone 19): nothing overwrites its paint in the atlas (run 119's paint test).
+  // A terrain draw goes to the baker or not at all (milestone 160: without the markers or a shader variant it
+  // is left out; it was captured the ordinary way before, never needed in any run)
+  if (terrainKind != 0 && !sims3BeginTerrainDraw(h, dev, terrainKind)) { h.drawDropped = true; h.drawCaptured = false; ++h.terrainLeftOut; return false; }
+  const bool terrain = terrainKind != 0;
   if (!terrain) sims3TerrainBlockEnd(h, dev);   // a captured non-terrain draw follows the terrain block (milestone 18g)
   // the game's fog for the runtime (milestone 56): on the frame's first base terrain draws (drawn in
   // every view; their pixel shaders are 3.0, which fixed-function fog leaves alone, so the bake is
@@ -386,7 +439,7 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
         Logger::info(msg);
       }
     } else if (h.psAlbedoStage >= 0 && h.psAlbedoStage < 16 && h.boundTex[h.psAlbedoStage] != nullptr) {
-      k = h.psAlbedoStage; ++h.overrideDraws;
+      k = h.psAlbedoStage; ++h.overrideDraws; tabledPs = true;
       // on an untabled vertex shader (a Sim outfit's permutation, run 41) the coordinate the albedo
       // sampler reads, from the bytecode, decides the promotion and the captured UV
       if (!h.vsTabled && h.vsBound && h.psAuto && h.psAuto->valid) sims3AutoTexcoord(h, k, -1, true);
@@ -459,6 +512,7 @@ bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
     // the vertex shader variant for the draw: the promoted coordinate and/or the world normal as a
     // NORMAL output, on a hardware-instanced draw (split per instance) a read of c255 for the tag,
     // and leaf cards faced outward
+    sims3TableCheck(h, k, tabledPs);
     sims3BindVariant(h, dev, h.pendingPromote, sims3NormalChoice(h), (freq0 & D3DSTREAMSOURCE_INDEXEDDATA) && (freq0 & 0x3FFFFFFFu) > 1u, outward);
   }
   if (k >= 0 && k < 16) ++h.remapCount[k];

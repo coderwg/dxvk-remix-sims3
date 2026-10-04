@@ -2679,34 +2679,17 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreateVertexShader(CONST DWORD* pFunc
   if (m_caps.VertexShaderVersion == D3DVS_VERSION(0, 0))
     return D3DERR_INVALIDCALL;
 
-  // The Sims 3 camera hook: shaders are recognised by the hash of the ORIGINAL bytecode.
-  // Some get their diffuse texcoord promoted to TEXCOORD0 (see kTexcoordPromotes); the
-  // patched copy is what both the wrapper and the runtime receive.
-  const DWORD* function = pFunction;
-  std::vector<DWORD> sims3Patched;
+  // The Sims 3 camera hook: shaders are recognised by the hash of their bytecode, the game's own: no
+  // shader the game creates is changed (milestone 160; a coordinate is promoted per draw, in a variant
+  // of the hook's own, sims3BindVariant).
   const sims3cam::ShaderPatch* sims3ConstPatch = nullptr;
   const bool sims3Ours = g_sims3.calls.own != 0;   // a shader of the hook's own (a variant of the game's): no tables, no dump
   const bool sims3Hooked = sims3cam::enabled() && !sims3Ours;
   const size_t sims3Count = sims3Hooked ? sims3cam::shaderTokenCount(pFunction) : 0;   // 0: no END token, the analyses refuse the stream
   const uint64_t sims3Hash = sims3Count ? sims3cam::fnv1a64(pFunction, sims3Count * sizeof(DWORD)) : 0;
-  if (sims3Hooked) {
-    sims3ConstPatch = sims3cam::findShaderPatch(sims3Hash);
-    if (const sims3cam::TexcoordPromote* promote = sims3cam::findTexcoordPromote(sims3Hash)) {
-      const size_t n = sims3Count;
-      sims3Patched.assign(pFunction, pFunction + n);
-      const uint32_t changed = sims3cam::promoteTexcoord(sims3Patched.data(), n, promote->texcoordIndex);
-      char msg[224];
-      if (changed) {
-        function = sims3Patched.data();
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: texcoord %u promoted to TEXCOORD0 (%u tokens) -> %s", (unsigned) promote->texcoordIndex, changed, promote->name);
-      } else {
-        snprintf(msg, sizeof msg, "Sims 3 camera hook: texcoord promotion matched nothing in the bytecode -> %s (left unpatched)", promote->name);
-      }
-      Logger::info(msg);
-    }
-  }
+  if (sims3Hooked) sims3ConstPatch = sims3cam::findShaderPatch(sims3Hash);
 
-  CommonShader shader(function);
+  CommonShader shader(pFunction);
   if (D3DSHADER_VERSION_MAJOR(m_caps.VertexShaderVersion) < shader.getMajorVersion())
     return D3DERR_INVALIDCALL;
 
@@ -2750,7 +2733,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreateVertexShader(CONST DWORD* pFunc
     currentUID = c.get_uid();
     c.send_data((uint32_t) pLssVertexShader->getId());
     c.send_data(dataSize);
-    c.send_data(dataSize, (void*) function);
+    c.send_data(dataSize, (void*) pFunction);
     
   }
   WAIT_FOR_OPTIONAL_CREATE_FUNCTION_SERVER_RESPONSE("CreateVertexShader()", D3DERR_INVALIDCALL, currentUID);

@@ -3,33 +3,18 @@
 // the albedo's sampler states. Included after sims3_device_state.inl; not a standalone header.
 
 // The lot terrain drawn again for another world chunk (milestone 16): the frame's first draw of the
-// mesh was the whole lot already. With the terrain markers in place (milestone 17) the copy is baked
-// as a hidden layer pass (h.lotFurtherCopy), so its chunk's paint reaches the terrain texture;
-// without them it is dropped like a reflection pass's draw (true).
+// mesh was the whole lot already; the copy is baked as a hidden layer pass (h.lotFurtherCopy, milestone
+// 17), so its chunk's paint reaches the terrain texture.
 template<typename Dev>
-bool sims3LotTerrainCopy(Sims3Hook& h, Dev* dev, bool is3D) {
+void sims3LotTerrainCopy(Sims3Hook& h, Dev* dev, bool is3D) {
   h.lotFurtherCopy = false;
-  if (!is3D || h.vsHash != sims3cam::kLotTerrainVs) return false;
+  if (!is3D || h.vsHash != sims3cam::kLotTerrainVs) return;
   IDirect3DVertexBuffer9* vb = nullptr; UINT vbOffset = 0, vbStride = 0;
   if (SUCCEEDED(dev->GetStreamSource(0, &vb, &vbOffset, &vbStride)) && vb) {
     const uint64_t key = sims3cam::lotTerrainKey((uint64_t) (uintptr_t) vb, h.rows4to6);
     vb->Release();
-    if (h.lotCopies.seen(key)) {
-      if (h.marker[1] != nullptr && !h.markerFailed) {
-        h.lotFurtherCopy = true; ++h.terrainLotCopyDraws;
-      } else {
-        h.drawDropped = true;
-        ++h.lotCopyDrops;
-        if (h.lotCopyLogged < 4) {
-          ++h.lotCopyLogged; char msg[240];
-          snprintf(msg, sizeof msg, "Sims 3 camera hook: lot terrain drawn again for another world chunk at frame %u -> dropped (mesh %p, World translation %.1f, %.1f, %.1f)", h.frames + 1, (void*) vb, h.rows4to6[3], h.rows4to6[7], h.rows4to6[11]);
-          Logger::info(msg);
-        }
-        return true;
-      }
-    }
+    if (h.lotCopies.seen(key)) { h.lotFurtherCopy = true; ++h.terrainLotCopyDraws; }
   }
-  return false;
 }
 
 // Returns whether this draw is captured with the main camera, and holds the runtime's transforms
@@ -62,7 +47,7 @@ bool sims3ApplyForDraw(Sims3Hook& h, Dev* dev, const DWORD* rs) {
     h.drawDropped = true; ++h.dropped[h.psDrop->kind];
     return false;
   }
-  if (sims3LotTerrainCopy(h, dev, is3D)) return false;   // a lot chunk copy without the baker's markers: dropped (milestone 16)
+  sims3LotTerrainCopy(h, dev, is3D);   // a lot chunk copy: baked hidden (milestone 16)
   const bool want = is3D;
   if (want) {
     if (h.held.kind != sims3cam::Kind::Main || !sims3cam::similarMatrix(h.held.view, h.cam.view, 1e-5f) || !sims3cam::similarMatrix(h.held.proj, h.cam.proj, 1e-5f)) {

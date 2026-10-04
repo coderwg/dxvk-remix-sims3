@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-159).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-160).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -406,49 +406,16 @@ inline const ShaderPatch kShaderPatches[] = {
   { kLotTerrainVs, "lot terrain: kill rectangle c7 = (0,0,0.5,0.5)", { { 7, 0, 0.f }, { 7, 1, 0.f }, { 7, 2, 0.5f }, { 7, 3, 0.5f } }, 4 },
 };
 
-// ---- vertex shader bytecode patch: promote the diffuse texcoord to TEXCOORD0 (milestone 2)
-// Remix captures the texture coordinate from the vertex shader output declared TEXCOORD0.
-// The Sims 3 shaders put other things there (cube-map direction, lighting coordinates) and
-// emit the diffuse UV on another texcoord, so every remapped material sampled its texture
-// with a near-constant coordinate and rendered as flat grey (run 9). Per shader, the pixel
-// shader in the trace says which texcoord feeds the albedo sampler; the table below
-// promotes it. The edit is in place on a copy of the token stream:
-//   vs_3_0: swap the usage-index fields of the two `dcl_texcoord` output declarations
-//           (TEXCOORD0 <-> TEXCOORDk), so the register carrying the UV becomes TEXCOORD0;
-//   vs_2_x: renumber every oT0 <-> oTk parameter token (oT registers are their semantic).
-// The game's own rasterization of those draws then feeds its pixel shader the wrong
-// interpolants; the ray-traced image replaces it.
-struct TexcoordPromote { uint64_t hash; const char* name; uint8_t texcoordIndex; };
-
-// Built from the trace: for each (vertex shader, pixel shader) pair in the lot's main
-// pass, the texcoord the pixel shader reads with the albedo sampler (stage 1 when stage 0
-// is a cube map, else stage 0). Shaders whose UV already leaves on TEXCOORD0 (the main
-// object shader, terrain, walls C) need nothing; three shaders keep the UV in .zw of
-// TEXCOORD0 and are not handled yet. Names are the shader handles in the trace.
-// The texcoord to promote is the one the pixel shader reads with the ALBEDO sampler
-// (kAlbedoStages), not merely with the first colour texture: six earlier rules that
-// pointed at normal or lighting maps (floor, walls B, two door/window families, 0xddc1880,
-// and 0x164d8920 = 9f227c82, whose TEXCOORD1 is its pixel shader's light map, milestone 76)
-// were removed after reading the pixel shaders' arithmetic.
-inline const TexcoordPromote kTexcoordPromotes[] = {
-  { 0x0ba6ddb9aa01913cull, "objects 0x12d25080 vs_3_0 (diffuse s3 on TEXCOORD2)", 2 },
-  { 0xc3af2a4a82d84e6eull, "objects 0x12d213c0 vs_3_0 (diffuse s3 on TEXCOORD2)", 2 },
-  { 0x7d1bc3ce6acbd715ull, "objects 0x12d17440 vs_3_0 (diffuse s2 on TEXCOORD2)", 2 },
-  // 0x10a51180 (floors): the pattern is on TEXCOORD0, no promotion (see kAlbedoStages)
-  // in-game variants (run-15 shader dump)
-  { 0x1bd4405f8346ded4ull, "objects, skinned (diffuse s3 on TEXCOORD2)", 2 },
-  { 0x4c1d851f37e3c3f2ull, "objects, skinned, 0x10a68220 family (diffuse s2 on TEXCOORD2)", 2 },
-  { 0x4be4f1463f801b19ull, "0xd9c0fe0 family sibling (diffuse s1 on TEXCOORD2)", 2 },
-  { 0x24ef09fb3303a9d0ull, "outer ground / water sibling (pattern tile s2 on TEXCOORD2)", 2 },
-  { 0xe228d963a38f3e41ull, "vs_2_0 e228d963 (diffuse s1 on TEXCOORD2)", 2 },
-  { 0x23072b72226654bdull, "0x164cc3c0 vs_3_0", 5 },
-  { 0x294ca59dd766bd6eull, "0x16b30160 vs_2_0", 1 },
-  { 0xe0c97675a334022eull, "0x16b38500 vs_2_0", 1 },
-  // 0x16b56360 (floor tiles): the colour texture is on TEXCOORD0, no promotion
-  { 0x64154031c30a8800ull, "0xd9c0fe0 vs_3_0", 2 },
-};
-
-inline const TexcoordPromote* findTexcoordPromote(uint64_t hash) { return findByHash(kTexcoordPromotes, hash); }
+// ---- the albedo's coordinate as TEXCOORD0 (milestones 2, 7) ---------------------------------
+// Remix captures the texture coordinate from the vertex shader output declared TEXCOORD0. The Sims 3
+// shaders put other things there (a cube-map direction, lighting coordinates) and emit the diffuse UV
+// on another texcoord, so a captured material sampled its texture with a near-constant coordinate
+// (run 9). For a captured draw the coordinate the pixel shader's albedo sampler reads (its bytecode,
+// PsSamplerUse::texcoord) is promoted to TEXCOORD0 in a variant of the hook's own (sims3BindVariant,
+// promoteTexcoord): vs_3_0 swaps the usage-index fields of the two dcl_texcoord outputs, vs_2_x
+// renumbers every oT0 <-> oTk. (Until milestone 160 a table also patched twelve of the game's own
+// shaders at their creation, so the game's own rasterization of those draws read the wrong
+// interpolants; the per-draw promotion from the bytecode chooses the same coordinate.)
 
 // DXSO token helpers (D3D9 shader bytecode).
 inline uint32_t dxsoRegType(uint32_t tok) { return ((tok >> 28) & 0x7u) | (((tok >> 11) & 0x3u) << 3); }
@@ -1033,12 +1000,6 @@ inline const AlbedoStage kAlbedoStages[] = {
   { 0x54bea85dc05c7c35ull, "object PS 0x10a694e0", 3, kTintRegister },
   { 0x470c140c802b7ec0ull, "object PS 0x1118d5e0", 3, kTintRegister },
   { 0x5aee1186d554dbc4ull, "object PS 0x10a68220 (s2 diffuse, TEXCOORD2; 3 lights)", 2 },
-  // lot terrain paint (VS 0x15c787a0; thousands of triangles per draw): s1 normal map,
-  // diffuse = mask blend of the paint layers s2/s3/s4 (TEXCOORD0). Not the floor tiles.
-  { 0x17eabad58f650687ull, "terrain paint PS 0x13d1dd40", 2 },
-  { 0x670dbe0fa52c4650ull, "terrain paint PS 0x13d1d5c0", 2 },
-  { 0xd63bf505ec4a44a0ull, "terrain paint PS 0x13d1d8e0", 2 },
-  { 0x98062e8d4d12af7dull, "terrain paint PS 0x13d1d980", 2 },
   // in-game variants (run-15 shader dump)
   { 0x1458c67a2c009563ull, "object PS variant 1458c67a (s2 diffuse, TEXCOORD2)", 2 },
   { 0xa3afadeeb6a034c6ull, "object PS variant a3afadee (s2 diffuse, TEXCOORD2)", 2 },
@@ -1065,12 +1026,9 @@ inline const AlbedoStage kAlbedoStages[] = {
   // ranges of the wall buffer -- in one flat colour, c4, under the light; no colour texture. Its s1,
   // the opening mask (greyscale, white where the wall stands), is the albedo, tinted by c4.
   { 0x7d2cbb8e474dfaf5ull, "walls C PS 7d2cbb8e (flat colour c4; s1 the opening mask)", 1, 4 },
-  // terrain and simple textured objects: stage 0 already
-  { 0xe18ad53a96ff51ccull, "terrain PS 0x103f2f20", 0 },
-  { 0x27ac2b7a8987e4d4ull, "terrain PS 0x13be1180", 0 },
-  { 0x028ce2dde691b739ull, "terrain PS 0x13be0fa0", 0 },
-  { 0x3608ab95ab50c8b4ull, "terrain PS 0x13be12c0", 0 },
-  { 0xc30755d3de24af9aull, "terrain PS 0x13be1360", 0 },
+  // (the terrain's pixel shaders -- the lot-area paint 17eabad5 / 670dbe0f / d63bf505 / 98062e8d, the world and
+  // lot terrain e18ad53a / 27ac2b7a / 028ce2dd / 3608ab95 / c30755d3 -- had entries for terrain draws captured
+  // the ordinary way when the baker could not take them; milestone 160 retired that way: the baker reads them)
   // PS 0x167e8be0 (ff72720d): colour = s1 (TEXCOORD0) x s0 (TEXCOORD1), the floor tiles' layout; its
   // entry here named s0, a room light map (256x128, or a 32x32 / 4x4 stand-in): left to the
   // chooser since milestone 76, which takes the compressed s1
@@ -2413,7 +2371,7 @@ inline bool isWaveMapFormat(uint32_t fmt) { return fmt == 21u /* A8R8G8B8 */ || 
 // wallpaper five hundred times across a wall. Pointing stage 0's index at an unused set
 // (the game never sets it) hides the input and the runtime samples with the shader's own
 // output -- which is what the pixel shader samples with, by construction. Applied to the
-// families whose TEXCOORD0 output is verified: the promoted ones, and these.
+// families whose TEXCOORD0 output is verified (the floors' pattern coordinate, computed in the shader).
 struct CapturedUv { uint64_t hash; const char* name; };
 
 inline const CapturedUv kCapturedUv[] = {
@@ -2421,9 +2379,7 @@ inline const CapturedUv kCapturedUv[] = {
   { 0x22e0b0fb83e51c5cull, "floor tiles" },
 };
 
-inline bool useCapturedUv(uint64_t hash) {
-  return findTexcoordPromote(hash) != nullptr || findByHash(kCapturedUv, hash) != nullptr;
-}
+inline bool useCapturedUv(uint64_t hash) { return findByHash(kCapturedUv, hash) != nullptr; }
 
 // ---- the game's own lamp lights --------------------------------------------------------
 // The game keeps every lamp model's lights in a LITE resource: type, position in the model's

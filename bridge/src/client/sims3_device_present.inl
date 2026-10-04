@@ -53,8 +53,8 @@ static void sims3LogStats() {
   {
     uint32_t ready = 0; uint64_t kept = 0, skirts = 0, flat = 0;
     for (const auto& s : h.squares) if (s.ready) { ++ready; kept += s.kept; skirts += s.skirts; flat += s.flat; }
-    snprintf(msg, sizeof msg, "Sims 3 camera hook:   terrain: %u base draws and %u layer passes (%u lot chunk copies) for the baker, %u without a variant, %u pixel shader variants; markers %s; squares: %u known, %u with a merged shape (%llu triangles kept, %llu skirt and %llu flat ones left out), %u merged draws, %u pieces painting only, %u traced as before, %u shapes built (%u failed), %u skipped, %u released",
-             h.terrainBaseDraws, h.terrainLayerDraws, h.terrainLotCopyDraws, h.terrainNoVariant, h.psVariantsMade,
+    snprintf(msg, sizeof msg, "Sims 3 camera hook:   terrain: %u base draws and %u layer passes (%u lot chunk copies) for the baker, %u left out (no markers or shader variant), %u pixel shader variants; markers %s; squares: %u known, %u with a merged shape (%llu triangles kept, %llu skirt and %llu flat ones left out), %u merged draws, %u pieces painting only, %u traced as before, %u shapes built (%u failed), %u skipped, %u released",
+             h.terrainBaseDraws, h.terrainLayerDraws, h.terrainLotCopyDraws, h.terrainLeftOut, h.psVariantsMade,
              h.markersConfigSent ? "tagged in rtx.conf" : (h.marker[0] ? "made, NOT tagged in rtx.conf" : "not made yet"),
              (unsigned) h.squares.size(), ready, (unsigned long long) kept, (unsigned long long) skirts, (unsigned long long) flat,
              h.mergedDraws, h.mergePaintPieces, h.mergeFallbackPieces, h.mergeBuilds, h.mergeBuildFailed, h.mergeSkipped, h.squares.evicted);
@@ -88,7 +88,6 @@ static void sims3LogShaderTable() {
     const auto& s = h.shaderStats[i];
     const char* vsName = "-";
     if (const sims3cam::ShaderPatch* p = sims3cam::findShaderPatch(s.vs)) vsName = p->name;
-    else if (const sims3cam::TexcoordPromote* t = sims3cam::findTexcoordPromote(s.vs)) vsName = t->name;
     const char* psName = "-";
     if (const sims3cam::AlbedoStage* a = sims3cam::findAlbedoStage(s.ps)) psName = a->name;
     int n2 = snprintf(msg, sizeof msg, "Sims 3 camera hook:   %6u draws  VS %016llx [%s]  PS %016llx [%s]  stage %d  rs: cull %u blend %u %u/%u z %u/%u atest %u cw %x st %u  tex:",
@@ -117,7 +116,7 @@ static void sims3LogOptions() {
 
 // Called from the client's shutdown path (d3d9_lss.cpp) so the last stretch of the session is reported.
 void sims3LogFinalStats() {
-  if (sims3cam::enabled() && g_sims3.frames > 0) sims3LogStats();
+  if (sims3cam::enabled() && g_sims3.frames > 0) { sims3LogStats(); sims3LogTableChecks(); }   // the milestone-160 check
 }
 
 // The frame's end, from Present: the options once, the statistics every 600 frames (short sessions

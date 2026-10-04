@@ -769,9 +769,10 @@ int main() {
 
   // --- the sun from the per-object light rig (milestone 2b), values from trace call 1279780
   {
-    const AlbedoStage* ao = findAlbedoStage(0x0c19795eb80e2e96ull); const AlbedoStage* af = findAlbedoStage(0x17eabad58f650687ull);
+    const AlbedoStage* ao = findAlbedoStage(0x0c19795eb80e2e96ull); const AlbedoStage* af = findAlbedoStage(0x3ebb622c4fe0be4full);
     CHECK(ao && ao->stage == 3 && af && af->stage == 2 && findAlbedoStage(0x1234ull) == nullptr, "albedo stage: object PS -> 3, floor PS -> 2, unknown -> none");
-    CHECK(findTexcoordPromote(0x0ba6ddb9aa01913cull) && findTexcoordPromote(0x0ba6ddb9aa01913cull)->texcoordIndex == 2 && findTexcoordPromote(0x55c99586fb17cd1cull) == nullptr, "promotions: objects promote 2; the terrain paint no longer promotes");
+    CHECK(!findAlbedoStage(0x17eabad58f650687ull) && !findAlbedoStage(0x028ce2dde691b739ull) && !findAlbedoStage(0xe18ad53a96ff51ccull),
+          "albedo stage (M160): the terrain's pixel shaders have no entry (the baker reads them; no ordinary capture of a terrain draw)");
     {
       // the sky dome recognised from its bytecode: a position input, and the position's z pinned to w
       std::vector<DWORD> dome, obj2, wallsA3, stub;
@@ -792,8 +793,8 @@ int main() {
       CHECK(!isSkyDomeShader(vs3plain, sizeof vs3plain / 4), "  with z from its own row it is an ordinary shader");
     }
     CHECK(findAlbedoStage(0x3ebb622c4fe0be4full) && findAlbedoStage(0x3ebb622c4fe0be4full)->stage == 2 && findAlbedoStage(0xda37b5ef6f7a09a6ull) && findAlbedoStage(0xda37b5ef6f7a09a6ull)->stage == 1 && findAlbedoStage(0xf0d7af09599ed1bcull) == nullptr, "albedo stage: floors -> s2, floor tiles -> s1 (their small shared textures are lightmaps); the wall variant is stripped");
-    CHECK(findTexcoordPromote(0x0fcdd50823cd0504ull) == nullptr && findTexcoordPromote(0x22e0b0fb83e51c5cull) == nullptr && findTexcoordPromote(0x1bd4405f8346ded4ull) && findTexcoordPromote(0x1bd4405f8346ded4ull)->texcoordIndex == 2, "promotions: floors no longer promote; the skinned object variant promotes 2");
-    CHECK(useCapturedUv(0x0ba6ddb9aa01913cull) && !useCapturedUv(0x976b73dbd59842cdull) && !useCapturedUv(0xf64835ccff6bffd7ull) && !useCapturedUv(0x1234ull), "captured UVs: promoted families sample with the shader's output; terrain (no input set), walls (stripped) and unknown shaders keep the runtime's default");
+    CHECK(useCapturedUv(0x0fcdd50823cd0504ull) && useCapturedUv(0x22e0b0fb83e51c5cull) && !useCapturedUv(0x0ba6ddb9aa01913cull) && !useCapturedUv(0x976b73dbd59842cdull) && !useCapturedUv(0xf64835ccff6bffd7ull) && !useCapturedUv(0x1234ull),
+          "captured UVs (M160): the floors' two families by the table; the objects' coordinate from the bytecode per draw; terrain, walls and unknown shaders keep the runtime's default");
     {
       // milestone 7: the pixel shader's samplers read from its bytecode, checked against the hand tables on the real dumps
       std::vector<DWORD> t; PsAnalysis a;
@@ -839,7 +840,7 @@ int main() {
       if (loadShader("ps_ff72720db4324926", t)) {
         bool color2D[16] = {}; uint32_t fmt[16] = {}; uint16_t w[16] = {}, h[16] = {}; int stage = -1, tc = -1;
         bindTex(color2D, fmt, w, h, 0, D3DFMT_A8R8G8B8, 256, 128); bindTex(color2D, fmt, w, h, 1, D3DFMT_DXT1, 256, 256);
-        CHECK(findAlbedoStage(0xff72720db4324926ull) == nullptr && findTexcoordPromote(0x9f227c82c758a989ull) == nullptr
+        CHECK(findAlbedoStage(0xff72720db4324926ull) == nullptr
               && analyzePixelShader(t.data(), t.size(), a) && chooseAutoAlbedo(a, color2D, fmt, w, h, stage, tc) && stage == 1 && tc == 0,
               "auto (M76): ff72720d (the floor tiles' layout) untabled, its vertex shader 9f227c82 unpromoted -> the DXT1 s1 at TEXCOORD0, not the room light map s0 (chose s%d at TEXCOORD%d)", stage, tc);
       } else SKIP("auto: ps_ff72720db4324926 not found");

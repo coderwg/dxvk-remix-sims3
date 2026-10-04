@@ -40,7 +40,7 @@ bool sims3EnsureMarkers(Sims3Hook& h, Dev* dev) {
     uint32_t pixels[sims3cam::kTerrainMarkerSize * sims3cam::kTerrainMarkerSize];
     sims3cam::terrainMarkerPixels(kind, pixels);
     IDirect3DTexture9* tex = sims3MakeTexture(dev, pixels, sims3cam::kTerrainMarkerSize, sims3cam::kTerrainMarkerSize);
-    if (!tex) { h.markerFailed = true; Logger::info("Sims 3 camera hook: terrain marker texture could not be made; terrain draws are captured as before"); return false; }
+    if (!tex) { h.markerFailed = true; Logger::info("Sims 3 camera hook: terrain marker texture could not be made; terrain draws are left out"); return false; }
     h.marker[kind] = tex;
     h.markerHash[kind] = (uint64_t) XXH3_64bits(pixels, sizeof pixels);   // the runtime hashes level 0's bytes, rows packed
   }
@@ -155,7 +155,8 @@ void sims3TerrainBlockEndIfUsed(Sims3Hook& h, Dev* dev) {
 
 // A terrain draw (kind 1 base, 2 layer pass, 3 a square's piece): the marker at stage 0, the game's
 // stage-0 texture and its sampler states at the free stage, the pixel shader variant bound.
-// Everything goes back in sims3EndDraw. Returns false when the draw has to be captured the ordinary way.
+// Everything goes back in sims3EndDraw. Returns false when the baker cannot take it (no markers, no
+// shader variant): the draw is then left out (milestone 160; it was captured the ordinary way before).
 template<typename Dev>
 bool sims3BeginTerrainDraw(Sims3Hook& h, Dev* dev, uint8_t kind) {
   if (!h.psBound || !sims3EnsureMarkers(h, dev)) return false;
@@ -168,7 +169,7 @@ bool sims3BeginTerrainDraw(Sims3Hook& h, Dev* dev, uint8_t kind) {
   const int pass = composite ? (h.reissue && h.reissueKind == 2 ? 2 : 1) : 0;
   if (composite && pass == 1 && !h.reissue) h.compositeSecond = true;   // the second pass follows in place (milestone 19)
   IDirect3DPixelShader9* variant = sims3PsVariant(h, dev, h.psBound, h.psHash, alphaMode, sims3cam::lotCompositeStage(pass), freeStage);
-  if (!variant || freeStage < 1 || freeStage > 15) { ++h.terrainNoVariant; return false; }
+  if (!variant || freeStage < 1 || freeStage > 15) return false;
   // which marker: base draws visible (0); every layer pass hidden -- the world's blended layers
   // (1), a lot's further chunk copies (1) and its composite passes (2). A lot's
   // re-submissions are also split in two (below), so the runtime's draw tracker never takes one

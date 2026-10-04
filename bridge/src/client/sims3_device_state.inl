@@ -163,7 +163,6 @@ struct Sims3Hook {
   // rows c4..c6 as last uploaded, the lot meshes drawn this frame, and the copies dropped.
   float rows4to6[12] = {};
   sims3cam::LotCopies lotCopies;
-  uint32_t lotCopyDrops = 0, lotCopyLogged = 0;
   bool lotFurtherCopy = false;                    // this draw is a lot mesh drawn again for a further world chunk
   // Terrain paint through the runtime's terrain baker (milestone 17; see kTerrainShaders in
   // sims3_camera_hook.h): a terrain draw gets a marker texture at stage 0, the game's stage-0
@@ -234,7 +233,7 @@ struct Sims3Hook {
   // base draw writes alpha 1 (terrainAlphaMode) with a full
   // colour mask; and every stage samples raw (non-sRGB) so the bake holds sRGB-encoded texels,
   // which the ray tracer gamma-corrects itself.
-  uint32_t terrainBaseDraws = 0, terrainLayerDraws = 0, terrainLotCopyDraws = 0, terrainNoVariant = 0, psVariantsMade = 0, psVariantsUnlit = 0, psVariantsAlpha = 0, psVariantLogged = 0, samplerCopies = 0, srgbOffs = 0;
+  uint32_t terrainBaseDraws = 0, terrainLayerDraws = 0, terrainLotCopyDraws = 0, terrainLeftOut = 0, psVariantsMade = 0, psVariantsUnlit = 0, psVariantsAlpha = 0, psVariantLogged = 0, samplerCopies = 0, srgbOffs = 0;
   // the town ground's squares (milestone 60, design B): per square (one vertex buffer), the
   // opaque pieces the merged shape is made of and the shape's own index buffer
   struct Square {
