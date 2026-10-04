@@ -139,19 +139,19 @@ struct Sims3Hook {
   sims3cam::WallLayout wallLayout;                // the bound vertex declaration's wall elements (valid when it has them)
   uint32_t wallDeclId = 0;                        // ...and the declaration's id (cache key)
   const sims3cam::WallVsInfo* vsWall = nullptr;   // the bound (game) vertex shader's wall facts
-  struct WallEntry { uint64_t key; uint32_t lastFrame; bool changed; IDirect3DVertexBuffer9* vb0; IDirect3DVertexBuffer9* vb1; IDirect3DIndexBuffer9* ib; uint32_t vertexCount, triangleCount; };
-  static constexpr uint32_t kWallCacheSize = 256;
-  WallEntry wallCache[kWallCacheSize] = {}; uint32_t wallCacheCount = 0;
+  struct WallEntry {
+    bool changed = false; IDirect3DVertexBuffer9* vb0 = nullptr; IDirect3DVertexBuffer9* vb1 = nullptr; IDirect3DIndexBuffer9* ib = nullptr; uint32_t vertexCount = 0, triangleCount = 0;
+    void release() { if (vb0) vb0->Release(); if (vb1) vb1->Release(); if (ib) ib->Release(); *this = WallEntry(); }
+  };
+  sims3cam::Cache<WallEntry, 256> wallCache;
   // the mask atlases decoded, per (texture, upload), and the content hashes of the wall buffers, per
   // (object, upload): the cache key follows the bytes. Sized for the lots of a neighbourhood (16 in
   // full detail since 2026-10-01; four mask slots had every lookup decode again, run 183: 5,777 decodes);
-  // the least recently used entry goes (milestone 77).
-  struct MaskEntry { bool used = false, ok = false; uint32_t texId = 0, version = 0, lastUse = 0; uint64_t contentHash = 0; std::vector<uint8_t> red; };
-  static constexpr uint32_t kMasks = 32, kBufHashes = 256;
-  MaskEntry masks[kMasks]; uint32_t maskUse = 0;
-  struct HashEntry { bool used; uint32_t id, version, lastUse; uint64_t hash; };
-  HashEntry bufHashes[kBufHashes] = {}; uint32_t bufHashUse = 0;
-  uint32_t wallDraws = 0, wallCutDraws = 0, wallCutTriangles = 0, wallRemovedTriangles = 0, wallHiddenTriangles = 0, wallBuilt = 0, wallEvicted = 0, wallBuildFailed = 0, wallRefused = 0, wallSkipped = 0, wallNoOpeningTest = 0, wallSkipLogged = 0, wallMasksDecoded = 0;
+  // the least recently used entry goes (milestone 77). Both by (object id << 32 | upload).
+  struct MaskEntry { bool ok = false; uint64_t contentHash = 0; std::vector<uint8_t> red; };
+  sims3cam::Cache<MaskEntry, 32> masks;
+  sims3cam::Cache<uint64_t, 256> bufHashes;
+  uint32_t wallDraws = 0, wallCutDraws = 0, wallCutTriangles = 0, wallRemovedTriangles = 0, wallHiddenTriangles = 0, wallBuilt = 0, wallBuildFailed = 0, wallRefused = 0, wallSkipped = 0, wallNoOpeningTest = 0, wallSkipLogged = 0, wallMasksDecoded = 0;
   // Reflection passes (runs 66-68): the ray tracer renders reflections itself, so the 3D draws of
   // every reflection pass -- the sea/pool pass, a wall mirror's stencil pass -- are dropped on the
   // client: those under a mirrored camera upload, and those carrying the stencil mirror's render
@@ -194,13 +194,13 @@ struct Sims3Hook {
   bool waterMarkerFailed[sims3cam::kWaterMaterials] = {}; uint32_t waterDraws[sims3cam::kWaterMaterials] = {};
   // bumpy glass (milestone 109, sims3GlassBump): its bump maps' runtime hashes (by texture id and level-0
   // version), the hashes the Sims3GlassBumps mod has a material for (read once), the ones seen without
-  std::unordered_map<uint64_t, uint64_t> bumpHashes; std::unordered_set<uint64_t> bumpMaterials, bumpWritten;
+  sims3cam::Cache<uint64_t, 4096> bumpHashes; std::unordered_set<uint64_t> bumpMaterials, bumpWritten;
   bool bumpModRead = false; uint32_t bumpDraws = 0, bumpPending = 0;
   uint64_t markGlassPs[32] = {}; uint32_t markGlassCount = 0;   // the glass shaders named at the mark (milestone 113)
   uint32_t waveDumpedIds[32] = {}; uint32_t waveDumped = 0;   // the game's wave maps looked at (milestone 93): the mod's ripple maps' source
   // a zero-thickness wall's back side (milestone 97): each wall piece's triangle keys (cached by buffers,
   // versions and range), and this frame's kept wall triangles per vertex buffer
-  std::unordered_map<uint64_t, std::vector<uint64_t>> wallPieceTris;
+  sims3cam::Cache<std::vector<uint64_t>, 8192> wallPieceTris;
   std::unordered_map<uint32_t, std::unordered_set<uint64_t>> wallFrameTris;
   uint32_t glassLogged = 0; uint64_t glassLoggedPs[32] = {};
   IDirect3DTexture9* mirrorMarker = nullptr; bool mirrorMarkerFailed = false; uint32_t mirrorDraws = 0;   // mirrors (milestone 101)
@@ -208,14 +208,14 @@ struct Sims3Hook {
   // a glass sheet's back side (milestone 104, sims3GlassOneSide): per mesh, the kept triangles as an
   // index buffer of the hook's own (D3DPOOL_DEFAULT, released at a device reset); this draw's, sent in
   // the game's place (d3d9_device.cpp)
-  struct GlassSide { IDirect3DIndexBuffer9* ib = nullptr; uint32_t prims = 0, dropped = 0; };
-  std::unordered_map<uint64_t, GlassSide> glassSides;
+  struct GlassSide { IDirect3DIndexBuffer9* ib = nullptr; uint32_t prims = 0, dropped = 0; void release() { if (ib) ib->Release(); *this = GlassSide(); } };
+  sims3cam::Cache<GlassSide, 1024> glassSides;
   IDirect3DIndexBuffer9* glassIb = nullptr; uint32_t glassPrims = 0;
   uint32_t glassSideDraws = 0, glassSideSkipped = 0; uint64_t glassSideTris = 0;
   const D3DVERTEXELEMENT9* declElems = nullptr;   // the bound declaration's elements (its POSITION, for the back side; its inputs, for the place)
   // glass carries its object's place (milestone 119, sims3GlassWorld): the vertex shaders' bytecode by
   // hash, counts
-  std::unordered_map<uint64_t, std::vector<DWORD>> vsTokens;
+  sims3cam::Cache<std::vector<DWORD>, 1024> vsTokens;
   uint32_t worldDraws = 0, worldFailed = 0, worldLogged = 0;
   // the lot paint composite's two passes (milestone 17l, sims3cam::lotCompositeStage): pass 2's draws
   uint32_t compositePasses = 0;
@@ -241,10 +241,11 @@ struct Sims3Hook {
     IDirect3DVertexBuffer9* vb = nullptr; uint32_t vbId = 0, vbVersion = 0; UINT offset = 0, stride = 0; uint16_t posOffset = 0;
     IDirect3DIndexBuffer9* ib = nullptr; uint32_t ibId = 0, ibVersion = 0; bool ib32 = false; INT base = 0;
     std::vector<uint64_t> ranges, frameRanges;   // the shape's pieces (sorted) and this frame's: start << 32 | triangle count
-    uint32_t frameSeen = 0xFFFFFFFFu, mergedFrame = 0xFFFFFFFFu, lastFrame = 0;
+    uint32_t frameSeen = 0xFFFFFFFFu, mergedFrame = 0xFFFFFFFFu;
     uint32_t builtVbVersion = 0, builtIbId = 0, builtIbVersion = 0; INT builtBase = 0;
     IDirect3DIndexBuffer9* merged = nullptr; uint32_t mergedPrims = 0, minIndex = 0, numVertices = 0; bool ready = false;
     uint32_t kept = 0, skirts = 0, flat = 0;
+    void release() { if (merged) merged->Release(); *this = Square(); }
   };
   uint32_t alphaCutDraws = 0;       // captured draws given their shader's cut-out as an alpha test (milestones 67-68)
   uint32_t fadeTestDraws = 0;       // captured draws whose "fade - alpha" test was turned onto the alpha (milestone 135)
@@ -257,15 +258,15 @@ struct Sims3Hook {
   uint32_t fadeSplitDraws = 0, fadeSplitParts = 0, fadeSplitUnused = 0;
   // The low-detail lots' ground plates as terrain (milestone 69): per model draw (by the buffers'
   // ids and versions and the draw range) the house's and the plate's own index buffers.
-  struct PlateEntry { uint64_t key = 0; IDirect3DIndexBuffer9* house = nullptr; IDirect3DIndexBuffer9* plate = nullptr; IDirect3DIndexBuffer9* glow = nullptr; IDirect3DVertexBuffer9* glowVb = nullptr; uint32_t houseMin = 0, houseNum = 0, housePrims = 0, plateMin = 0, plateNum = 0, platePrims = 0, glowMin = 0, glowNum = 0, glowPrims = 0, glowStride = 0, lastFrame = 0; bool ok = false; };
-  std::vector<PlateEntry> plates;
+  struct PlateEntry { IDirect3DIndexBuffer9* house = nullptr; IDirect3DIndexBuffer9* plate = nullptr; IDirect3DIndexBuffer9* glow = nullptr; IDirect3DVertexBuffer9* glowVb = nullptr; uint32_t houseMin = 0, houseNum = 0, housePrims = 0, plateMin = 0, plateNum = 0, platePrims = 0, glowMin = 0, glowNum = 0, glowPrims = 0, glowStride = 0; bool ok = false;
+                      void release() { if (house) house->Release(); if (plate) plate->Release(); if (glow) glow->Release(); if (glowVb) glowVb->Release(); *this = PlateEntry(); } };
+  sims3cam::Cache<PlateEntry, 256> plates;
   IDirect3DPixelShader9* platePs = nullptr; bool platePsFailed = false;
   uint32_t plateDraws = 0, plateTriangles = 0, plateBuilds = 0, plateNone = 0, plateFailed = 0;
   uint32_t glowDraws = 0, glowTriangles = 0, glowModels = 0;   // the low-detail lots' window glow passes (milestone 70)
-  struct GlowTex { uint64_t key = 0; IDirect3DTexture9* tex = nullptr; uint32_t lastFrame = 0; };   // window-only copies of the glow atlases (milestone 71)
-  std::vector<GlowTex> glowTexs; uint32_t glowTexMade = 0, glowTexFailed = 0;
-  std::vector<Square> squares; int mergePending = -1;
-  uint32_t mergedDraws = 0, mergePaintPieces = 0, mergeFallbackPieces = 0, mergeBuilds = 0, mergeBuildFailed = 0, mergeEvicted = 0, mergeSkipped = 0;
+  sims3cam::Cache<IDirect3DTexture9*, 256> glowTexs; uint32_t glowTexMade = 0, glowTexFailed = 0;   // window-only copies of the glow atlases (milestone 71)
+  sims3cam::Cache<Square, 256> squares; Square* mergePending = nullptr;   // by (vertex buffer, its id, offset, stride); the town has far fewer
+  uint32_t mergedDraws = 0, mergePaintPieces = 0, mergeFallbackPieces = 0, mergeBuilds = 0, mergeBuildFailed = 0, mergeSkipped = 0;
   bool drawIndexed = false; D3DPRIMITIVETYPE drawType = D3DPT_TRIANGLELIST; INT drawBase = 0; UINT drawStart = 0, drawPrims = 0;   // the indexed draw call's arguments, for the squares
   bool frameCamSet = false;   // the frame's first main camera is in cam; it holds for the frame (milestone 121)
   // the last main camera verified by its eye: the reference for one the game sends without it (milestone 123)

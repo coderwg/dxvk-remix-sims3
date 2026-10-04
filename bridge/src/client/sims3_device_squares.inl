@@ -27,13 +27,9 @@ uint8_t sims3SquarePiece(Sims3Hook& h, Dev* dev) {
   auto* lib = bridge_cast<Direct3DIndexBuffer9_LSS*>(ib);
   if (!lvb || !lib || stride == 0) return 1;
   const uint32_t vbId = (uint32_t) lvb->getId();
-  int si = -1;
-  for (size_t i = 0; i < h.squares.size(); ++i) {
-    const Sims3Hook::Square& q = h.squares[i];
-    if (q.vb == vb && q.vbId == vbId && q.offset == off && q.stride == stride) { si = (int) i; break; }
-  }
-  if (si < 0) {
-    if (h.squares.size() >= 1024u) return 1;   // the town has far fewer squares
+  struct { uint64_t vb; uint32_t vbId, off, stride; } sk = { (uint64_t) (uintptr_t) vb, vbId, off, stride };
+  Sims3Hook::Square* sp = h.squares.find(sims3cam::fnv1a64(&sk, sizeof sk));
+  if (!sp) {
     // the position: SHORT4 x, height, z, morph (run 168); any other layout is not merged
     IDirect3DVertexDeclaration9* decl = nullptr; int posOffset = -1;
     if (SUCCEEDED(dev->GetVertexDeclaration(&decl)) && decl) {
@@ -44,14 +40,12 @@ uint8_t sims3SquarePiece(Sims3Hook& h, Dev* dev) {
       decl->Release();
     }
     if (posOffset < 0 || (UINT) posOffset + 8u > stride) return 1;
-    h.squares.emplace_back();
-    si = (int) h.squares.size() - 1;
-    Sims3Hook::Square& n = h.squares.back();
+    Sims3Hook::Square& n = h.squares.add(sims3cam::fnv1a64(&sk, sizeof sk), [](Sims3Hook::Square& old) { old.release(); });
     n.vb = vb; n.vbId = vbId; n.offset = off; n.stride = stride; n.posOffset = (uint16_t) posOffset;
+    sp = &n;
   }
-  Sims3Hook::Square& s = h.squares[(size_t) si];
+  Sims3Hook::Square& s = *sp;
   if (s.frameSeen != h.frames) { s.frameSeen = h.frames; s.frameRanges.clear(); }
-  s.lastFrame = h.frames;
   s.vbVersion = lvb->sims3Version; s.ib = ib; s.ibId = (uint32_t) lib->getId(); s.ibVersion = lib->sims3Version; s.ib32 = lib->getDesc().Format == D3DFMT_INDEX32; s.base = h.drawBase;
   const uint64_t range = ((uint64_t) h.drawStart << 32) | (uint64_t) h.drawPrims;
   s.frameRanges.push_back(range);
@@ -59,7 +53,7 @@ uint8_t sims3SquarePiece(Sims3Hook& h, Dev* dev) {
                        std::binary_search(s.ranges.begin(), s.ranges.end(), range);
   if (!inShape) { ++h.mergeFallbackPieces; return 1; }
   ++h.mergePaintPieces;
-  if (s.mergedFrame != h.frames) { s.mergedFrame = h.frames; h.mergePending = si; }
+  if (s.mergedFrame != h.frames) { s.mergedFrame = h.frames; h.mergePending = &s; }
   return 3;
 }
 // The square's shape from the game's buffers as they are now (the square was drawn this frame).
@@ -110,7 +104,7 @@ void sims3SquareBuild(Sims3Hook& h, Dev* dev, Sims3Hook::Square& s, const std::v
 // the frame's own pieces then); a written buffer means the frame's pieces from scratch.
 template<typename Dev>
 void sims3SquaresFrameEnd(Sims3Hook& h, Dev* dev) {
-  h.mergePending = -1;
+  h.mergePending = nullptr;
   const uint32_t drawn = h.frames - 1;   // Present has counted the frame already: its draws saw frames - 1
   for (auto& s : h.squares) {
     if (s.frameSeen != drawn || s.frameRanges.empty()) continue;
@@ -133,19 +127,15 @@ void sims3SquaresFrameEnd(Sims3Hook& h, Dev* dev) {
     }
     if (!sameBuffers || shape != s.ranges) sims3SquareBuild(h, dev, s, shape);
   }
-  for (size_t i = 0; i < h.squares.size();) {   // a square not drawn for a minute: its shape released
-    if (h.frames - h.squares[i].lastFrame > 3600u) { if (h.squares[i].merged) h.squares[i].merged->Release(); h.squares.erase(h.squares.begin() + (ptrdiff_t) i); ++h.mergeEvicted; }
-    else ++i;
-  }
 }
 // Right after a square's first piece of the frame: the square's shape, through the ordinary draw
 // hooks as the hook's own re-issue (kind 1), from the piece's stream and state with the shape's
 // index buffer; the game's index buffer back afterwards.
 template<typename Dev>
 void sims3MergedSquareDraw(Sims3Hook& h, Dev* dev) {
-  const int i = h.mergePending; h.mergePending = -1;
-  if (i < 0 || (size_t) i >= h.squares.size()) return;
-  Sims3Hook::Square& s = h.squares[(size_t) i];
+  Sims3Hook::Square* const sp = h.mergePending; h.mergePending = nullptr;
+  if (!sp) return;
+  Sims3Hook::Square& s = *sp;
   if (!s.ready || !s.merged) return;
   IDirect3DVertexBuffer9* vb = nullptr; UINT off = 0, stride = 0;
   if (FAILED(dev->GetStreamSource(0, &vb, &off, &stride)) || vb != s.vb || off != s.offset || stride != s.stride) { if (vb) vb->Release(); ++h.mergeSkipped; return; }

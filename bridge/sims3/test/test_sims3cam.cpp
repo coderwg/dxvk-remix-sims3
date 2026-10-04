@@ -1588,6 +1588,27 @@ int main() {
     }
   }
 
+  // --- the hook's caches (milestone 158): one kind, the entry used longest ago makes room
+  {
+    {
+      Cache<int, 3> f; f.add(1) = 10; f.add(2) = 20;
+      CHECK(f.size() == 2 && f.find(2) && *f.find(2) == 20 && !f.find(4) && f.evicted == 0, "cache: entries found by key, an absent key not");
+    }
+    Cache<int, 3> c; int released = 0;
+    auto rel = [&](int& v) { released += v; };
+    c.add(1, rel) = 10; c.add(2, rel) = 20; int* third = &(c.add(3, rel) = 30);
+    c.find(1);                                  // 1 used again: 2 is now the one used longest ago
+    c.add(4, rel) = 40;
+    CHECK(!c.find(2) && c.find(1) && c.find(3) == third && *c.find(4) == 40 && released == 20 && c.evicted == 1 && c.size() == 3,
+          "cache: past N the entry used longest ago goes, released first (20); the others stay where they were");
+    int sum = 0; for (int v : c) sum += v;
+    CHECK(sum == 80, "cache: its entries iterate (%d)", sum);
+    c.clear(rel);
+    CHECK(c.size() == 0 && !c.find(1) && released == 20 + 80, "cache: clear releases every entry");
+    Cache<std::vector<int>, 2> v; v.add(7) = std::vector<int>(5, 1);
+    CHECK(v.find(7) && v.find(7)->size() == 5 && v.add(8).empty(), "cache: a new entry starts empty");
+  }
+
   // --- the hook's own calls (milestone 152): one guard, one undo log with scopes
   {
     FakeDev d; HookCalls c;

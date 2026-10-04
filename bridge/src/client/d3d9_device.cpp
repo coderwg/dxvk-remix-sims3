@@ -2478,7 +2478,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE
     c.send_many(Type, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount);
   }
   if (sims3cam::enabled() && g_sims3.compositeSecond) { SIMS3_END_DRAW(); sims3CompositeSecondPass(g_sims3, this, true, Type, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount); }
-  else if (sims3cam::enabled() && g_sims3.mergePending >= 0 && !g_sims3.reissue) { SIMS3_END_DRAW(); sims3MergedSquareDraw(g_sims3, this); }   // the square's merged shape (milestone 60)
+  else if (sims3cam::enabled() && g_sims3.mergePending && !g_sims3.reissue) { SIMS3_END_DRAW(); sims3MergedSquareDraw(g_sims3, this); }   // the square's merged shape (milestone 60)
   else SIMS3_END_DRAW();
   WAIT_FOR_OPTIONAL_SERVER_RESPONSE("DrawIndexedPrimitive()", D3DERR_INVALIDCALL, currentUID);
 }

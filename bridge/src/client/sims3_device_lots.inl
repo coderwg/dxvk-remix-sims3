@@ -28,17 +28,9 @@ Sims3Hook::PlateEntry* sims3LotPlateEntry(Sims3Hook& h, Dev* dev, Direct3DVertex
   if (glowTex) { k.glowId = (uint64_t) glowTex->getId(); k.glowVersion = glowTex->sims3Level0Version(); }
   k.off = off; k.stride = stride; k.ib32 = ib32 ? 1u : 0u; k.posOff = (uint32_t) posOff; k.nrmOff = (uint32_t) nrmOff; k.base = base; k.start = start; k.prims = prims;
   const uint64_t key = sims3cam::fnv1a64(&k, sizeof k);
-  for (auto& e : h.plates) if (e.key == key) { e.lastFrame = h.frames; return e.ok ? &e : nullptr; }
-  // a new model: split it (the oldest entry makes room past 256)
-  if (h.plates.size() >= 256) {
-    size_t oldest = 0; for (size_t i = 1; i < h.plates.size(); ++i) if (h.plates[i].lastFrame < h.plates[oldest].lastFrame) oldest = i;
-    if (h.plates[oldest].house) h.plates[oldest].house->Release();
-    if (h.plates[oldest].plate) h.plates[oldest].plate->Release();
-    if (h.plates[oldest].glow) h.plates[oldest].glow->Release();
-    if (h.plates[oldest].glowVb) h.plates[oldest].glowVb->Release();
-    h.plates.erase(h.plates.begin() + (ptrdiff_t) oldest);
-  }
-  h.plates.emplace_back(); Sims3Hook::PlateEntry& e = h.plates.back(); e.key = key; e.lastFrame = h.frames;
+  if (Sims3Hook::PlateEntry* known = h.plates.find(key)) return known->ok ? known : nullptr;
+  // a new model: split it (past 256 the entry used longest ago makes room)
+  Sims3Hook::PlateEntry& e = h.plates.add(key, [](Sims3Hook::PlateEntry& old) { old.release(); });
   ++h.plateBuilds;
   const uint32_t isz = ib32 ? 4u : 2u, ibCount = ibSize / isz;
   std::vector<uint32_t> idx; idx.reserve((size_t) prims * 3u);
@@ -122,13 +114,8 @@ template<typename Dev>
 IDirect3DTexture9* sims3LotGlowTexture(Sims3Hook& h, Dev* dev, Direct3DTexture9_LSS* src) {
   if (!src) return nullptr;
   const uint64_t key = ((uint64_t) src->getId() << 32) ^ (uint64_t) src->sims3Level0Version();
-  for (auto& g : h.glowTexs) if (g.key == key) { g.lastFrame = h.frames; return g.tex; }
-  if (h.glowTexs.size() >= 256) {
-    size_t oldest = 0; for (size_t i = 1; i < h.glowTexs.size(); ++i) if (h.glowTexs[i].lastFrame < h.glowTexs[oldest].lastFrame) oldest = i;
-    if (h.glowTexs[oldest].tex) h.glowTexs[oldest].tex->Release();
-    h.glowTexs.erase(h.glowTexs.begin() + (ptrdiff_t) oldest);
-  }
-  h.glowTexs.emplace_back(); Sims3Hook::GlowTex& g = h.glowTexs.back(); g.key = key; g.lastFrame = h.frames;
+  if (IDirect3DTexture9** known = h.glowTexs.find(key)) return *known;
+  IDirect3DTexture9*& g = h.glowTexs.add(key, [](IDirect3DTexture9*& old) { if (old) old->Release(); });   // null until made: a failure is kept too
   const uint8_t* data = src->sims3Level0Data();
   const D3DSURFACE_DESC desc = src->getLevelDesc(0);
   std::vector<uint32_t> argb;
@@ -136,7 +123,7 @@ IDirect3DTexture9* sims3LotGlowTexture(Sims3Hook& h, Dev* dev, Direct3DTexture9_
   sims3cam::windowOnlyGlow(argb, sims3cam::kLotGlowThreshold);
   IDirect3DTexture9* tex = sims3MakeTexture(dev, argb.data(), desc.Width, desc.Height);
   if (!tex) { ++h.glowTexFailed; return nullptr; }
-  g.tex = tex; ++h.glowTexMade;
+  g = tex; ++h.glowTexMade;
   return tex;
 }
 

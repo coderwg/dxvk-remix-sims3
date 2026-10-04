@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-157).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-158).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -2703,6 +2703,48 @@ inline bool decodeColour(uint32_t format, const uint8_t* data, size_t size, uint
   }
   }
 }
+
+// ---- the hook's caches (milestone 158: one kind) ---------------------------------------------------
+// What the hook builds from the game's data -- a wall's cut geometry, a mask decoded, a buffer's content
+// hash, a low-detail lot's parts and its window glow, a glass sheet's front side, a wall piece's
+// triangles, a bump map's hash, a vertex shader's bytecode, a town square's shape -- is kept by a 64-bit
+// key, at most N entries. Past N a new entry takes the place of the one used longest ago, released first
+// (release: what the entry holds on the device). Entries never move: an address holds until its entry is
+// evicted. (Until milestone 158 each cache kept its own rule: the oldest frame's entry out, the least
+// recently used by a counter, everything cleared at 1024, 4096 or 8192, new ones refused past 1024, an
+// entry dropped after a minute unused.)
+template<typename E, uint32_t N>
+struct Cache {
+  struct Slot { uint64_t key = 0, used = 0; E e{}; };
+  std::vector<Slot> slots; std::unordered_map<uint64_t, uint32_t> where;
+  uint64_t tick = 0; uint32_t evicted = 0;
+  E* find(uint64_t key) {
+    const auto it = where.find(key);
+    if (it == where.end()) return nullptr;
+    Slot& s = slots[it->second]; s.used = ++tick;
+    return &s.e;
+  }
+  // A new entry for a key not in the cache, empty.
+  template<typename Release> E& add(uint64_t key, Release&& release) {
+    if (slots.capacity() < N) slots.reserve(N);
+    uint32_t i = (uint32_t) slots.size();
+    if (i < N) slots.emplace_back();
+    else {
+      i = 0; for (uint32_t j = 1; j < N; ++j) if (slots[j].used < slots[i].used) i = j;
+      release(slots[i].e); where.erase(slots[i].key); ++evicted;
+    }
+    Slot& s = slots[i]; s.key = key; s.used = ++tick; s.e = E(); where[key] = i;
+    return s.e;
+  }
+  E& add(uint64_t key) { return add(key, [](E&) {}); }
+  template<typename Release> void clear(Release&& release) { for (Slot& s : slots) release(s.e); slots.clear(); where.clear(); }
+  void clear() { slots.clear(); where.clear(); }
+  size_t size() const { return slots.size(); }
+  struct It { Slot* p; E& operator*() const { return p->e; } It& operator++() { ++p; return *this; } bool operator!=(const It& o) const { return p != o.p; } };
+  struct CIt { const Slot* p; const E& operator*() const { return p->e; } CIt& operator++() { ++p; return *this; } bool operator!=(const CIt& o) const { return p != o.p; } };
+  It begin() { return It{ slots.data() }; } It end() { return It{ slots.data() + slots.size() }; }
+  CIt begin() const { return CIt{ slots.data() }; } CIt end() const { return CIt{ slots.data() + slots.size() }; }
+};
 
 // ---- the hook's own device calls (milestone 152) ------------------------------------------------------
 // One guard and one undo log for what the hook does on the device itself. own > 0 while the hook calls

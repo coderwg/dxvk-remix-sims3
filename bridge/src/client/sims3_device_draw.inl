@@ -7,19 +7,16 @@
 // defaults; the game's shaders themselves survive a Reset), and the runtime is back to default state.
 inline void sims3OnReset(Sims3Hook& h) {
   h.calls.forget();   // the states the hook held: their saved objects released (the device is back to its defaults)
-  for (auto& s : h.squares) if (s.merged) s.merged->Release();   // the squares' merged shapes (milestone 60)
-  h.squares.clear(); h.mergePending = -1;
-  for (auto& e : h.plates) {   // the low-detail lots' split, glow layer and its textures (milestones 69-71)
-    if (e.house) e.house->Release(); if (e.plate) e.plate->Release(); if (e.glow) e.glow->Release(); if (e.glowVb) e.glowVb->Release();
-  }
-  h.plates.clear();
-  for (auto& g : h.glowTexs) if (g.tex) g.tex->Release();
-  h.glowTexs.clear();
+  // the caches holding objects of the hook's own: the squares' merged shapes (milestone 60), the low-detail
+  // lots' split, glow layer and textures (milestones 69-71), the walls' cut geometry, the glass sides
+  h.squares.clear([](Sims3Hook::Square& s) { s.release(); }); h.mergePending = nullptr;
+  h.plates.clear([](Sims3Hook::PlateEntry& e) { e.release(); });
+  h.glowTexs.clear([](IDirect3DTexture9*& t) { if (t) t->Release(); });
+  h.wallCache.clear([](Sims3Hook::WallEntry& e) { e.release(); });
+  h.glassSides.clear([](Sims3Hook::GlassSide& g) { g.release(); });
+  h.masks.clear(); h.bufHashes.clear(); h.bumpHashes.clear();
   if (h.platePs) { h.platePs->Release(); h.platePs = nullptr; }
   h.platePsFailed = false;
-  for (uint32_t i = 0; i < h.wallCacheCount; ++i) sims3ReleaseWallEntry(h.wallCache[i]);
-  h.wallCacheCount = 0; for (auto& m : h.masks) m = Sims3Hook::MaskEntry(); h.maskUse = 0;
-  for (auto& e : h.bufHashes) e = Sims3Hook::HashEntry(); h.bufHashUse = 0;
   h.vsWall = nullptr; h.wallLayout = sims3cam::WallLayout(); h.wallDeclId = 0;
   for (uint32_t i = 0; i < h.vsVariantCount; ++i) if (h.vsVariants[i].variant) h.vsVariants[i].variant->Release();
   h.vsVariantCount = 0;
@@ -31,9 +28,7 @@ inline void sims3OnReset(Sims3Hook& h) {
   for (int m = 0; m < sims3cam::kWaterMaterials; ++m) { if (h.waterMarkers[m]) h.waterMarkers[m]->Release(); h.waterMarkers[m] = nullptr; h.waterMarkerFailed[m] = false; }
   if (h.mirrorMarker) { h.mirrorMarker->Release(); h.mirrorMarker = nullptr; }
   h.mirrorMarkerFailed = false;
-  h.bumpHashes.clear();
-  for (auto& g : h.glassSides) if (g.second.ib) g.second.ib->Release();
-  h.glassSides.clear(); h.glassIb = nullptr; h.glassPrims = 0;
+  h.glassIb = nullptr; h.glassPrims = 0;
   h.markerFailed = false; h.markersConfigSent = false; h.tblockActive = false; h.tblockStage = -1; h.tblockSet = 0; h.tblockSrgb = 0; h.psBound = nullptr; h.vsTerrain = nullptr; h.lotFurtherCopy = false;
   h.splitDraw = false; h.reissue = false; h.reissueKind = 0; h.compositeSecond = false;
   h.fadeSplit = false; h.instBlockRegs = 0;
@@ -72,9 +67,8 @@ bool sims3WallBackSide(Sims3Hook& h, Dev* dev) {
   struct { uint32_t vbId, vbVer, ibId, ibVer, off, stride; int32_t base; uint32_t start, prims, posOff; } pk = {
     vbId, lvb->sims3Version, (uint32_t) lib->getId(), lib->sims3Version, off, stride, h.drawBase, h.drawStart, h.drawPrims, (uint32_t) h.wallLayout.posOff };
   const uint64_t pieceKey = sims3cam::fnv1a64(&pk, sizeof pk);
-  auto it = h.wallPieceTris.find(pieceKey);
-  if (it == h.wallPieceTris.end()) {
-    if (h.wallPieceTris.size() > 8192u) h.wallPieceTris.clear();
+  const std::vector<uint64_t>* piece = h.wallPieceTris.find(pieceKey);
+  if (!piece) {
     std::vector<uint64_t> tris;
     const uint8_t* vd = lvb->sims3Data(); const uint8_t* id = lib->sims3Data();
     const bool ib32 = lib->getDesc().Format == D3DFMT_INDEX32;
@@ -91,14 +85,14 @@ bool sims3WallBackSide(Sims3Hook& h, Dev* dev) {
         tris.push_back(ok ? sims3cam::wallTriKey(p[0], p[1], p[2]) : 0u);
       }
     }
-    it = h.wallPieceTris.emplace(pieceKey, std::move(tris)).first;
+    piece = &(h.wallPieceTris.add(pieceKey) = std::move(tris));
   }
   auto& kept = h.wallFrameTris[vbId];
   uint32_t matched = 0;
-  if (sims3cam::isWallBackSide(it->second, kept, matched)) {
+  if (sims3cam::isWallBackSide(*piece, kept, matched)) {
     return true;
   }
-  for (uint64_t k : it->second) if (k) kept.insert(k);
+  for (uint64_t k : *piece) if (k) kept.insert(k);
   return false;
 }
 
@@ -129,12 +123,8 @@ IDirect3DBaseTexture9* sims3GlassBump(Sims3Hook& h, Dev* dev, const sims3cam::Na
   const D3DSURFACE_DESC d = tex->getLevelDesc(0);
   const size_t bytes = bridge_util::calcTotalSizeOfRect(d.Width, d.Height, d.Format);
   const uint64_t key = (uint64_t) tex->getId() << 32 | tex->sims3Level0Version();
-  auto it = h.bumpHashes.find(key);
-  if (it == h.bumpHashes.end()) {
-    if (h.bumpHashes.size() > 4096u) h.bumpHashes.clear();
-    it = h.bumpHashes.emplace(key, (uint64_t) XXH3_64bits(data, bytes)).first;
-  }
-  const uint64_t hash = it->second;
+  const uint64_t* known = h.bumpHashes.find(key);
+  const uint64_t hash = known ? *known : (h.bumpHashes.add(key) = (uint64_t) XXH3_64bits(data, bytes));
   if (h.bumpMaterials.count(hash)) { ++h.bumpDraws; return h.boundTex[s]; }
   ++h.bumpPending;
   if (h.bumpWritten.size() < 64u && h.bumpWritten.insert(hash).second) {
@@ -176,14 +166,13 @@ void sims3GlassWorld(Sims3Hook& h, Dev* dev, UINT freq0) {
       Logger::info(format_string("Sims 3 camera hook: glass not given its place at frame %u -> VS %016llx PS %016llx: %s", h.frames + 1, (unsigned long long) h.vsHash, (unsigned long long) h.psHash, why));
     }
   };
-  auto it = h.vsTokens.find(h.vsHash);
-  if (it == h.vsTokens.end()) {
+  const std::vector<DWORD>* known = h.vsTokens.find(h.vsHash);
+  if (!known) {
     std::vector<DWORD> t; UINT size = 0;
     if (SUCCEEDED(h.vsBound->GetFunction(nullptr, &size)) && size >= 8) { t.resize(size / 4); if (FAILED(h.vsBound->GetFunction(t.data(), &size))) t.clear(); }
-    if (h.vsTokens.size() > 1024u) h.vsTokens.clear();
-    it = h.vsTokens.emplace(h.vsHash, std::move(t)).first;
+    known = &(h.vsTokens.add(h.vsHash) = std::move(t));
   }
-  const std::vector<DWORD>& tok = it->second;
+  const std::vector<DWORD>& tok = *known;
   if (tok.empty()) { fail("its bytecode is not readable"); return; }
   // the draw's first vertex
   IDirect3DIndexBuffer9* ib = nullptr;
@@ -250,9 +239,8 @@ void sims3GlassOneSide(Sims3Hook& h, Dev* dev) {
   struct { uint32_t vbId, vbVer, ibId, ibVer, off, stride; int32_t base; uint32_t start, prims, posOff, posType; } pk = {
     (uint32_t) lvb->getId(), lvb->sims3Version, (uint32_t) lib->getId(), lib->sims3Version, off, stride, h.drawBase, h.drawStart, h.drawPrims, (uint32_t) pe->Offset, (uint32_t) pe->Type };
   const uint64_t key = sims3cam::fnv1a64(&pk, sizeof pk);
-  auto it = h.glassSides.find(key);
-  if (it == h.glassSides.end()) {
-    if (h.glassSides.size() >= 1024u) { for (auto& g : h.glassSides) if (g.second.ib) g.second.ib->Release(); h.glassSides.clear(); }
+  const Sims3Hook::GlassSide* found = h.glassSides.find(key);
+  if (!found) {
     Sims3Hook::GlassSide side; side.prims = h.drawPrims;
     const uint8_t* vd = lvb->sims3Data(); const uint8_t* id = lib->sims3Data();
     const bool ib32 = lib->getDesc().Format == D3DFMT_INDEX32;
@@ -278,9 +266,9 @@ void sims3GlassOneSide(Sims3Hook& h, Dev* dev) {
         side.prims = h.drawPrims - side.dropped;
       }
     }
-    it = h.glassSides.emplace(key, side).first;
+    found = &(h.glassSides.add(key, [](Sims3Hook::GlassSide& g) { g.release(); }) = side);
   }
-  if (it->second.ib) { h.glassIb = it->second.ib; h.glassPrims = it->second.prims; ++h.glassSideDraws; h.glassSideTris += it->second.dropped; }
+  if (found->ib) { h.glassIb = found->ib; h.glassPrims = found->prims; ++h.glassSideDraws; h.glassSideTris += found->dropped; }
 }
 
 // The hook's alpha test on a captured draw (milestone 151: the one place it is set -- a cut-out, a
@@ -332,9 +320,9 @@ template<typename Dev>
 bool sims3BeginDraw(Sims3Hook& h, Dev* dev, const DWORD* rs, UINT freq0) {
   h.drawScope = h.calls.open();   // closed in sims3EndDraw, or at once for a dropped draw (SIMS3_BEGIN_DRAW)
   h.glassIb = nullptr; h.glassPrims = 0;
-  if (h.mergePending >= 0 && !h.reissue) {   // a square's shape that was not sent after its piece (the piece took another way out): next piece then
-    if ((size_t) h.mergePending < h.squares.size()) h.squares[(size_t) h.mergePending].mergedFrame = 0xFFFFFFFFu;
-    h.mergePending = -1; ++h.mergeSkipped;
+  if (h.mergePending && !h.reissue) {   // a square's shape that was not sent after its piece (the piece took another way out): next piece then
+    h.mergePending->mergedFrame = 0xFFFFFFFFu;
+    h.mergePending = nullptr; ++h.mergeSkipped;
   }
   const bool want = sims3ApplyForDraw(h, dev, rs);
   h.drawCaptured = want;

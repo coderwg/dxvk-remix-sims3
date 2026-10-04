@@ -48,7 +48,7 @@ static void sims3LogStats() {
              : (sims3cam::liteTable().lines ? "of an older format (no lamps; run sims3/tools/lite_table.py)" : "missing next to the DLL (no lamps; run sims3/tools/lite_table.py)"));
   Logger::info(msg);
   snprintf(msg, sizeof msg, "Sims 3 camera hook:   walls: %u draws, openings cut in %u (%u triangles cut, %u removed, %u hidden dropped; %u geometries built, %u evicted, %u build failures, %u refused; %u without an opening test, %u skipped with no client copy; %u masks decoded)",
-           h.wallDraws, h.wallCutDraws, h.wallCutTriangles, h.wallRemovedTriangles, h.wallHiddenTriangles, h.wallBuilt, h.wallEvicted, h.wallBuildFailed, h.wallRefused, h.wallNoOpeningTest, h.wallSkipped, h.wallMasksDecoded);
+           h.wallDraws, h.wallCutDraws, h.wallCutTriangles, h.wallRemovedTriangles, h.wallHiddenTriangles, h.wallBuilt, h.wallCache.evicted, h.wallBuildFailed, h.wallRefused, h.wallNoOpeningTest, h.wallSkipped, h.wallMasksDecoded);
   Logger::info(msg);
   {
     uint32_t ready = 0; uint64_t kept = 0, skirts = 0, flat = 0;
@@ -57,7 +57,7 @@ static void sims3LogStats() {
              h.terrainBaseDraws, h.terrainLayerDraws, h.terrainLotCopyDraws, h.terrainNoVariant, h.psVariantsMade,
              h.markersConfigSent ? "tagged in rtx.conf" : (h.marker[0] ? "made, NOT tagged in rtx.conf" : "not made yet"),
              (unsigned) h.squares.size(), ready, (unsigned long long) kept, (unsigned long long) skirts, (unsigned long long) flat,
-             h.mergedDraws, h.mergePaintPieces, h.mergeFallbackPieces, h.mergeBuilds, h.mergeBuildFailed, h.mergeSkipped, h.mergeEvicted);
+             h.mergedDraws, h.mergePaintPieces, h.mergeFallbackPieces, h.mergeBuilds, h.mergeBuildFailed, h.mergeSkipped, h.squares.evicted);
     Logger::info(msg);
   }
   MEMORYSTATUSEX ms = {}; ms.dwLength = sizeof ms; GlobalMemoryStatusEx(&ms);
