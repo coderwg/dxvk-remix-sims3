@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-154).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-155).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -1270,44 +1270,61 @@ inline int hookOption(const char* key, int def) {
   return def;
 }
 
-// markKey (milestone 17y): the virtual-key code of the mark key, which logs the lit lamps, the fog
-// and the frame's glass once; default 220 = backslash.
-inline int markKey() { static int s = -1; if (s < 0) { s = hookOption("markKey", 220); if (s < 1 || s > 254) s = 220; } return s; }
-// The game's fog (milestone 56): the game's own fog (its colour and range, read beside its light
-// record) goes to the runtime as D3D9 linear fog, which the runtime lays over the ray-traced
-// picture (its composite fog, used while rtx.volumetrics.enable is off); fogColourScale =
-// the fog's brightness in thousandths (1000: the game's fog colour as bright as the sky the game
-// draws, lit as the scene is lit, milestone 57), sent as rtx.fogColorScale through the Remix API.
-inline float fogColourScale() { static float s = -1.f; if (s < 0.f) { int v = hookOption("fogColourScale", 1000); if (v < 0) v = 0; if (v > 10000) v = 10000; s = (float) v / 1000.f; } return s; }
-// The lights go to the runtime through the Remix API (milestones 20b, 23): the sun as a distant
-// light, the lamps as sphere lights, with explicit radiance and size. The API needs
-// exposeRemixApi = True in .trex\bridge.conf; without it there are no lights and one warning.
-// sunAngle = the sun's angular diameter, thousandths of a degree; sunRadiance = radiance per
-// unit of rig colour, thousandths; lampRadius = the lamps' sphere radius in thousandths of a
-// unit; lampRadiance = radiance per unit of colour, thousandths.
-inline float sunAngle() { static float s = -1.f; if (s < 0.f) { int v = hookOption("sunAngle", 2000); if (v < 100) v = 100; if (v > 90000) v = 90000; s = (float) v / 1000.f; } return s; }
-// moonLight = the moon's share of the game's moonlight, in percent (100 = the game's own; 0 = none, the night stays dark).
-inline float moonShare() { static float s = -1.f; if (s < 0.f) { int v = hookOption("moonLight", 2); if (v < 0) v = 0; if (v > 200) v = 200; s = (float) v / 100.f; } return s; }
-// dawnMinutes = the sun's rise eased over this many game minutes after sunrise (the game's own rise is steep: nothing
-// at 6 h, orange at 6.2 h): the game's light times the minutes since sunrise over this; 0 = the game's rise as it is.
-inline float dawnHours() { static float s = -1.f; if (s < 0.f) { int v = hookOption("dawnMinutes", 60); if (v < 0) v = 0; if (v > 360) v = 360; s = (float) v / 60.f; } return s; }
-// duskMinutes, duskLevel = the sun's afterglow: when its light falls below duskLevel (thousandths of full) during dusk it
-// is held and faded out over duskMinutes by the game's clock (the game's own dusk ends with a drop from red to nothing in
-// twelve minutes); 0 minutes = no afterglow.
-inline float duskHours() { static float s = -1.f; if (s < 0.f) { int v = hookOption("duskMinutes", 60); if (v < 0) v = 0; if (v > 360) v = 360; s = (float) v / 60.f; } return s; }
-inline float duskLevel() { static float s = -1.f; if (s < 0.f) { int v = hookOption("duskLevel", 100); if (v < 1) v = 1; if (v > 1000) v = 1000; s = (float) v / 1000.f; } return s; }
-inline float sunRadiance() { static float s = -1.f; if (s < 0.f) { int v = hookOption("sunRadiance", 1000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
-inline float lampRadius() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampRadius", 150); if (v < 20) v = 20; s = (float) v / 1000.f; } return s; }
-// lampMax = the most lamps lit at once (the nearest to the camera's target first); the world lights
-// (a street lamp's) are lit too, faded in and out by the game's own night switch.
-inline uint32_t lampMax() { static int s = -1; if (s < 0) { s = hookOption("lampMax", 96); if (s < 1) s = 1; if (s > 96) s = 96; } return (uint32_t) s; }
-inline float lampRadiance() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampRadiance", 40000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
-// The lamps' shapes from the game's definitions (milestone 32): cones for spots and lamp shades, a
-// shade's glow, a cylinder for a tube. lampConeScale scales
-// every cone angle (thousandths; the definitions' angles are taken as half angles); lampConeSoftness
-// the cone edge's softness (thousandths, 0..1000); lampShadeGlow scales the light through the shade.
-inline float lampConeScale() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampConeScale", 1000); if (v < 100) v = 100; s = (float) v / 1000.f; } return s; }
-inline float lampConeSoftness() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampConeSoftness", 300); if (v < 0) v = 0; if (v > 1000) v = 1000; s = (float) v / 1000.f; } return s; }
+// The options (milestone 155: one table): each its key, default, range and unit -- the value in force is
+// the file's integer (or the default) kept within the range, and the hook reads it divided by the unit.
+// (Until milestone 155 every option repeated the read, the range and the scale in an accessor of its own,
+// and the start-up line named them all again.) What each one does is said in sims3/config/sims3hook.txt.
+//   markKey (milestone 17y): the mark key's virtual-key code, which logs the lit lamps, the fog and the
+//     frame's glass once (220 = backslash; below 8 are the mouse buttons).
+//   fogColourScale (milestones 56, 57): the game's fog's brightness, sent as rtx.fogColorScale.
+//   sunAngle, sunRadiance (milestones 20b, 23): the sun's and the moon's angular diameter and radiance;
+//     moonLight: the moon's share of the game's moonlight (percent).
+//   dawnMinutes, duskMinutes, duskLevel: the eased dawn and the sun's afterglow at dusk (game minutes; the
+//     level in thousandths of full sunlight).
+//   lampRadius, lampRadiance, lampMax: the lamps' sphere radius, radiance and the most lit at once;
+//   lampConeScale, lampConeSoftness, lampShadeGlow (milestone 32): their cones and the light through a shade.
+struct HookOption { const char* key; int def, lo, hi; float unit; };
+enum : int { kOptMarkKey, kOptFogColourScale, kOptSunAngle, kOptSunRadiance, kOptMoonLight, kOptDawnMinutes, kOptDuskMinutes, kOptDuskLevel,
+             kOptLampRadius, kOptLampRadiance, kOptLampMax, kOptLampConeScale, kOptLampConeSoftness, kOptLampShadeGlow, kOptions };
+inline constexpr int kOptNoTop = 0x7FFFFFFF;
+inline const HookOption kHookOptions[kOptions] = {
+  { "markKey", 220, 8, 254, 1.f },
+  { "fogColourScale", 1000, 0, 10000, 1000.f },
+  { "sunAngle", 2000, 100, 90000, 1000.f },        // degrees
+  { "sunRadiance", 1000, 0, kOptNoTop, 1000.f },
+  { "moonLight", 2, 0, 200, 100.f },               // a share
+  { "dawnMinutes", 60, 0, 360, 60.f },             // hours
+  { "duskMinutes", 60, 0, 360, 60.f },             // hours
+  { "duskLevel", 100, 1, 1000, 1000.f },
+  { "lampRadius", 150, 20, kOptNoTop, 1000.f },    // game units (metres)
+  { "lampRadiance", 40000, 0, kOptNoTop, 1000.f },
+  { "lampMax", 96, 1, 96, 1.f },
+  { "lampConeScale", 1000, 100, kOptNoTop, 1000.f },
+  { "lampConeSoftness", 300, 0, 1000, 1000.f },
+  { "lampShadeGlow", 1000, 0, kOptNoTop, 1000.f },
+};
+inline int optionInRange(const HookOption& o, int v) { return v < o.lo ? o.lo : v > o.hi ? o.hi : v; }
+// The option's integer in force, read once.
+inline int optionInt(int id) {
+  static int v[kOptions]; static bool read = false;
+  if (!read) { read = true; for (int i = 0; i < kOptions; ++i) v[i] = optionInRange(kHookOptions[i], hookOption(kHookOptions[i].key, kHookOptions[i].def)); }
+  return v[id];
+}
+inline float option(int id) { return (float) optionInt(id) / kHookOptions[id].unit; }
+inline int markKey() { return optionInt(kOptMarkKey); }
+inline float fogColourScale() { return option(kOptFogColourScale); }
+inline float sunAngle() { return option(kOptSunAngle); }
+inline float sunRadiance() { return option(kOptSunRadiance); }
+inline float moonShare() { return option(kOptMoonLight); }
+inline float dawnHours() { return option(kOptDawnMinutes); }
+inline float duskHours() { return option(kOptDuskMinutes); }
+inline float duskLevel() { return option(kOptDuskLevel); }
+inline float lampRadius() { return option(kOptLampRadius); }
+inline float lampRadiance() { return option(kOptLampRadiance); }
+inline uint32_t lampMax() { return (uint32_t) optionInt(kOptLampMax); }
+inline float lampConeScale() { return option(kOptLampConeScale); }
+inline float lampConeSoftness() { return option(kOptLampConeSoftness); }
+inline float lampShadeGlow() { return option(kOptLampShadeGlow); }
 // ---- the lamps' own word and the game's clock (milestones 36, 39, 40) --------------------
 // Nothing about a lamp is in what the game draws but its mesh. The game's scripts know it all,
 // and the lamp reporter (sims3/scriptmod: a script mod) hands it over: for every lamp near the
@@ -1379,7 +1396,6 @@ inline LampWord lampWordFromRecord(const float* r, const float* defCol, float de
   for (int q = 0; q < 3; ++q) w.col[q] = c[q] * defIntensity / 100.f * w.level;
   return w;
 }
-inline float lampShadeGlow() { static float s = -1.f; if (s < 0.f) { int v = hookOption("lampShadeGlow", 1000); if (v < 0) v = 0; s = (float) v / 1000.f; } return s; }
 
 // layerPass: every draw is a layer pass. lotFamily: a lot's ground and its paint composite --
 // drawn in place, the first copy visible and every re-submission (further chunk copies, the

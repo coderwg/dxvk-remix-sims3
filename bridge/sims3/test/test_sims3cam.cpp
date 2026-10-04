@@ -1291,6 +1291,11 @@ int main() {
     CHECK(l->lotFamily && p->lotFamily && !w->lotFamily && !findTerrainShader(0x55c99586fb17cd1cull)->lotFamily, "lotFamily: the lot terrain and its paint composite are the lot family (drawn in place, re-submissions hidden); the world terrain and lot-area paint are not");
     CHECK(markKey() == 220, "markKey: the mark key defaults to backslash (virtual key 220), as the shipped sims3hook.txt");
     CHECK(hookOption("noSuchKeyForTheTest", 7) == 7, "hook options: an absent key gives its default (no sims3hook.txt next to the test binary)");
+    CHECK(markKey() == 220 && lampMax() == 96u && sunAngle() == 2.f && moonShare() == 0.02f && dawnHours() == 1.f && lampRadiance() == 40.f && lampConeSoftness() == 0.3f,
+          "hook options (M155): the table's defaults without the file -- the values the shipped sims3hook.txt carries");
+    CHECK(optionInRange(kHookOptions[kOptLampMax], 500) == 96 && optionInRange(kHookOptions[kOptMarkKey], 0) == 8 && optionInRange(kHookOptions[kOptLampRadiance], -5) == 0
+          && optionInRange(kHookOptions[kOptSunRadiance], 2000000000) == 2000000000,
+          "hook options: a value outside its range is kept within it (lampMax 96, markKey not a mouse button, no negative radiance; some have no top)");
     CHECK(terrainDrawKind(nullptr, TRUE, true) == 0 && terrainDrawKind(w, FALSE, false) == 1 && terrainDrawKind(w, TRUE, false) == 2 && terrainDrawKind(p, FALSE, false) == 2 && terrainDrawKind(l, FALSE, false) == 1 && terrainDrawKind(l, FALSE, true) == 2, "terrainDrawKind: base for opaque draws; layer pass for blended draws, the composite, and a lot mesh's further chunk copies");
     CHECK(wantsUnlitPatch(0x17eabad58f650687ull) && wantsUnlitPatch(0x670dbe0fa52c4650ull) && wantsUnlitPatch(0x98062e8d4d12af7dull) && wantsUnlitPatch(0xd63bf505ec4a44a0ull) && !wantsUnlitPatch(0x99ee53ff6ef1b0b6ull) && !wantsUnlitPatch(0x028ce2dde691b739ull), "unlit patch: the four lit lot-area paint shaders only (the composite's final mad is not albedo x light)");
     static uint32_t m0[kTerrainMarkerSize * kTerrainMarkerSize], m1[kTerrainMarkerSize * kTerrainMarkerSize], m2[kTerrainMarkerSize * kTerrainMarkerSize], m0b[kTerrainMarkerSize * kTerrainMarkerSize];

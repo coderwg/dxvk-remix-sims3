@@ -107,13 +107,11 @@ static void sims3LogShaderTable() {
   }
 }
 
-// The options in force, once at the start (milestone 147): every value of sims3hook.txt as read.
+// The options in force, once at the start (milestones 147, 155): every key of sims3cam::kHookOptions with
+// its value (the file's, or the default, within its range), as sims3hook.txt writes them.
 static void sims3LogOptions() {
-  char msg[640];
-  snprintf(msg, sizeof msg, "Sims 3 camera hook: options -- markKey %d; fog brightness x%.2f; sun and moon %.2f degrees wide at x%.2f, the moon %.0f%% of the game's moonlight; dawn eased over %.0f min, the afterglow below %.0f%% over %.0f min; lamps %.3f wide at x%.1f, at most %u, cones x%.2f, softness %.2f, shade glow x%.2f",
-           sims3cam::markKey(), sims3cam::fogColourScale(), sims3cam::sunAngle(), sims3cam::sunRadiance(), sims3cam::moonShare() * 100.f, sims3cam::dawnHours() * 60.f,
-           sims3cam::duskLevel() * 100.f, sims3cam::duskHours() * 60.f, sims3cam::lampRadius(), sims3cam::lampRadiance(), sims3cam::lampMax(),
-           sims3cam::lampConeScale(), sims3cam::lampConeSoftness(), sims3cam::lampShadeGlow());
+  std::string msg = "Sims 3 camera hook: options --";
+  for (int i = 0; i < sims3cam::kOptions; ++i) msg += format_string("%s %s %d", i ? "," : "", sims3cam::kHookOptions[i].key, sims3cam::optionInt(i));
   Logger::info(msg);
 }
 
