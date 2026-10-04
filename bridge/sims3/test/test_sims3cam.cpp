@@ -367,6 +367,7 @@ int main() {
   const DWORD noEnd[] = { 0xFFFE0200u, 0x02000001u, 0x800F0000u, 0x90E40000u };
   CHECK(shaderTokenCount(noEnd, 4) == 0 && !dxsoIsVertexShader(noEnd, shaderTokenCount(noEnd, 4), 2), "a truncated stream (no END) is refused rather than read past its end");
   CHECK(dxsoIsDef(0x51u) && dxsoIsDef(0x2Fu) && dxsoIsDef(0x30u) && !dxsoIsDef(0x52u) && !dxsoIsDef(0x01u), "DEF / DEFB / DEFI are the literal definitions (0x51, 0x2F, 0x30); TEXREG2RGB (0x52) is not");
+  CHECK(dxsoIsFlow(0x19u) && dxsoIsFlow(0x1Eu) && dxsoIsFlow(0x28u) && dxsoIsFlow(0x2Du) && dxsoIsFlow(0x60u) && !dxsoIsFlow(0x2Eu) && !dxsoIsFlow(0x42u) && dxsoIsSample(0x42u) && dxsoIsSample(0x5Du) && dxsoIsSample(0x5Fu) && !dxsoIsSample(0x41u) && !dxsoIsSample(0x5Eu), "bytecode (M156): flow control is CALL..LABEL, REP..BREAKC and BREAKP (not MOVA); a sample is TEXLD, TEXLDD or TEXLDL (not TEXKILL, SETP)");
   CHECK(findShaderPatch(0xf64835ccff6bffd7ull) == nullptr && findShaderPatch(0x1234ull) == nullptr && findShaderPatch(0) == nullptr, "walls: no constant patch (the cut-away is handled in the geometry); unknown and zero hashes: no rule");
   const ShaderPatch* wa = findShaderPatch(0x976b73dbd59842cdull);
   CHECK(wa && wa->count == 4 && wa->patches[0].reg == 7, "lot terrain rule found by hash (c7)");

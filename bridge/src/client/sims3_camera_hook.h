@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-155).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-156).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -457,6 +457,13 @@ inline uint32_t dxsoSetRegNum(uint32_t tok, uint32_t n) { return (tok & ~0x7FFu)
 inline constexpr uint32_t kDxsoEnd = 0x0000FFFFu;
 // The definitions carry literal payloads, never register tokens: DEF (0x51), DEFB (0x2F), DEFI (0x30).
 inline bool dxsoIsDef(uint32_t op) { return op == 0x51u || op == 0x2Fu || op == 0x30u; }
+// Flow control -- CALL .. LABEL (0x19-0x1E), REP .. BREAKC (0x26-0x2D), BREAKP (0x60): the analyses read
+// straight-line code and give up (or skip the instruction) there (milestone 156: one test, four users).
+inline bool dxsoIsFlow(uint32_t op) { return (op >= 0x19u && op <= 0x1Eu) || (op >= 0x26u && op <= 0x2Du) || op == 0x60u; }
+// A texture sample: TEXLD (and its project / bias forms), TEXLDD, TEXLDL -- dest, coordinate, sampler first
+// (milestone 156: every analysis takes all three; 68 of the game's pixel shaders read with TEXLDL).
+inline constexpr uint32_t kDxsoOpTexld = 0x42u, kDxsoOpTexldd = 0x5Du, kDxsoOpTexldl = 0x5Fu;
+inline bool dxsoIsSample(uint32_t op) { return op == kDxsoOpTexld || op == kDxsoOpTexldd || op == kDxsoOpTexldl; }
 
 // Number of DWORD tokens from the version token through the END token, inclusive; 0 when no
 // END token lies within `maxTokens` (a truncated or foreign stream).
@@ -613,7 +620,7 @@ inline bool analyzeVertexNormal(const DWORD* tokens, size_t count, VsNormalInfo&
     }
     // no destination to follow: flow control (CALL .. LABEL, REP .. BREAKC), the address move,
     // and the definitions, whose parameters are literal payloads
-    if (len < 1 || dxsoIsDef(op) || (op >= 0x19u && op <= 0x1Eu) || (op >= 0x26u && op <= 0x2Eu)) return true;
+    if (len < 1 || dxsoIsDef(op) || dxsoIsFlow(op) || op == 0x2Eu /*MOVA*/) return true;
     const uint32_t dest = tokens[pos + 1], dty = dxsoRegType(dest), dn = dxsoRegNum(dest), mask = (dest >> 16) & 0xFu;
     // reductions feed every destination component from a fixed number of source components:
     // DP3 / NRM / CRS / M3xN three, DP4 / LIT / DST / M4xN four, DP2ADD two (its addend one)
@@ -833,7 +840,7 @@ inline bool analyzeVertexConstantOutputs(const DWORD* tokens, size_t count, VsCo
       return true;
     }
     if (dxsoIsDef(op) || len < 1) return true;
-    if ((op >= 0x19u && op <= 0x1Eu) || (op >= 0x26u && op <= 0x2Du) || op == 0x60u) { flow = true; return false; }   // call / loop / rep / if: not followed
+    if (dxsoIsFlow(op)) { flow = true; return false; }   // not followed
     const uint32_t dest = tokens[pos + 1], ty = dxsoRegType(dest), n = dxsoRegNum(dest), mask = (dest >> 16) & 0xFu;
     int s = -1;
     if (ty == kDxsoRegOutput && n < 16) s = sem[n];
@@ -882,7 +889,7 @@ inline bool findCameraCard(const DWORD* t, size_t n, CardSite& s) {
   dxsoForEach(t, n, [&](size_t pos, uint32_t op, uint32_t len) {
     if (op == kDxsoOpDcl) return true;
     if (dxsoIsDef(op)) { if (op == 0x51u && len >= 1 && dxsoRegNum(t[pos + 1]) < 256) usedConst[dxsoRegNum(t[pos + 1])] = true; return true; }
-    if ((op >= 0x19u && op <= 0x1Eu) || (op >= 0x26u && op <= 0x2Du) || op == 0x60u) flow = true;
+    if (dxsoIsFlow(op)) flow = true;
     for (uint32_t i = 1; i <= len; ++i) {
       const uint32_t p = t[pos + i];
       if (!(p & 0x80000000u)) continue;
@@ -1630,13 +1637,13 @@ inline bool psForceAlphaOne(std::vector<DWORD>& t) {
 // sits: its red is 0x80, so the detail factor is 2 x 128/255 = 1.004 -- the bake loses the grain,
 // nothing else. The one shader without such a read, the lot paint composite, is given a paint
 // layer's stage instead (lotCompositeStage).
-inline constexpr uint32_t kDxsoOpTex = 0x42u, kDxsoSwizzleZwzw = 0xEEu;   // texld; a source's .zwzw swizzle
+inline constexpr uint32_t kDxsoSwizzleZwzw = 0xEEu;   // a source's .zwzw swizzle
 
-// The sampler of the shader's last `texld r, v0.zwzw, s` (its detail read), or -1.
+// The sampler of the shader's last sample `texld r, v0.zwzw, s` (its detail read), or -1.
 inline int psDetailSampler(const DWORD* t, size_t count) {
   int m = -1;
   dxsoForEach(t, count, [&](size_t pos, uint32_t op, uint32_t len) {
-    if (op != kDxsoOpTex || len < 3) return true;
+    if (!dxsoIsSample(op) || len < 3) return true;
     const DWORD src0 = t[pos + 2], src1 = t[pos + 3];
     if (!(src0 & 0x80000000u) || dxsoRegType(src0) != kDxsoRegInput || dxsoRegNum(src0) != 0 || ((src0 >> 16) & 0xFFu) != kDxsoSwizzleZwzw) return true;
     if (!(src1 & 0x80000000u) || dxsoRegType(src1) != kDxsoRegSampler) return true;
@@ -1993,7 +2000,7 @@ inline bool analyzePixelShader(const DWORD* tokens, size_t count, PsAnalysis& ou
       return true;
     }
     if (dxsoIsDef(op) || len < 1) return true;
-    if ((op >= 0x19u && op <= 0x1Eu) || (op >= 0x26u && op <= 0x2Du) || op == 0x60u) flow = true;   // call / loop / rep / if / else / break
+    if (dxsoIsFlow(op)) flow = true;
     // which coordinate inputs the shader uses as a normal: NRM of an input, or DP3 of an input
     // with a constant register (the light directions of the rig)
     {
@@ -2037,9 +2044,9 @@ inline bool analyzePixelShader(const DWORD* tokens, size_t count, PsAnalysis& ou
       const bool sat = ((dest >> 20) & 1u) != 0u, predicated = (tokens[pos] & (1u << 28)) != 0u;
       for (uint32_t c = 0; c < 4 && !sat && !predicated; ++c) {
         if (!(mask & (1u << c))) continue;
-        if ((op == 0x42u || op == 0x5Fu || op == 0x5Du) && len >= 3) {  // TEXLD / TEXLDL / TEXLDD: the alpha of a 2D sampler
+        if (dxsoIsSample(op) && len >= 3) {                             // a sample: the alpha of a 2D sampler
           const uint32_t samp = tokens[pos + 3];
-          const bool proj = op == 0x42u && (((tokens[pos] >> 16) & 0xFFu) & 1u);
+          const bool proj = op == kDxsoOpTexld && (((tokens[pos] >> 16) & 0xFFu) & 1u);
           if (!proj && dxsoRegType(samp) == kSampler && dxsoRegNum(samp) < 16 && ((samp >> (16 + 2 * c)) & 3u) == 3u) {
             nf[c].known = true; nf[c].s = (int8_t) dxsoRegNum(samp); nf[c].a.n = 1; nf[c].a.t[0].k = 1.f;
           }
@@ -2054,13 +2061,13 @@ inline bool analyzePixelShader(const DWORD* tokens, size_t count, PsAnalysis& ou
       else if (mask & 8u) alphaOut = nf[3];
     }
     uint64_t taint[4] = {};
-    if (op == 0x42u && len >= 3) {                                     // TEXLD dest, coord, sampler
+    if (dxsoIsSample(op) && len >= 3) {                                // a sample: dest, coord, sampler
       const uint32_t coord = tokens[pos + 2], samp = tokens[pos + 3];
       if (dxsoRegType(samp) == kSampler && dxsoRegNum(samp) < 16) {
         const uint32_t s = dxsoRegNum(samp);
         PsSamplerUse& u = out.samplers[s];
         u.read = true;
-        if (((tokens[pos] >> 16) & 0xFFu) & 1u) u.projective = true;   // D3DSI_TEXLD_PROJECT
+        if (op == kDxsoOpTexld && (((tokens[pos] >> 16) & 0xFFu) & 1u)) u.projective = true;   // D3DSI_TEXLD_PROJECT
         const uint32_t ctype = dxsoRegType(coord), cn = dxsoRegNum(coord);
         if ((ctype == kInput || ctype == kTexture) && cn < 32 && inputTexcoord[cn] >= 0) u.texcoord = inputTexcoord[cn];
         else if (ctype == kTemp) u.dependent = true;
