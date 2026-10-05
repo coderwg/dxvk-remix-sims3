@@ -25,7 +25,8 @@ the `d3d9.dll` and the `.trex` folder among it -- into `<game>\Game\Bin`, next t
 Both halves of the bridge come from this repository: the 32-bit client `d3d9.dll`, which holds the
 hook and the #1028 fix, and the 64-bit server `NvRemixBridge.exe`.
 
-**From a release:** download both from this repository's releases page.
+**From a release:** the release's zip holds both, under `Game\Bin` as they go into your game folder,
+and the `bridge\sims3` folder this guide refers to.
 
 **Or build them.** You need Visual Studio 2017 or later (or its Build Tools; 2022 Build Tools were
 used) with the C++ tools for x86 and x64, Python 3.9 or later, and Meson and Ninja
