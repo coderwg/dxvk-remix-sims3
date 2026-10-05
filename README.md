@@ -1,3 +1,7 @@
+> **This fork: The Sims 3 under RTX Remix.** The branch `sims3-hook` carries a hook in the bridge (`bridge/`) that lets
+> RTX Remix ray-trace The Sims 3 -- see [bridge/sims3/README.md](bridge/sims3/README.md) and
+> [bridge/sims3/INSTALL.md](bridge/sims3/INSTALL.md). Everything below is NVIDIA's original README.
+
 # dxvk-remix
 
 [![Build Status](https://github.com/NVIDIAGameWorks/dxvk-remix/actions/workflows/build.yml/badge.svg)](https://github.com/NVIDIAGameWorks/dxvk-remix/actions/workflows/build.yml)
