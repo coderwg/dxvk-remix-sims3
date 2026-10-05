@@ -30,6 +30,32 @@ anything another person needs to install or build it lives in this repository, u
 - Never launch, kill or restart the game. Never download anything without asking.
 - Every run's logs and screenshots are archived before the next build.
 
+## Design rules for the hook
+Since the simplification study (milestones 144-164) every build works toward these. A
+build that would break one says so, and why, before it is written.
+- Facts from the game. What the hook needs to know about a draw -- which texture is the
+  colour, which coordinate feeds it, what a shader cuts, where a tree's fade arrives -- is
+  read from the shader bytecode or the game's own records. A hand table holds only what
+  analysis cannot know (which shaders are the game's own fakes, which material a glass
+  gets), and each entry says why.
+- One mechanism per job. Extend the existing one instead of adding a second: the hook's
+  own calls and their undo (HookCalls), sending a draw (sims3SendDraw), caches
+  (Cache<E,N>), geometry (sims3GeometryOf), textures (sims3MakeTexture, decodeColour),
+  options (kHookOptions), dropping draws (kDropPs), alpha tests (alphaTestFor,
+  sims3SetAlphaTest), the colour (chooseAutoAlbedo). Renaming one updates this list in
+  the same commit.
+- No fallbacks. One path per job. A failed precondition is logged and counted, not
+  served by a second method. A replaced method goes with everything only it needed: its
+  state, logs, checks and statistics.
+- Logs report state: the periodic statistics, and one line per shader the first time
+  it matters. No per-event logging. Diagnostics go once answered.
+- A rule is scoped to where it is exact. Before building one, run it over every dumped
+  shader and count what it changes; keep it to the shaders where the bytecode proves it.
+  Each rule gets a unit test on the real dumps.
+- A table goes in two builds: first the rule beside the table, with a check that logs
+  where they disagree; after a run shows they agree, the rule takes over and the table and
+  check go.
+
 ## How to work with me
 - Be honest. If there is a better way, or I am overcomplicating something, say so
   before doing it my way.
