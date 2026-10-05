@@ -47,8 +47,9 @@ struct FakeDev {
 
 static const char* kindName(Kind k) { return k == Kind::Main ? "Main" : k == Kind::Reflection ? "Reflection" : "None"; }
 
-// The in-game shader dumps (written by the hook, sims3DumpShader) and the captured buffers.
-static const char* kDumpDir = "C:\\Program Files\\EA Games\\The Sims 3\\Game\\Bin\\rtx-remix\\logs\\sims3-shaders\\";
+// The in-game shader dumps (written by the hook, sims3DumpShader, under the game folder given as the
+// first argument) and the captured buffers.
+static std::string gDumpDir;
 static bool loadBytes(const char* path, std::vector<uint8_t>& out) {
   FILE* f = fopen(path, "rb"); if (!f) return false;
   fseek(f, 0, SEEK_END); const long n = ftell(f); fseek(f, 0, SEEK_SET);
@@ -59,7 +60,8 @@ static bool loadBytes(const char* path, std::vector<uint8_t>& out) {
 }
 // A shader dump by name, trimmed to its END token (false when absent or without one).
 static bool loadShader(const char* name, std::vector<DWORD>& out) {
-  char path[320]; snprintf(path, sizeof path, "%s%s.bin", kDumpDir, name);
+  if (gDumpDir.empty()) return false;
+  char path[512]; snprintf(path, sizeof path, "%s%s.bin", gDumpDir.c_str(), name);
   std::vector<uint8_t> bytes;
   if (!loadBytes(path, bytes) || bytes.size() < 8) return false;
   out.resize(bytes.size() / 4); memcpy(out.data(), bytes.data(), out.size() * 4);
@@ -118,8 +120,10 @@ static void rowTimes(const float v[4], const D3DMATRIX& M, float out[4]) {
   for (int c = 0; c < 4; ++c) out[c] = v[0] * M.m[0][c] + v[1] * M.m[1][c] + v[2] * M.m[2][c] + v[3] * M.m[3][c];
 }
 
-int main() {
+int main(int argc, char** argv) {
   printf("sims3 hook standalone test (sims3_camera_hook.h + sims3_walls.h)\n");
+  if (argc > 1) { gDumpDir = std::string(argv[1]) + "\\Game\\Bin\\rtx-remix\\logs\\sims3-shaders\\"; printf("shader dumps: %s\n", gDumpDir.c_str()); }
+  else printf("no game folder given: the checks on the game's shader dumps are skipped\n");
   CHECK(enabled(), "hook enabled by default (SIMS3_CAMERA_HOOK unset)");
 
   // --- captured reflection-pass draws: verified cameras, looking up -> Reflection
@@ -1324,8 +1328,9 @@ int main() {
       std::vector<DWORD> wt, ot; PsAnalysis wa, oa;
       const bool notWall = !loadShader("ps_936215cf1e55a47e", wt) || (analyzePixelShader(wt.data(), wt.size(), wa) && !isGlassShader(wa));
       const bool notObject = !loadShader("ps_0c19795eb80e2e96", ot) || (analyzePixelShader(ot.data(), ot.size(), oa) && !isGlassShader(oa));
-      CHECK(found >= 1 && glass == found && notWall && notObject && !isGlassShader(PsAnalysis()),
-            "glass (M80): the game's glass shaders read only cube maps (%d of %d dumps found); walls A, the object shader and an empty analysis are not glass", glass, found);
+      if (!found) SKIP("glass (M80): the glass shader dumps not found");
+      else CHECK(glass == found && notWall && notObject && !isGlassShader(PsAnalysis()),
+                 "glass (M80): the game's glass shaders read only cube maps (%d of %d dumps found); walls A, the object shader and an empty analysis are not glass", glass, found);
       // milestone 81: textured glass by name; the Sims' hair pass and the light-beam cards (cube + 2D, blended) are not glass
       std::vector<DWORD> tg, hair, beam; PsAnalysis tga, ha, ba;
       const bool tgOk = !loadShader("ps_29c6b22234617c1a", tg) || (analyzePixelShader(tg.data(), tg.size(), tga) && !isGlassShader(tga) && !namedGlass(0x29c6b22234617c1aull));
@@ -1520,7 +1525,8 @@ int main() {
       const float wp[4] = { 975.f, 42.9f, 906.f, 1.f }; float vv[4], clip[4], back[3] = {};
       rowTimes(wp, view, vv); rowTimes(vv, proj, clip);
       const bool backOk = clipToWorld(view, proj, clip, back) && std::fabs(back[0] - 975.f) < 0.05f && std::fabs(back[1] - 42.9f) < 0.05f && std::fabs(back[2] - 906.f) < 0.05f;
-      CHECK(handOk && doorOk && glassVs >= 1 && glassVsOk == glassVs && backOk,
+      if (!glassVs) SKIP("vertex shader position (M119): the glass vertex shader dumps not found");
+      else CHECK(handOk && doorOk && glassVsOk == glassVs && backOk,
             "vertex shader position (M119): a hand-made dp4 shader (%.1f %.1f %.1f %.1f), the door family's skinned b3e88e28 at bone 0 + (10, 20, 30) -> (%.1f %.1f %.1f %.1f), %d of %d glass vertex shaders evaluated%s%s, clip back to the world (%.2f %.2f %.2f)",
             pos[0], pos[1], pos[2], pos[3], dp[0], dp[1], dp[2], dp[3], glassVsOk, glassVs, *firstFail ? " -- first failing: " : "", firstFail, back[0], back[1], back[2]);
     }

@@ -1,7 +1,7 @@
 @echo off
-call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x86
+call "%~dp0_vcvars.cmd" x86
 if errorlevel 1 exit /b 1
-cd /d "C:\Users\William Gallyot\Documents\rtx-remix-investigation\xoxor4d-bridge-remix"
+cd /d "%~dp0"
 echo === meson setup x86 RELEASE ===
 meson setup --buildtype release --backend ninja _compRelease_x86
 if errorlevel 1 exit /b 2
