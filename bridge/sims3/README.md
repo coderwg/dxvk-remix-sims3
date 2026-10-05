@@ -1,8 +1,8 @@
 # The Sims 3 under RTX Remix
 
 A compatibility hook that lets [NVIDIA RTX Remix](https://github.com/NVIDIAGameWorks/rtx-remix)
-ray-trace The Sims 3. It lives in this fork of the RTX Remix bridge, inside the bridge's 32-bit
-client (`d3d9.dll`), the part that sits in the game's process.
+ray-trace The Sims 3. It lives in the RTX Remix bridge (`bridge/`) of this fork of NVIDIA's dxvk-remix,
+inside the bridge's 32-bit client (`d3d9.dll`), the part that sits in the game's process.
 
 Unofficial: not made by or affiliated with NVIDIA or Electronic Arts.
 
@@ -66,7 +66,7 @@ game's own records -- rather than from lists made by hand.
 | `test/` | the unit test (`run_tests.cmd "<game folder>"`) |
 | `docs/` | the issue #1028 write-ups, the bridge PR text, and the first design document (historical) |
 
-The hook's code is in `src/client/`: `sims3_camera_hook.h` and the `sims3_*` files next to it.
+The hook's code is in `bridge/src/client/`: `sims3_camera_hook.h` and the `sims3_*` files next to it.
 
 This repository holds no game data. The light table, the ripple maps and the bump maps are made on
 your PC from your own copy of the game.
@@ -74,7 +74,8 @@ your PC from your own copy of the game.
 ## Tested with
 
 - The Sims 3 from the EA App, Legacy Update 1.69.47.024017 (`TS3.exe`)
-- RTX Remix runtime 1.5.2 (`remix-1.5.2+68edea01`)
+- RTX Remix runtime 1.5.2 (`remix-1.5.2+68edea01`), with the bridge from the same release (dxvk-remix
+  `remix-1.5.2`)
 - Windows 11, GeForce RTX 5090, driver 616.56
 
 The hook recognises shaders by their bytecode, which is the same on every install of this game
@@ -82,7 +83,7 @@ version. Other game versions are untested.
 
 ## Credits and license
 
-Built on NVIDIA's [RTX Remix bridge](https://github.com/NVIDIAGameWorks/bridge-remix) (MIT, see
-`LICENSE-MIT`). The hook and everything in this folder are by coderwg, under the same MIT license.
-`src/client/xxhash.h` is xxHash by Yann Collet (BSD 2-Clause). The Sims 3 is a trademark of
+Built on the RTX Remix bridge in NVIDIA's [dxvk-remix](https://github.com/NVIDIAGameWorks/dxvk-remix)
+(`bridge/`, MIT, see `bridge/LICENSE-MIT`). The hook and everything in this folder are by coderwg, under
+the same MIT license. `bridge/src/client/xxhash.h` is xxHash by Yann Collet (BSD 2-Clause). The Sims 3 is a trademark of
 Electronic Arts.
