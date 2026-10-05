@@ -801,7 +801,7 @@ int main() {
         for (int s : { 2, 3, 6, 7 }) { color2D[s] = true; fmt[s] = s < 6 ? (uint32_t) D3DFMT_DXT5 : (uint32_t) D3DFMT_DXT1; w[s] = 1024; h[s] = s < 6 ? 512 : 1024; }
         color2D[4] = true; fmt[4] = (uint32_t) D3DFMT_A8R8G8B8; w[4] = h[4] = 64;
         int stage = -1, tc = -1;
-        CHECK(chooseAutoAlbedo(a, color2D, fmt, w, h, stage, tc) && stage == 3 && tc == 1, "auto: with the Sim's textures bound, the albedo is s3 at TEXCOORD1 (chose s%d at TEXCOORD%d)", stage, tc);
+        CHECK(chooseAutoAlbedo(a, color2D, fmt, w, h, false, stage, tc) && stage == 3 && tc == 1, "auto: with the Sim's textures bound, the albedo is s3 at TEXCOORD1 (chose s%d at TEXCOORD%d)", stage, tc);
       } else SKIP("auto: ps_7e9cd7f2d6bf8e67 not found");
       if (loadShader("ps_ff597f52868c21c6", t)) {
         CHECK(analyzePixelShader(t.data(), t.size(), a) && a.samplers[3].texcoord == 1 && a.samplers[3].colorChannels == 3 && a.samplers[4].texcoord == 2 && a.samplers[6].texcoord == 2, "auto: normal-mapped Sim ff597f52 -> composite s3 on TEXCOORD1, normal maps s4/s6 on TEXCOORD2");
@@ -820,25 +820,37 @@ int main() {
       if (loadShader("ps_579ba93e4482bba9", t)) {
         bool color2D[16] = {}; uint32_t fmt[16] = {}; uint16_t w[16] = {}, h[16] = {}; int stage = -1, tc = -1;
         bindTex(color2D, fmt, w, h, 0, D3DFMT_A8R8G8B8, 1024, 512); bindTex(color2D, fmt, w, h, 1, D3DFMT_DXT1, 16, 64); bindTex(color2D, fmt, w, h, 2, D3DFMT_DXT1, 256, 256);
-        CHECK(analyzePixelShader(t.data(), t.size(), a) && chooseAutoAlbedo(a, color2D, fmt, w, h, stage, tc) && stage == 1 && tc == 0,
+        CHECK(analyzePixelShader(t.data(), t.size(), a) && chooseAutoAlbedo(a, color2D, fmt, w, h, false, stage, tc) && stage == 1 && tc == 0,
               "auto (M76): walls-D trim 579ba93e -> the 16x64 DXT1 trim s1 at TEXCOORD0, not the lot's 1024x512 light map s0 (chose s%d at TEXCOORD%d)", stage, tc);
       } else SKIP("auto: ps_579ba93e4482bba9 not found");
       if (loadShader("ps_2ee776917a22577f", t)) {
         bool color2D[16] = {}; uint32_t fmt[16] = {}; uint16_t w[16] = {}, h[16] = {}; int stage = -1, tc = -1;
         bindTex(color2D, fmt, w, h, 1, D3DFMT_A8R8G8B8, 256, 128); bindTex(color2D, fmt, w, h, 2, D3DFMT_DXT1, 64, 64);
-        CHECK(analyzePixelShader(t.data(), t.size(), a) && chooseAutoAlbedo(a, color2D, fmt, w, h, stage, tc) && stage == 2 && tc == 2,
+        CHECK(analyzePixelShader(t.data(), t.size(), a) && chooseAutoAlbedo(a, color2D, fmt, w, h, false, stage, tc) && stage == 2 && tc == 2,
               "auto (M76): object 2ee77691 -> its 64x64 DXT1 colour s2 at TEXCOORD2, not the 256x128 sky-light map s1 (chose s%d at TEXCOORD%d)", stage, tc);
         bool c2[16] = {}; uint32_t f2[16] = {}; uint16_t w2[16] = {}, h2[16] = {};
         bindTex(c2, f2, w2, h2, 1, D3DFMT_A8R8G8B8, 32, 32); bindTex(c2, f2, w2, h2, 2, D3DFMT_A1R5G5B5, 4, 4);
-        CHECK(chooseAutoAlbedo(a, c2, f2, w2, h2, stage, tc) && stage == 1, "  with no compressed candidate the score decides as before (chose s%d)", stage);
+        CHECK(chooseAutoAlbedo(a, c2, f2, w2, h2, false, stage, tc) && stage == 1, "  with no compressed candidate the score decides as before (chose s%d)", stage);
       } else SKIP("auto: ps_2ee776917a22577f not found");
       if (loadShader("ps_ff72720db4324926", t)) {
         bool color2D[16] = {}; uint32_t fmt[16] = {}; uint16_t w[16] = {}, h[16] = {}; int stage = -1, tc = -1;
         bindTex(color2D, fmt, w, h, 0, D3DFMT_A8R8G8B8, 256, 128); bindTex(color2D, fmt, w, h, 1, D3DFMT_DXT1, 256, 256);
         CHECK(findAlbedoStage(0xff72720db4324926ull) == nullptr
-              && analyzePixelShader(t.data(), t.size(), a) && chooseAutoAlbedo(a, color2D, fmt, w, h, stage, tc) && stage == 1 && tc == 0,
+              && analyzePixelShader(t.data(), t.size(), a) && chooseAutoAlbedo(a, color2D, fmt, w, h, false, stage, tc) && stage == 1 && tc == 0,
               "auto (M76): ff72720d (the floor tiles' layout) untabled, its vertex shader 9f227c82 unpromoted -> the DXT1 s1 at TEXCOORD0, not the room light map s0 (chose s%d at TEXCOORD%d)", stage, tc);
       } else SKIP("auto: ps_ff72720db4324926 not found");
+      // milestone 164: on a tree draw the texture whose alpha shapes the surface -- SpeedTree's base map s1, not the
+      // shading map s3 on TEXCOORD3 that the size picks (a branch shader with a fade, the near fronds' without)
+      for (const char* name : { "ps_8f0ab1d3eb78c03b", "ps_ca3faba5c3d2dbc2" }) {
+        if (!loadShader(name, t)) { SKIP("auto (M164): %s not found", name); continue; }
+        bool color2D[16] = {}; uint32_t fmt[16] = {}; uint16_t w[16] = {}, h[16] = {}; int stage = -1, tc = -1, plain = -1, ptc = -1;
+        bindTex(color2D, fmt, w, h, 1, D3DFMT_DXT1, 128, 128); bindTex(color2D, fmt, w, h, 2, D3DFMT_DXT1, 128, 128); bindTex(color2D, fmt, w, h, 3, D3DFMT_DXT1, 1024, 1024);
+        const bool ok = analyzePixelShader(t.data(), t.size(), a) && chooseAutoAlbedo(a, color2D, fmt, w, h, false, plain, ptc) && chooseAutoAlbedo(a, color2D, fmt, w, h, true, stage, tc);
+        bool c2[16] = {}; uint32_t f2[16] = {}; uint16_t w2[16] = {}, h2[16] = {}; int s2 = -1, tc2 = -1;
+        bindTex(c2, f2, w2, h2, 1, D3DFMT_A8R8G8B8, 256, 256); bindTex(c2, f2, w2, h2, 2, D3DFMT_DXT1, 64, 64); bindTex(c2, f2, w2, h2, 3, D3DFMT_DXT1, 256, 256);
+        CHECK(ok && plain == 3 && stage == 1 && tc == 1 && chooseAutoAlbedo(a, c2, f2, w2, h2, true, s2, tc2) && s2 == 1,
+              "auto (M164): tree %s -> the base map s1 at TEXCOORD1, not the 1024x1024 shading map the size picks (s%d; chose s%d at TEXCOORD%d; an uncompressed base map: s%d)", name + 3, plain, stage, tc, s2);
+      }
     }
     {
       // the light table (format 3): the lights per model

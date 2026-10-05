@@ -243,11 +243,13 @@ void sims3SamplerStatesTo0(Sims3Hook& h, Dev* dev, DWORD from) {
 }
 
 // An untabled pixel shader's draw: the albedo stage from its bytecode and what is bound
-// (chooseAutoAlbedo), then its coordinate. Returns the stage to present, or -1 when the
-// bytecode names no candidate.
+// (chooseAutoAlbedo; on a tree -- a fade in its pixel shader, or a near tree's from its vertex
+// shader -- the texture whose alpha shapes it), then its coordinate. Returns the stage to present,
+// or -1 when the bytecode names no candidate.
 inline int sims3AutoAlbedo(Sims3Hook& h) {
   int k = -1, tc = -1;
-  if (!sims3cam::chooseAutoAlbedo(*h.psAuto, h.boundColor2D, h.boundFmt, h.boundW, h.boundH, k, tc)) { ++h.autoNoAlbedo; return -1; }
+  const bool tree = h.psAuto->fadeSampler >= 0 || h.vsNearFade >= 0;
+  if (!sims3cam::chooseAutoAlbedo(*h.psAuto, h.boundColor2D, h.boundFmt, h.boundW, h.boundH, tree, k, tc)) { ++h.autoNoAlbedo; return -1; }
   ++h.autoDraws;
   sims3AutoTexcoord(h, k, tc, false);
   return k;

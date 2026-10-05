@@ -1,6 +1,6 @@
 #pragma once
 /*
- * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-163).
+ * The Sims 3 camera hook for the RTX Remix bridge client (milestones 1-164).
  *
  * The Sims 3 never calls IDirect3DDevice9::SetTransform (not once in the traced frames). Its vertex
  * shaders read a constant block: a fused World*View*Projection (four registers, column-vector
@@ -2139,9 +2139,14 @@ inline FadeGroups groupFades(uint32_t gameFunc, uint32_t gameRef, const float* f
 // which it makes itself, are not (milestone 76: the lot's 1024x512 light map outscored a 16x64
 // wall trim by size, and objects' 256x128 sky-light maps their smaller colour textures, so the
 // runtime lit baked light) -- and within that, the one scoring highest: larger textures, lower
-// coordinate indices. Returns false when none.
-inline bool chooseAutoAlbedo(const PsAnalysis& a, const bool color2D[16], const uint32_t fmt[16], const uint16_t w[16], const uint16_t h[16], int& stage, int& texcoord) {
-  float best = -1e9f; bool bestCompressed = false; stage = -1; texcoord = -1;
+// coordinate indices. On a tree draw (tree: its pixel shader cuts by its plant's fade, or its vertex
+// shader hands a tree near the camera its fade) the texture whose alpha shapes the surface comes first
+// (milestone 164): SpeedTree's base map, colour and cut in one. Its branches and fronds also bind a
+// shading map on TEXCOORD3 that darkens only the direct light; larger than a small bark texture, it
+// won (PS 8f0ab1d3: 24,630 draws in run 262 went out with it as their colour, uncut). Returns false
+// when none.
+inline bool chooseAutoAlbedo(const PsAnalysis& a, const bool color2D[16], const uint32_t fmt[16], const uint16_t w[16], const uint16_t h[16], bool tree, int& stage, int& texcoord) {
+  float best = -1e9f; int bestTier = -1; stage = -1; texcoord = -1;
   for (int s = 0; s < 16; ++s) {
     const PsSamplerUse& u = a.samplers[s];
     if (!u.read || !u.reachesColor() || u.dependent || u.projective || u.cube || u.texcoord < 0) continue;
@@ -2152,7 +2157,8 @@ inline bool chooseAutoAlbedo(const PsAnalysis& a, const bool color2D[16], const 
     // gloss map contributes one channel, and a tie between two candidates goes to the later
     // sampler (the game binds masks below their albedo)
     const float score = std::log2((std::max)(area, 1.f)) - 2.f * u.texcoord + 2.f * u.colorChannels + 0.01f * s;
-    if (stage < 0 || (compressed && !bestCompressed) || (compressed == bestCompressed && score > best)) { best = score; bestCompressed = compressed; stage = s; texcoord = u.texcoord; }
+    const int tier = (tree && u.alphaUsed ? 2 : 0) + (compressed ? 1 : 0);   // a tree's leaf texture, then a compressed one
+    if (tier > bestTier || (tier == bestTier && score > best)) { best = score; bestTier = tier; stage = s; texcoord = u.texcoord; }
   }
   return stage >= 0;
 }
