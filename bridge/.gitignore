@@ -36,3 +36,7 @@ _*.log
 sims3/test/*.exe
 sims3/test/*.obj
 sims3/test/*.log
+# made from the user's own game install, never published: the light table (sims3/tools/lite_table.py
+# writes it for the install's packs and mods) and the captured wall buffers the wall tests read when present
+sims3/config/sims3lights.txt
+sims3/test/walls-data/
