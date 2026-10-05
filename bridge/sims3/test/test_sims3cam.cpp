@@ -58,6 +58,12 @@ static bool loadBytes(const char* path, std::vector<uint8_t>& out) {
   fclose(f);
   return !out.empty() && got == out.size();
 }
+// A text file's bytes as text with "\n" line ends, however git checked it out (CRLF under autocrlf).
+static std::string textOf(const std::vector<uint8_t>& bytes) {
+  std::string t; t.reserve(bytes.size());
+  for (uint8_t c : bytes) if (c != '\r') t += (char) c;
+  return t;
+}
 // A shader dump by name, trimmed to its END token (false when absent or without one).
 static bool loadShader(const char* name, std::vector<DWORD>& out) {
   if (gDumpDir.empty()) return false;
@@ -1425,7 +1431,7 @@ int main(int argc, char** argv) {
       const uint64_t gh = (uint64_t) XXH3_64bits(gm, sizeof gm);
       std::vector<uint8_t> usd; char name[32]; snprintf(name, sizeof name, "mat_%016llX", (unsigned long long) kGlassMaterial[kClearGlass].hash);
       const bool haveUsd = loadBytes("../remix-mod/Sims3Glass/mod.usda", usd);
-      const std::string u(usd.begin(), usd.end());
+      const std::string u = textOf(usd);
       CHECK(gh == kGlassMaterial[kClearGlass].hash && haveUsd && u.find(name) != std::string::npos && u.find("AperturePBR_Translucent.mdl") != std::string::npos && u.find("/RootNode/Looks/") != std::string::npos,
             "glass (M80): the marker's level-0 hash 0x%016llX names the translucent material %s in sims3/remix-mod/Sims3Glass/mod.usda", (unsigned long long) gh, name);
       // milestone 101: the mirror marker's hash names an opaque, fully metallic, smooth material naming no albedo
@@ -1439,7 +1445,7 @@ int main(int argc, char** argv) {
       // milestones 86, 93, 99: each water material's marker hash names its material in the water mod -- a volume
       // with its own ripple map -- and no material of the glass mod; the water shaders by name
       std::vector<uint8_t> wusd; const bool haveWater = loadBytes("../remix-mod/Sims3Water/mod.usda", wusd);
-      const std::string uw(wusd.begin(), wusd.end());
+      const std::string uw = textOf(wusd);
       for (int m = 0; m < kWaterMaterials; ++m) {
         const WaterMaterial& w = kWaterMaterial[m];
         for (auto& p : gm) p = w.colour;
